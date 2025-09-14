@@ -1,0 +1,34 @@
+name: Update Docker Hub Description
+
+on:
+  push:
+    tags: [ 'v*.*.*' ]
+  workflow_dispatch:
+
+jobs:
+  update-description:
+    name: Sync README to Docker Hub
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Extract short description (first heading line)
+        id: meta
+        run: |
+          first_line=$(grep -m1 '^# ' DOCKERHUB_README.md | sed 's/^# //')
+          echo "short=${first_line}" >> $GITHUB_OUTPUT
+
+      - name: Update Docker Hub Description
+        uses: peter-evans/dockerhub-description@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          repository: dabomber/ownchatbot
+          short-description: ${{ steps.meta.outputs.short }}
+          readme-filepath: DOCKERHUB_README.md
+
+      - name: Confirmation
+        run: echo "Docker Hub description updated for dabomber/ownchatbot"

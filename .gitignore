@@ -1,0 +1,104 @@
+###############################
+# Core dependency / build dirs
+###############################
+node_modules
+dist
+build
+.next
+target
+.cache
+
+###############################
+# Editor / IDE
+###############################
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+###############################
+# Logs & debug output
+###############################
+logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+###############################
+# TypeScript build info
+###############################
+*.tsbuildinfo
+temp.ts
+
+# Environment files (keep .env.example committed for reference)
+.env
+.env.local
+.env.production
+.env.development
+.env.test
+.env.*.local
+
+# Database files (SQLite legacy - now using PostgreSQL)
+prisma/dev.db
+prisma/dev.db-journal
+*.db
+*.db-journal
+
+# Database backups and dumps (large / sensitive)
+backup/
+backups/
+*.dump
+
+# (logs section moved above)
+
+# Runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# Coverage directory used by tools like istanbul
+coverage/
+*.lcov
+
+# nyc test coverage
+.nyc_output
+
+###############################
+# OS generated files
+###############################
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Windows specific
+desktop.ini
+
+###############################
+# Yarn / PnP (not used now, but safe to ignore if adopted later)
+###############################
+/.pnp
+/.pnp.*
+
+###############################
+# SSL / local data secrets (not tracked)
+###############################
+ssl/
+data/
+
+###############################
+# DO NOT IGNORE: package-lock.json (commit for reproducible builds)
+# (Listed here as documentation only; omission ensures it is tracked.)
+# package-lock.json
+
+# Temporary files
+tmp/
+temp/

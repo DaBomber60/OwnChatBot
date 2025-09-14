@@ -1,0 +1,105 @@
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:16-alpine
+    container_name: ownchatbot-postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB:-ownchatbot}
+      - POSTGRES_USER=${POSTGRES_USER:-ownchatbot}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-ownchatbot_secure_password}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    networks:
+      - chatbot-network
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ownchatbot} -d ${POSTGRES_DB:-ownchatbot}"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # Automated PostgreSQL backups with retention (daily/weekly/monthly)
+  backup:
+    image: prodrigestivill/postgres-backup-local:16
+    container_name: ownchatbot-postgres-backup
+    restart: unless-stopped
+    environment:
+      - POSTGRES_HOST=postgres
+      - POSTGRES_DB=${POSTGRES_DB:-ownchatbot}
+      - POSTGRES_USER=${POSTGRES_USER:-ownchatbot}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-ownchatbot_secure_password}
+      # Run daily at 03:15 server time; adjust TZ to your local timezone if desired
+      - SCHEDULE="15 3 * * *"
+      - KEEP_DAYS=7
+      - KEEP_WEEKS=4
+      - KEEP_MONTHS=12
+      - BACKUP_DIR=/backups
+      - TZ=${TZ:-UTC}
+    volumes:
+      - ./backups:/backups
+    networks:
+      - chatbot-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # OwnChatBot Application
+  app:
+    # You can override the image name with APP_IMAGE env var (e.g. yourdockerhubuser/ownchatbot:latest)
+    # When both 'image' and 'build' are present, Docker Compose will build and tag the image accordingly for local development.
+    image: ${APP_IMAGE:-ownchatbot:local}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ownchatbot-app
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-ownchatbot}:${POSTGRES_PASSWORD:-ownchatbot_secure_password}@postgres:5432/${POSTGRES_DB:-ownchatbot}?schema=public
+      # JWT_SECRET optional; auto-generated & persisted if omitted
+      - JWT_SECRET=${JWT_SECRET:-}
+      - PORT=${APP_PORT:-3000}
+    ports:
+      - "${APP_PORT:-3000}:3000"
+    networks:
+      - chatbot-network
+    volumes:
+      - app_data:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:3000/api/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Optional: Nginx reverse proxy (for SSL, custom domains, etc.)
+  nginx:
+    image: nginx:alpine
+    container_name: ownchatbot-nginx
+    restart: unless-stopped
+    ports:
+      - "${NGINX_HTTP_PORT:-80}:80"
+      - "${NGINX_HTTPS_PORT:-443}:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./ssl:/etc/nginx/ssl:ro  # Optional SSL certificates
+    networks:
+      - chatbot-network
+    depends_on:
+      - app
+    profiles:
+      - nginx  # Optional service, enable with --profile nginx
+
+volumes:
+  postgres_data:
+    driver: local
+  app_data:
+    driver: local
+
+networks:
+  chatbot-network:
+    driver: bridge

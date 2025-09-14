@@ -1,0 +1,126 @@
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["relationJoins"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Persona {
+  id          Int           @id @default(autoincrement())
+  name        String
+  profileName String?
+  profile     String
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  sessions    ChatSession[]
+
+  @@unique([name, profileName])
+  @@map("personas")
+}
+
+model CharacterGroup {
+  id          Int         @id @default(autoincrement())
+  name        String      @unique
+  color       String      @default("#6366f1")
+  isCollapsed Boolean     @default(false)
+  sortOrder   Int         @default(0)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+  characters  Character[]
+
+  @@map("character_groups")
+}
+
+model Character {
+  id              Int             @id @default(autoincrement())
+  name            String
+  profileName     String?
+  bio             String?
+  scenario        String
+  personality     String
+  firstMessage    String
+  exampleDialogue String
+  groupId         Int?
+  sortOrder       Int             @default(0)
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+  group           CharacterGroup? @relation(fields: [groupId], references: [id])
+  sessions        ChatSession[]
+
+  @@unique([name, profileName])
+  @@index([groupId])
+  @@map("characters")
+}
+
+model ChatSession {
+  id             Int           @id @default(autoincrement())
+  personaId      Int
+  characterId    Int
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  lastApiRequest String?
+  lastApiResponse String?
+  summary        String?
+  description    String?
+  lastSummary    Int?
+  notes          String?
+  messages       ChatMessage[]
+  character      Character     @relation(fields: [characterId], references: [id], onDelete: Cascade)
+  persona        Persona       @relation(fields: [personaId], references: [id], onDelete: Cascade)
+
+  @@unique([personaId, characterId, createdAt])
+  @@index([personaId])
+  @@index([characterId])
+  @@index([updatedAt])
+  @@map("chat_sessions")
+}
+
+model ChatMessage {
+  id        Int              @id @default(autoincrement())
+  sessionId Int
+  role      String
+  content   String
+  createdAt DateTime         @default(now())
+  session   ChatSession      @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  versions  MessageVersion[]
+
+  @@index([sessionId])
+  @@index([createdAt])
+  @@map("chat_messages")
+}
+
+model MessageVersion {
+  id        Int         @id @default(autoincrement())
+  messageId Int
+  content   String
+  version   Int
+  isActive  Boolean     @default(false)
+  createdAt DateTime    @default(now())
+  message   ChatMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, version])
+  @@index([messageId])
+  @@map("message_versions")
+}
+
+model UserPrompt {
+  id        Int      @id @default(autoincrement())
+  title     String   @unique
+  body      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("user_prompts")
+}
+
+model Setting {
+  key       String   @id
+  value     String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("settings")
+}

@@ -1,0 +1,14 @@
+{
+	"name": "OwnChatBot",
+	"short_name": "HCB",
+	"description": "OwnChatBot - Your personal AI assistant",
+	"start_url": "/",
+	"scope": "/",
+	"display": "standalone",
+	"theme_color": "#180e2c",
+	"background_color": "#180e2c",
+	"icons": [
+		{ "src": "/android-chrome-192x192.png", "sizes": "192x192", "type": "image/png" },
+		{ "src": "/android-chrome-512x512.png", "sizes": "512x512", "type": "image/png" }
+	]
+}
