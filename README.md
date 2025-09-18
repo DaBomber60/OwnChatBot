@@ -65,8 +65,7 @@ A self‑hostable Next.js application for creating richly defined AI characters 
 - (Planned / optional) drag & drop ordering (dnd‑kit) — update docs if expanded
 
 ---
-## 2. 🖼️ Screenshots (Placeholders)
-Add real images and alt text.
+## 2. 🖼️ Screenshots (Coming Soon!)
 
 | Section | Placeholder |
 |--------|-------------|
@@ -76,7 +75,6 @@ Add real images and alt text.
 | Chat View (Streaming) | ![screenshot-chat-stream](public/PLACEHOLDER-chat-stream.png) |
 | Variants Panel | ![screenshot-variants](public/PLACEHOLDER-variants.png) |
 | Notes & Summary Modals | ![screenshot-notes-summary](public/PLACEHOLDER-notes-summary.png) |
-| Request Log Download | ![screenshot-request-log](public/PLACEHOLDER-request-log.png) |
 
 ---
 ## 3. 🚀 Quick Start
