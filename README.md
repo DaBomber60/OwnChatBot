@@ -15,6 +15,7 @@ A self‑hostable Next.js application for creating richly defined AI characters 
 8. 💻 Commands
 9. 💾 Data & Migration
 10. 🐛 Troubleshooting
+11. 🧬 Character Generation Tool
 
 ---
 ## 1. ✨ Features
@@ -393,6 +394,88 @@ Issue: Want to share sessions across multiple replicas
 
 Issue: Force logout / rotate all sessions intentionally
 - Delete `/app/data/jwt-secret` (or remove the volume) and restart, or set a new `JWT_SECRET` value; users must re-authenticate.
+
+---
+
+## 11. 🧬 Character Generation Tool
+
+The Character Generation Tool streamlines creating rich character profiles by using a two‑phase, AI‑assisted workflow with tunable style & behavior sliders.
+
+### Overview
+| Phase | What You Do | What Happens |
+|-------|-------------|--------------|
+| Input | Provide a concept description, pick POV (First / Third), optionally tweak sliders | Sends structured prompt to AI; generated fields appear (Scenario, Personality, First Message, Example Dialogue) |
+| Generated | Review / edit the generated text; optionally Show Sliders again and adjust + Regenerate | New generation overwrites those four sections (your manual edits are replaced on regenerate) |
+
+### Key UI Elements
+- AI Generation Setup panel (shown while sliders are visible):
+	- Perspective toggle (First vs Third Person). First person frames the character as the active narrator; third person allows a more external narrative voice.
+	- Show Advanced checkbox reveals additional less‑common sliders.
+	- Concept Description textarea (only editable before the first generation; preserved after hide/show of sliders).  
+- Sliders are grouped: Personality, Scenario, Writing Style, Initial Message.
+	- Core sliders are always visible; advanced sliders default to Auto and are hidden until enabled.
+	- Advanced sliders start in Auto mode (AI chooses their influence value).
+	- Moving a slider automatically unchecks its Auto box.
+	- When dev mode is enabled (see Settings) raw numeric values are shown; otherwise numbers are hidden for a cleaner feel.
+	- Categories collapse only visually; values are always collected if not Auto.
+	- Hover text (help) clarifies Low → High semantics for each dimension.
+
+### Show / Hide Behavior
+- After a successful generation the sliders auto‑hide to focus on the resulting content.
+- A "Show Sliders (Adjust & Regenerate)" button appears; clicking it restores the setup panel and sliders for refinement.
+- Hiding sliders does NOT discard their values; they persist in state until you reset or complete character creation.
+
+### Regeneration Rules
+- Regenerate replaces: Scenario, Personality, First Message, Example Dialogue.
+- Fields you manually edited after the first generation will still be overwritten on regenerate—copy anything you want to keep before regenerating.
+- Bio, Group, and other metadata are never touched by the generation endpoint.
+
+### Slider Data Semantics
+- Range: 0–100 (internally passed as raw integers in the `sliders` object of the request body when not Auto).
+- Auto: Value omitted from payload → model is free to infer.
+- Prompt includes a compact `Parameters:` segment listing only non‑Auto entries (`Trait: value; Trait2: value; ...`).
+
+### Perspective Handling
+- The system prompt includes distinct guidance depending on First vs Third Person.
+- First Person adds instructions to embed limited third‑person context between asterisks when useful.
+- Placeholder `{{user}}` is always specified for downstream conversation alignment.
+
+### Backend Mechanics
+- Endpoint: `POST /api/characters/generate`
+- Body shape (simplified):
+	```jsonc
+	{
+		"name": "String",
+		"profileName": "Optional String",
+		"description": "Concept text",
+		"sliders": { "TraitKey": 0-100, ... },
+		"perspective": "first" | "third"
+	}
+	```
+- Temperature & max tokens are applied from persisted Settings (DB) each call; temperature is normalized per provider.
+- Token limit field name is provider‑aware via `tokenFieldFor`.
+- The model is instructed to return strict JSON; fallback parsing attempts extract a JSON object if extra prose slips in.
+
+### Dev Mode Extras
+- Enable in Settings to display numeric slider values (debugging / reproducibility).
+- Could be extended (future ideas): copyable seed prompt, export slider preset, diff last vs current slider set.
+
+### Resetting / Starting Over
+- Cancel button resets generation state and clears draft fields.
+- To entirely change concept after first generation: Hide Sliders → (optionally) Cancel & restart, or implement a future enhancement to re‑enable the concept description for later edits.
+
+### Best Practices
+1. Start with a concise but information‑rich description (themes, relationships, conflicts, atmosphere).
+2. Leave most advanced sliders on Auto initially—only pin values you care strongly about.
+3. If output feels unfocused, narrow Scenario/Personality scope or raise Stability / Consistency sliders (if present in future enhancements).
+4. Regenerate only after making targeted slider adjustments to reduce randomness churn.
+5. Use dev mode to record numeric settings for reproducible character styles.
+
+### Planned / Potential Enhancements (Not Yet Implemented)
+- Preset system to save / load slider configurations.
+- Tooltip or transient numeric overlay when adjusting sliders in non‑dev mode.
+- Compression of long slider lists into collapsible accordions.
+- Selective partial regeneration (e.g., only First Message).
 
 ---
 

@@ -593,6 +593,143 @@ export default function CharactersPage() {
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
   const [openMenuId, setOpenMenuId] = useState<number | string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
+  // Integrated generation mode state
+  const [isGeneratingMode, setIsGeneratingMode] = useState(false);
+  // generationPhase: 'input' => only show minimal fields + description + sliders; 'generated' => show full character fields
+  const [generationPhase, setGenerationPhase] = useState<'input' | 'generated'>('input');
+  const [genDescription, setGenDescription] = useState('');
+  const [genLoading, setGenLoading] = useState(false);
+  const [genError, setGenError] = useState<string | null>(null);
+  const [genPerspective, setGenPerspective] = useState<'first' | 'third'>('third');
+  // global dev mode (from settings)
+  const { data: settingsData } = useSWR<Record<string,string> | null>('/api/settings', (url: string) => fetch(url).then(r=>r.json()).catch(()=>null));
+  const devMode = settingsData?.devMode === 'true';
+  // Show / hide advanced sliders
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  type SliderConfig = { label: string; key: string; help: string; category: string; advanced?: boolean };
+  const sliderConfigs: SliderConfig[] = [
+    // Personality
+    { key: 'Temper', label: 'Temper', help: 'Low → calm | High → volatile', category: 'Personality' },
+  { key: 'Sensuality', label: 'Sensuality', help: 'Low → reserved | High → flirtatious', category: 'Personality' },
+    { key: 'Empathy', label: 'Empathy', help: 'Low → indifferent | High → emotionally attuned', category: 'Personality' },
+    { key: 'Humor', label: 'Humor', help: 'Low → serious | High → playful / jokey', category: 'Personality' },
+    { key: 'Confidence', label: 'Confidence', help: 'Low → timid | High → bold / assertive', category: 'Personality' },
+  { key: 'Height', label: 'Height', help: 'Low → shorter | High → taller (perceived)', category: 'Personality' },
+  { key: 'Build', label: 'Build', help: 'Low → lean | High → robust', category: 'Personality' },
+  { key: 'AgeAppearance', label: 'Age Appearance', help: 'Low → youthful | High → aged', category: 'Personality', advanced: true },
+  { key: 'Exoticism', label: 'Exoticism', help: 'Low → familiar | High → highly exotic', category: 'Personality', advanced: true },
+  { key: 'Ruggedness', label: 'Ruggedness', help: 'Low → refined / polished | High → weathered / rugged', category: 'Personality', advanced: true },
+  { key: 'Allure', label: 'Allure', help: 'Low → subtle presence | High → highly alluring', category: 'Personality', advanced: true },
+    // Personality (Core Additions)
+  { key: 'Creativity', label: 'Creativity', help: 'Low → literal / conventional | High → imaginative / unconventional', category: 'Personality', advanced: true },
+  { key: 'Discipline', label: 'Discipline', help: 'Low → impulsive / spontaneous | High → structured / self-controlled', category: 'Personality', advanced: true },
+    { key: 'Morality', label: 'Morality', help: 'Low → flexible / amoral | High → principled / value-driven', category: 'Personality' },
+    { key: 'Dominance', label: 'Dominance', help: 'Low → deferential | High → commanding / leading', category: 'Personality' },
+  { key: 'CuriosityTrait', label: 'Curiosity (Trait)', help: 'Low → disinterested | High → probing / investigative', category: 'Personality', advanced: true },
+  // Personality (Advanced)
+  { key: 'EmotionalStability', label: 'Emotional Stability', help: 'Low → reactive | High → steady / resilient', category: 'Personality', advanced: true },
+  { key: 'Trust', label: 'Trust', help: 'Low → guarded / suspicious | High → open / trusting', category: 'Personality', advanced: true },
+    // Scenario
+    { key: 'Emotional', label: 'Emotional', help: 'Low → subdued | High → intense', category: 'Scenario' },
+    { key: 'Mystery', label: 'Mystery', help: 'Low → straightforward | High → mysterious / enigmatic', category: 'Scenario' },
+    { key: 'Danger', label: 'Danger', help: 'Low → safe | High → dangerous / high risk', category: 'Scenario' },
+    { key: 'Fantasy', label: 'Fantasy', help: 'Low → realistic | High → highly fantastical', category: 'Scenario' },
+    // Scenario (Core Additions)
+  { key: 'TechnologyLevel', label: 'Technology Level', help: 'Low → pre-industrial | High → advanced / futuristic', category: 'Scenario', advanced: true },
+  { key: 'SocialTension', label: 'Social Tension', help: 'Low → harmonious | High → fractious / conflict-laden', category: 'Scenario', advanced: true },
+    { key: 'RomanceLevel', label: 'Romance Level', help: 'Low → non-romantic | High → romance-forward', category: 'Scenario' },
+  { key: 'Scale', label: 'Scale', help: 'Low → intimate / local | High → epic / sprawling', category: 'Scenario', advanced: true },
+    { key: 'Stability', label: 'Stability', help: 'Low → chaotic / volatile | High → orderly / stable', category: 'Scenario' },
+  // Scenario (Advanced)
+  { key: 'ResourceScarcity', label: 'Resource Scarcity', help: 'Low → abundance | High → scarcity / deprivation', category: 'Scenario', advanced: true },
+  { key: 'SupernaturalPresence', label: 'Supernatural Presence', help: 'Low → absent | High → pervasive / dominant', category: 'Scenario', advanced: true },
+    // Writing Style
+    { key: 'Formality', label: 'Formality', help: 'Low → casual | High → formal', category: 'Writing' },
+    { key: 'Verbosity', label: 'Verbosity', help: 'Low → concise | High → descriptive', category: 'Writing' },
+    { key: 'Poetic', label: 'Poetic', help: 'Low → plain | High → lyrical / poetic', category: 'Writing' },
+    { key: 'Sarcasm', label: 'Sarcasm', help: 'Low → sincere | High → sarcastic / ironic', category: 'Writing' },
+    // Writing Style (Core Additions)
+    { key: 'DescriptiveFocus', label: 'Descriptive Focus', help: 'Low → minimal detail | High → rich sensory detail', category: 'Writing' },
+    { key: 'Pacing', label: 'Pacing', help: 'Low → slow / reflective | High → brisk / energetic', category: 'Writing' },
+    { key: 'Intensity', label: 'Intensity', help: 'Low → mellow | High → dramatic / heightened', category: 'Writing' },
+  { key: 'FigurativeDensity', label: 'Figurative Density', help: 'Low → literal | High → metaphor-rich', category: 'Writing', advanced: true },
+  { key: 'Technicality', label: 'Technicality', help: 'Low → layman terms | High → specialized jargon', category: 'Writing', advanced: true },
+  // Writing Style (Advanced)
+  { key: 'ParentheticalAsides', label: 'Parenthetical Asides', help: 'Low → none | High → frequent aside comments', category: 'Writing', advanced: true },
+  { key: 'DialogueRatio', label: 'Dialogue Ratio', help: 'Low → mostly narration | High → mostly dialogue', category: 'Writing', advanced: true },
+    // Initial Message
+    { key: 'Warmth', label: 'Warmth', help: 'Low → cold / distant | High → warm / friendly', category: 'Initial' },
+    { key: 'Curiosity', label: 'Curiosity', help: 'Low → minimal interest | High → highly curious', category: 'Initial' },
+    { key: 'Urgency', label: 'Urgency', help: 'Low → relaxed | High → urgent / pressing', category: 'Initial' },
+  { key: 'Playfulness', label: 'Playfulness', help: 'Low → serious | High → playful / whimsical', category: 'Initial' },
+  // Initial Message (Core Additions)
+    { key: 'Directness', label: 'Directness', help: 'Low → indirect / oblique | High → straightforward', category: 'Initial' },
+  { key: 'ExpositionDensity', label: 'Exposition Density', help: 'Low → minimal setup | High → heavy background info', category: 'Initial', advanced: true },
+  { key: 'IntrigueHook', label: 'Intrigue Hook', help: 'Low → plain greeting | High → strong narrative hook', category: 'Initial', advanced: true },
+  { key: 'Guidance', label: 'Guidance', help: 'Low → user-led | High → assistant-led direction', category: 'Initial', advanced: true },
+  { key: 'PersonalAddress', label: 'Personal Address', help: 'Low → generic references | High → personalized “you” focus', category: 'Initial', advanced: true },
+    // Initial Message (Advanced)
+  { key: 'TeaseFactor', label: 'Tease Factor', help: 'Low → earnest | High → teasing / provocative', category: 'Initial', advanced: true },
+  { key: 'QuestionDensity', label: 'Question Density', help: 'Low → no questions | High → many probing questions', category: 'Initial', advanced: true }
+  ];
+  const [sliderValues, setSliderValues] = useState<Record<string, { value: number; auto: boolean }>>(() => {
+    const obj: Record<string, { value: number; auto: boolean }> = {};
+    sliderConfigs.forEach(cfg => { obj[cfg.key] = { value: 50, auto: !!cfg.advanced }; }); // advanced default to auto
+    return obj;
+  });
+
+  const resetGenerationMode = () => {
+    setIsGeneratingMode(false);
+    setGenerationPhase('input');
+    setGenDescription('');
+    setGenError(null);
+    setGenLoading(false);
+    setGenPerspective('first');
+    setSliderValues(prev => {
+      const obj: Record<string, { value: number; auto: boolean }> = {};
+      Object.keys(prev).forEach(k => {
+        const cfg = sliderConfigs.find(s => s.key === k);
+        obj[k] = { value: 50, auto: cfg?.advanced ? true : false };
+      });
+      return obj;
+    });
+  };
+
+  const performGeneration = async () => {
+    setGenError(null);
+    setGenLoading(true);
+    try {
+      if (!name.trim() || genDescription.trim().length < 10) {
+        setGenError('Enter a name and a description (≥ 10 chars) before generating.');
+        setGenLoading(false);
+        return;
+      }
+      const slidersPayload: Record<string, number> = {};
+      Object.entries(sliderValues).forEach(([k, v]) => { if (!v.auto) slidersPayload[k] = v.value; });
+      const resp = await fetch('/api/characters/generate', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: name.trim(), profileName: profileName.trim(), description: genDescription.trim(), sliders: slidersPayload, perspective: genPerspective })
+      });
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}));
+        setGenError(err.error || 'Generation failed');
+      } else {
+  const data = await resp.json();
+  setScenario(data.scenario || '');
+  setPersonality(data.personality || '');
+  setFirstMessage(data.firstMessage || '');
+  setExampleDialogue(data.exampleDialogue || '');
+  setGenerationPhase('generated');
+  // Auto-hide sliders after a successful generation
+  setIsGeneratingMode(false);
+      }
+    } catch (e: any) {
+      setGenError(e.message || 'Unexpected error');
+    } finally {
+      setGenLoading(false);
+    }
+  };
+  // (Legacy modal generation logic removed below - will be replaced later by integrated mode patch)
   
   // Group management state
   const [isCreatingGroup, setIsCreatingGroup] = useState(false);
@@ -945,6 +1082,31 @@ export default function CharactersPage() {
         
         {isAdding ? (
           <form onSubmit={handleSubmit}>
+            {isGeneratingMode && (
+              <div className="md:col-span-2 generation-panel">
+                <div className="generation-panel-inner">
+                  <div className="generation-panel-header">
+                    <span className="generation-badge">AI GENERATION SETUP</span>
+                  </div>
+                  <p className="generation-help">Provide a concept description, choose perspective, and tune sliders. {generationPhase === 'input' ? 'Content fields appear after generation.' : 'Adjust parameters and regenerate to overwrite the generated sections.'}</p>
+                  <div className="generation-perspective">
+                    <label className={`perspective-option ${genPerspective === 'first' ? 'active' : ''}`}>
+                      <input type="radio" name="perspective" value="first" checked={genPerspective === 'first'} onChange={() => setGenPerspective('first')} />
+                      <span>First Person</span>
+                    </label>
+                    <label className={`perspective-option ${genPerspective === 'third' ? 'active' : ''}`}>
+                      <input type="radio" name="perspective" value="third" checked={genPerspective === 'third'} onChange={() => setGenPerspective('third')} />
+                      <span>Third Person</span>
+                    </label>
+                    <label className="perspective-option" style={{marginLeft:'auto'}}>
+                      <input type="checkbox" checked={showAdvanced} onChange={(e)=>setShowAdvanced(e.target.checked)} />
+                      <span>Show Advanced</span>
+                    </label>
+                  </div>
+                </div>
+                {/* styles moved to globals.css */}
+              </div>
+            )}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="form-group">
                 <label className="form-label">Character Name</label>
@@ -966,82 +1128,165 @@ export default function CharactersPage() {
                 />
                 <small className="text-xs text-muted mt-1">If provided, this will be shown in dropdowns instead of the name</small>
               </div>
+              {(!isGeneratingMode || generationPhase === 'generated') && (
+                <div className="form-group">
+                  <label className="form-label">Bio (Optional)</label>
+                  <textarea 
+                    className="form-textarea"
+                    value={bio} 
+                    onChange={e => setBio(e.target.value)}
+                    placeholder="Brief description to help identify this character..."
+                    rows={2}
+                  />
+                  <small className="text-xs text-muted mt-1">Personal notes about this character - not sent to AI</small>
+                </div>
+              )}
+              {isGeneratingMode && generationPhase === 'input' && (
+                <div className="form-group md:col-span-2">
+                  <label className="form-label flex items-center gap-2">Generation Description <span className="text-xs font-normal text-muted">(Used by AI to fill the sections below)</span></label>
+                  <textarea
+                    className="form-textarea"
+                    value={genDescription}
+                    onChange={e => setGenDescription(e.target.value)}
+                    placeholder="Describe concept, themes, mood, motivations, relationships, era, genre..."
+                    rows={3}
+                  />
+                  <small className="text-xs text-muted mt-1">Minimum 10 chars. Unchecked sliders = fixed value; checked Auto lets AI choose.</small>
+                </div>
+              )}
+              {(!isGeneratingMode || generationPhase === 'generated') && (
+                <div className="form-group">
+                  <label className="form-label">Group (Optional)</label>
+                  <select 
+                    className="form-input"
+                    value={selectedGroupId || ''}
+                    onChange={e => setSelectedGroupId(e.target.value ? parseInt(e.target.value) : null)}
+                  >
+                    <option value="">No Group</option>
+                    {groups?.map(group => (
+                      <option key={group.id} value={group.id}>
+                        {group.name}
+                      </option>
+                    ))}
+                  </select>
+                  <small className="text-xs text-muted mt-1">Assign this character to a group for better organization</small>
+                </div>
+              )}
+              {(!isGeneratingMode || generationPhase === 'generated') && (
+                <>
+                  <div className="form-group">
+                    <label className="form-label">Scenario</label>
+                    <textarea 
+                      className="form-textarea"
+                      value={scenario} 
+                      onChange={e => setScenario(e.target.value)}
+                      placeholder="Describe the setting and context..."
+                      rows={3}
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Personality</label>
+                    <textarea 
+                      className="form-textarea"
+                      value={personality} 
+                      onChange={e => setPersonality(e.target.value)}
+                      placeholder="Describe personality traits, quirks, and behavior..."
+                      rows={3}
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">First Message</label>
+                    <textarea 
+                      className="form-textarea"
+                      value={firstMessage} 
+                      onChange={e => setFirstMessage(e.target.value)}
+                      placeholder="The character's opening message..."
+                      rows={3}
+                    />
+                  </div>
+                </>
+              )}
+            </div>
+            {(!isGeneratingMode || generationPhase === 'generated') && (
               <div className="form-group">
-                <label className="form-label">Bio (Optional)</label>
+                <label className="form-label">Example Dialogue</label>
                 <textarea 
                   className="form-textarea"
-                  value={bio} 
-                  onChange={e => setBio(e.target.value)}
-                  placeholder="Brief description to help identify this character..."
-                  rows={2}
+                  value={exampleDialogue} 
+                  onChange={e => setExampleDialogue(e.target.value)}
+                  placeholder="Sample conversation showing the character's speaking style..."
+                  rows={4}
                 />
-                <small className="text-xs text-muted mt-1">Personal notes about this character - not sent to AI</small>
               </div>
-              <div className="form-group">
-                <label className="form-label">Group (Optional)</label>
-                <select 
-                  className="form-input"
-                  value={selectedGroupId || ''}
-                  onChange={e => setSelectedGroupId(e.target.value ? parseInt(e.target.value) : null)}
-                >
-                  <option value="">No Group</option>
-                  {groups?.map(group => (
-                    <option key={group.id} value={group.id}>
-                      {group.name}
-                    </option>
+            )}
+            {isGeneratingMode && (
+              <div className="generation-sliders">
+                <div className="generation-sliders-header">
+                  <h4 className="text-lg font-semibold mb-1">Tuning Sliders</h4>
+                  <p className="hint">Adjust values; Auto lets AI decide. {generationPhase === 'input' ? 'Generate populates content.' : 'Regenerate overwrites content.'}</p>
+                </div>
+                <div className="space-y-6">
+                  {['Personality','Scenario','Writing','Initial'].map(cat => (
+                    <div key={cat} className="category-block">
+                      <h5 className="slider-category">{cat === 'Writing' ? 'Writing Style' : cat === 'Initial' ? 'Initial Message' : cat}</h5>
+                      <div className="slider-grid">
+                        {sliderConfigs.filter(s => s.category === cat && (showAdvanced || !s.advanced)).map(cfg => {
+                          const sv = sliderValues[cfg.key] || { value: 50, auto: false };
+                          return (
+                            <div key={cfg.key} className="slider-card">
+                              <div className="flex items-center justify-between mb-1">
+                                <label className="font-medium text-xs tracking-wide">{cfg.label}</label>
+                                <div className="flex items-center gap-2 text-[10px]">
+                                  <label className="flex items-center gap-1 cursor-pointer select-none">
+                                    <input type="checkbox" checked={sv.auto} onChange={(e) => setSliderValues(v => ({ ...v, [cfg.key]: { value: sv.value, auto: e.target.checked } }))} /> Auto
+                                  </label>
+                                  {devMode && !sv.auto && <span className="font-mono text-xs">{sv.value}</span>}
+                                </div>
+                              </div>
+                              <div className="slider-help">{cfg.help}</div>
+                              <input
+                                type="range"
+                                min={0}
+                                max={100}
+                                value={sv.value}
+                                onChange={(e) => {
+                                  const val = parseInt(e.target.value);
+                                  setSliderValues(v => ({ ...v, [cfg.key]: { value: isNaN(val) ? sv.value : val, auto: false } }));
+                                }}
+                                className="form-range"
+                              />
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
                   ))}
-                </select>
-                <small className="text-xs text-muted mt-1">Assign this character to a group for better organization</small>
+                </div>
+                {genError && <div className="text-error text-sm mt-4">{genError}</div>}
+                <div className="generation-actions">
+                  <button type="button" className="btn btn-secondary" onClick={performGeneration} disabled={genLoading}>{genLoading ? 'Generating…' : generationPhase === 'generated' ? 'Regenerate' : 'Generate'}</button>
+                  {generationPhase === 'generated' && (
+                    <button type="button" className="btn btn-secondary" onClick={() => setIsGeneratingMode(false)}>Hide Sliders</button>
+                  )}
+                </div>
+                {/* styles moved to globals.css */}
               </div>
-              <div className="form-group">
-                <label className="form-label">Scenario</label>
-                <textarea 
-                  className="form-textarea"
-                  value={scenario} 
-                  onChange={e => setScenario(e.target.value)}
-                  placeholder="Describe the setting and context..."
-                  rows={3}
-                />
+            )}
+            {!isGeneratingMode && generationPhase === 'generated' && (
+              <div className="mb-4">
+                <button type="button" className="btn btn-secondary" onClick={() => setIsGeneratingMode(true)}>Adjust Generation</button>
               </div>
-              <div className="form-group">
-                <label className="form-label">Personality</label>
-                <textarea 
-                  className="form-textarea"
-                  value={personality} 
-                  onChange={e => setPersonality(e.target.value)}
-                  placeholder="Describe personality traits, quirks, and behavior..."
-                  rows={3}
-                />
-              </div>
-              <div className="form-group">
-                <label className="form-label">First Message</label>
-                <textarea 
-                  className="form-textarea"
-                  value={firstMessage} 
-                  onChange={e => setFirstMessage(e.target.value)}
-                  placeholder="The character's opening message..."
-                  rows={3}
-                />
-              </div>
-            </div>
-            <div className="form-group">
-              <label className="form-label">Example Dialogue</label>
-              <textarea 
-                className="form-textarea"
-                value={exampleDialogue} 
-                onChange={e => setExampleDialogue(e.target.value)}
-                placeholder="Sample conversation showing the character's speaking style..."
-                rows={4}
-              />
-            </div>
+            )}
             <div className="flex flex-col sm:flex-row gap-3">
-              <button type="submit" className="btn btn-primary">Create Character</button>
+              {(!isGeneratingMode || generationPhase === 'generated') && (
+                <button type="submit" className="btn btn-primary">Create Character</button>
+              )}
               <button 
                 type="button" 
                 className="btn btn-secondary" 
                 onClick={() => {
                   setIsAdding(false);
-                  setName(''); setProfileName(''); setBio(''); setScenario(''); setPersonality(''); setFirstMessage(''); setExampleDialogue(''); setSelectedGroupId(null);
+                  setName(''); setProfileName(''); setBio(''); setScenario(''); setPersonality(''); setFirstMessage(''); setExampleDialogue(''); setSelectedGroupId(null); resetGenerationMode();
                 }}
               >
                 Cancel
@@ -1053,18 +1298,10 @@ export default function CharactersPage() {
             <button className="btn btn-primary" onClick={() => setIsAdding(true)}>
               + New Character
             </button>
-            <style jsx>{`
-              .button-container {
-                display: flex;
-                flex-direction: column;
-                gap: 12px;
-              }
-              @media (min-width: 640px) {
-                .button-container {
-                  flex-direction: row;
-                }
-              }
-            `}</style>
+            <button className="btn btn-secondary" onClick={() => { setIsAdding(true); setIsGeneratingMode(true); window.scrollTo({ top: 0, behavior: 'smooth' }); }}>
+              ✨ Generate Character
+            </button>
+            {/* styles moved to globals.css */}
           </div>
         )}
       </div>
@@ -1634,6 +1871,7 @@ export default function CharactersPage() {
           </button>
         </div>
       )}
+
     </div>
   );
 }

@@ -85,6 +85,14 @@ export const schemas = {
     groupId: z.number().int().positive().nullable().optional()
       .transform((v: number | null | undefined) => (v == null ? undefined : v))
   }),
+  generateCharacter: z.object({
+    name: z.string().trim().min(1).max(100),
+    profileName: z.string().trim().max(100).optional().or(z.literal('').transform(() => undefined)),
+    description: z.string().trim().min(10).max(3000),
+    // Sliders: only include keys that are not AUTO
+    sliders: z.record(z.string(), z.number().min(0).max(100)).optional(),
+    perspective: z.enum(['first','third']).optional().default('first')
+  }),
   updateCharacter: z.object({
     name: z.string().trim().min(1).max(100),
     // Accept empty string or null -> undefined for easier client handling
