@@ -2,12 +2,15 @@
 
 A self‑hostable Next.js application for creating richly defined AI characters and running long‑form, persona‑driven chat sessions. It focuses on local control of data (PostgreSQL), high‑quality conversation management (variants, editing, summaries, notes), and operational tooling (import/export, request logs, rate limiting, truncation safeguards).
 
+Production / self‑hosting instructions have moved to Docker Hub to keep this README focused on development and contribution:  
+➡️ https://hub.docker.com/r/dabomber/ownchatbot
+
 > Screenshot placeholders are included. Replace each `![screenshot-*]` with a real screenshot image committed to `public/` and update alt text accordingly.
 
 ## Table of Contents
 1. ✨ Features
 2. 🖼️ Screenshots (Placeholders)
-3. 🚀 Quick Start
+3. 🚀 Deployment (Self-Hosting)
 4. 🛠️ Development Setup
 5. 📘 Usage Guide
 6. 🏗️ Architecture
@@ -78,103 +81,21 @@ A self‑hostable Next.js application for creating richly defined AI characters 
 | Notes & Summary Modals | ![screenshot-notes-summary](public/PLACEHOLDER-notes-summary.png) |
 
 ---
-## 3. 🚀 Quick Start
+## 3. 🚀 Deployment (Self-Hosting)
 
-### Option A: One‑Line (Linux / macOS)
-```bash
-export POSTGRES_PASSWORD=$(openssl rand -hex 16); \
-curl -fsSL https://raw.githubusercontent.com/dabomber60/ownchatbot/main/docker-compose.simple.yml -o docker-compose.yml; \
-APP_IMAGE=dabomber/ownchatbot:latest docker compose up -d; \
-echo "Open: http://localhost:3000"
-```
+All production / self‑hosting instructions, one‑liners, upgrade notes, environment variable explanations for container deployment, and backup guidance have moved to Docker Hub to keep this repository README focused on development and contribution.
 
-### Option B: One‑Line (Windows PowerShell)
-```powershell
-$Env:POSTGRES_PASSWORD = -join ((48..57 + 97..102) | Get-Random -Count 32 | % {[char]$_})
-Invoke-WebRequest https://raw.githubusercontent.com/dabomber60/ownchatbot/main/docker-compose.simple.yml -OutFile docker-compose.yml
-$Env:APP_IMAGE = 'dabomber/ownchatbot:latest'
-docker compose up -d
-Write-Host 'Open: http://localhost:3000'
-```
+👉 Docker Hub page: https://hub.docker.com/r/dabomber/ownchatbot
 
-These commands:
-1. Generate a random Postgres password (not persisted unless you create a `.env`)
-2. Download the minimal two‑service compose file (app + postgres)
-3. Start both containers on an auto-created network
-4. Expose the web app at http://localhost:3000
+That page includes:
+- Minimal two‑container (app + Postgres) quickstart
+- Linux/macOS & Windows PowerShell one‑liners (with automatic password generation)
+- Upgrade & re-download commands
+- Environment variable reference
+- Data persistence & backup info
+- Troubleshooting table
 
-### Option C: Quickstart Scripts (Recommended)
-Clone or download a release, then:
-```bash
-./quickstart.sh       # Linux / macOS
-```
-```powershell
-./quickstart.ps1      # Windows PowerShell
-```
-```bat
-quickstart.bat        # Batch wrapper (delegates to PowerShell)
-```
-Scripts will:
-- Download compose file if missing
-- Create `.env` (idempotent) with a random secure `POSTGRES_PASSWORD`
-- Start containers and poll `/api/health`
-
-### Upgrades
-```bash
-docker compose pull
-docker compose up -d
-```
-Volumes preserve data (`ownchatbot_pg_data`, `ownchatbot_app_data`).
-
-### Environment Overrides
-Set in shell or `.env`:
-| Variable | Purpose | Default |
-|----------|---------|---------|
-| POSTGRES_DB | Database name | ownchatbot |
-| POSTGRES_USER | DB user | ownchatbot |
-| POSTGRES_PASSWORD | DB password | (insecure default unless randomized) |
-| APP_PORT | Host port for web UI | 3000 |
-| APP_IMAGE | Docker image tag | dabomber/ownchatbot:latest |
-| JWT_SECRET | (Optional) Static JWT signing secret | Auto-generated & persisted in volume |
-
-### Common Variations
-Run on a different port:
-```bash
-APP_PORT=4000 docker compose up -d
-```
-Force a specific image version:
-```bash
-APP_IMAGE=dabomber/ownchatbot:v1.0.0 docker compose up -d
-```
-Reset everything (DATA LOSS):
-```bash
-docker compose down --volumes
-```
-
-### Full stack (with daily backups sidecar + optional nginx)
-```bash
-# Clone
-git clone <REPO_URL> ownchatbot
-cd ownchatbot
-
-# Build + run (compose via helper script)
-./deploy.sh --rebuild
-
-# Update later
-git pull
-./deploy.sh --rebuild
-```
-
-Single-container example (no nginx sidecar):
-```bash
-docker run -d --name ownchatbot -p 3000:3000 -v ownchatbot_data:/app/data yourdockerhubusername/ownchatbot:latest \
-	-e DATABASE_URL='postgresql://user:pass@host:5432/ownchatbot?schema=public'
-```
-Open: http://localhost:3000
-
-### Windows Notes
-- Use Git Bash / WSL for `deploy.sh` scripts.
-- Or translate the compose file manually: `docker compose up -d --build`.
+If you notice something missing there, open an issue or PR here.
 
 ---
 ## 4. 🛠️ Development Setup
@@ -275,16 +196,17 @@ npm run dev
 
 ---
 ## 7. 🔧 Environment Variables
-Create `.env.local` (dev) or `.env` (prod). See `.env.example`.
+Create `.env.local` for development (copied from `.env.example`).
 
-Key variables:
-- `DATABASE_URL` (PostgreSQL connection string)
-- `JWT_SECRET` (OPTIONAL: if omitted the container auto-generates & persists one in `/app/data/jwt-secret`; set manually only if you want to control rotation or run multiple replicas)
-- `APP_PORT` (default 3000)
-- `POSTGRES_*` (when using provided Docker compose services)
-- `TZ` (optional timezone for backup scheduling)
+Key variables (development focus):
+- `DATABASE_URL` (PostgreSQL connection string — local dev DB)
+- `JWT_SECRET` (optional in dev; auto-generated in container deployments — see Docker Hub docs for production guidance)
+- `APP_PORT` (default 3000 for local dev server)
+- `TZ` (optional; affects backup scheduling only in container stack)
 
-AI provider API key is stored only via the in-app Settings UI (not via env vars). Provider & model can be changed in Settings.
+Deployment‑oriented environment variable details (Postgres service variables, container secret persistence, backup timezone, etc.) are documented on Docker Hub.
+
+AI provider API key is stored only via the in‑app Settings UI (not via env vars). Provider & model can be changed in Settings.
 
 ---
 ## 8. 💻 Commands
@@ -300,7 +222,7 @@ npm run type-check
 
 ### Database / Prisma
 ```bash
-npm run db:setup       # Start local Postgres via Docker compose
+npm run db:setup       # Start local Postgres (via lightweight compose file)
 npm run prisma:generate
 npm run prisma:migrate  # Uses migrations (same as npx prisma migrate dev)
 npm run prisma:push     # Push schema w/out migration (use with caution)
@@ -308,56 +230,22 @@ npm run prisma:studio
 npm run db:reset        # CAUTION: drops & recreates data
 ```
 
-### Docker / Deploy
-```bash
-./deploy.sh            # Start/update containers (cached)
-./deploy.sh --rebuild  # Force rebuild
-./deploy.sh --logs     # Tail container logs
-./deploy.sh --nginx    # Include nginx reverse proxy profile
-docker compose -f docker-compose.simple.yml up -d   # Minimal two-container stack
-```
-
-### Build & Publish Manually (Local)
-```bash
-# Build local image
-docker build -t ownchatbot:local .
-
-# Tag for Docker Hub
-docker tag ownchatbot:local yourdockerhubusername/ownchatbot:latest
-
-# Push (after docker login)
-docker push yourdockerhubusername/ownchatbot:latest
-```
-
-### GitHub Actions (Automated)
-Add `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` repo secrets. A workflow (`.github/workflows/docker-image.yml`) builds multi-arch images on pushes & tags.
+### GitHub Actions (Container Image CI)
+Add `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` repo secrets. The workflow (`.github/workflows/docker-image.yml`) builds multi‑arch images on pushes & tags. For how those images are consumed in deployment, see the Docker Hub README.
 
 ---
 ## 9. 💾 Data & Migration
 - Primary persistence: PostgreSQL
-- Schema tracked via Prisma migrations (baseline `20250914_init` + future diffs)
-- Logical backup & restore: Export/Import endpoints (JSON)
-- Physical backup: `pg_dump` / `psql` (examples below)
+- Schema tracked via Prisma migrations (baseline + future diffs under `prisma/migrations`)
+- Logical export/import: Application endpoints (JSON) for characters, personas, sessions, messages, settings
 
-Example manual dump/restore (container):
-```bash
-docker compose exec postgres pg_dump -U ownchatbot ownchatbot > backup.sql
-docker compose exec -T postgres psql -U ownchatbot ownchatbot < backup.sql
-```
-
-### Automated Backups
-- Sidecar backup service runs daily at 03:15 server time
-- Retention: 7 daily, 4 weekly, 12 monthly (tunable in `docker-compose.yml` under `backup` service env vars: `SCHEDULE`, `KEEP_*`)
-- Manual one-off backup: `./scripts/backup-now.sh [label]` (creates compressed custom-format dump under `./backups/` — gitignored)
-- Deploy script attempts pre-deploy backup if executable
-
-Adjust timezone via `TZ` env variable.
+For container backup/restore procedures (volumes, `pg_dump`, automated backup sidecar, retention policies) refer to the Docker Hub documentation.
 
 ---
-## 10. 🐛 Troubleshooting
+## 10. 🐛 Troubleshooting (Development)
 
 Issue: DeepSeek key not recognized
-- Re-set in Settings UI (provider-specific)
+- Re‑set in Settings UI (provider-specific)
 - Confirm API credits & network reachability
 
 Issue: Near character limit
@@ -375,25 +263,14 @@ npm run db:reset
 npm run prisma:migrate
 ```
 
-Issue: Docker stale build
-```bash
-./deploy.sh --rebuild
-```
-
-Issue: Port already in use
+Issue: Port already in use (dev server)
 - Change `APP_PORT` or free the existing process
 
-Issue: New login cookies invalid after restart
-- Ensure the `app_data` volume is mounted (see docker-compose) so the generated secret persists.
+Issue: Need container / deployment troubleshooting
+- See Docker Hub page: https://hub.docker.com/r/dabomber/ownchatbot
 
-Issue: Startup logs show "The following package was not found and will be installed: prisma"
-- Resolved: `prisma` is now a production dependency so the CLI ships in the image. We prune dev deps after build. If you still see this message, ensure your image is rebuilt (no stale layer) and that `docker-entrypoint.sh` isn't running before layer cache updated. To further slim the image you could copy only the generated client and remove runtime migrations.
-
-Issue: Want to share sessions across multiple replicas
-- Manually set the same `JWT_SECRET` value for every instance (Kubernetes Secret / compose env). Without this, each replica would issue tokens another cannot validate.
-
-Issue: Force logout / rotate all sessions intentionally
-- Delete `/app/data/jwt-secret` (or remove the volume) and restart, or set a new `JWT_SECRET` value; users must re-authenticate.
+Issue: Multi‑instance auth / JWT secret rotation
+- Covered in Docker Hub docs (production scope)
 
 ---
 
