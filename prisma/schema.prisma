@@ -56,20 +56,20 @@ model Character {
 }
 
 model ChatSession {
-  id             Int           @id @default(autoincrement())
-  personaId      Int
-  characterId    Int
-  createdAt      DateTime      @default(now())
-  updatedAt      DateTime      @updatedAt
-  lastApiRequest String?
+  id              Int           @id @default(autoincrement())
+  personaId       Int
+  characterId     Int
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  lastApiRequest  String?
   lastApiResponse String?
-  summary        String?
-  description    String?
-  lastSummary    Int?
-  notes          String?
-  messages       ChatMessage[]
-  character      Character     @relation(fields: [characterId], references: [id], onDelete: Cascade)
-  persona        Persona       @relation(fields: [personaId], references: [id], onDelete: Cascade)
+  summary         String?
+  description     String?
+  lastSummary     Int?
+  notes           String?
+  messages        ChatMessage[]
+  character       Character     @relation(fields: [characterId], references: [id], onDelete: Cascade)
+  persona         Persona       @relation(fields: [personaId], references: [id], onDelete: Cascade)
 
   @@unique([personaId, characterId, createdAt])
   @@index([personaId])

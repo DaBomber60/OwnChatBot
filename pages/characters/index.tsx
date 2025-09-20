@@ -674,7 +674,8 @@ export default function CharactersPage() {
   ];
   const [sliderValues, setSliderValues] = useState<Record<string, { value: number; auto: boolean }>>(() => {
     const obj: Record<string, { value: number; auto: boolean }> = {};
-    sliderConfigs.forEach(cfg => { obj[cfg.key] = { value: 50, auto: !!cfg.advanced }; }); // advanced default to auto
+    // All sliders start as auto per new requirement
+    sliderConfigs.forEach(cfg => { obj[cfg.key] = { value: 50, auto: true }; });
     return obj;
   });
 
@@ -695,7 +696,62 @@ export default function CharactersPage() {
     });
   };
 
-  const performGeneration = async () => {
+  // Versioning / Save & Regenerate state & helpers
+  const [savingVariant, setSavingVariant] = useState(false);
+  const computeNextVersionProfileName = (current: string): string => {
+    const trimmed = (current || '').trim();
+    if (!trimmed) {
+      const base = name.trim() || 'Character';
+      return `${base} - Version 2`;
+    }
+    if (/ - Version \d+$/i.test(trimmed)) {
+      return trimmed.replace(/ - Version (\d+)$/i, (_, n: string) => ` - Version ${parseInt(n) + 1}`);
+    }
+    if (/(?:^|\b)Version \d+$/i.test(trimmed)) {
+      return trimmed.replace(/Version (\d+)$/i, (_, n: string) => `Version ${parseInt(n) + 1}`);
+    }
+    if (/Version \d+/i.test(trimmed)) {
+      return trimmed.replace(/Version (\d+)/i, (_, n: string) => `Version ${parseInt(n) + 1}`);
+    }
+    return trimmed + ' - Version 2';
+  };
+
+  const handleSaveAndRegenerate = async () => {
+    if (genLoading || savingVariant) return;
+    if (!name.trim()) { alert('Name is required to save.'); return; }
+    setSavingVariant(true);
+    try {
+      const res = await fetch('/api/characters', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name,
+          profileName: profileName || '',
+          bio: bio || '',
+          scenario,
+          personality,
+          firstMessage,
+          exampleDialogue,
+          groupId: selectedGroupId
+        })
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        alert('Error saving character before regeneration: ' + (err.error || 'Unknown error'));
+        return;
+      }
+      mutate();
+      const nextProfile = computeNextVersionProfileName(profileName);
+      setProfileName(nextProfile);
+      await performGeneration({ profileNameOverride: nextProfile });
+    } catch (e: any) {
+      alert('Unexpected error saving & regenerating: ' + (e.message || e.toString()));
+    } finally {
+      setSavingVariant(false);
+    }
+  };
+
+  const performGeneration = async (opts?: { profileNameOverride?: string }) => {
     setGenError(null);
     setGenLoading(true);
     try {
@@ -708,7 +764,7 @@ export default function CharactersPage() {
       Object.entries(sliderValues).forEach(([k, v]) => { if (!v.auto) slidersPayload[k] = v.value; });
       const resp = await fetch('/api/characters/generate', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: name.trim(), profileName: profileName.trim(), description: genDescription.trim(), sliders: slidersPayload, perspective: genPerspective })
+        body: JSON.stringify({ name: name.trim(), profileName: (opts?.profileNameOverride ?? profileName).trim(), description: genDescription.trim(), sliders: slidersPayload, perspective: genPerspective })
       });
       if (!resp.ok) {
         const err = await resp.json().catch(() => ({}));
@@ -1143,7 +1199,10 @@ export default function CharactersPage() {
               )}
               {isGeneratingMode && generationPhase === 'input' && (
                 <div className="form-group md:col-span-2">
-                  <label className="form-label flex items-center gap-2">Generation Description <span className="text-xs font-normal text-muted">(Used by AI to fill the sections below)</span></label>
+                  <label className="form-label flex items-center gap-2">
+                    Generation Description
+                    <span className="text-xs font-normal text-muted">(Used by AI to fill the sections below)</span>
+                  </label>
                   <textarea
                     className="form-textarea"
                     value={genDescription}
@@ -1219,6 +1278,22 @@ export default function CharactersPage() {
                 />
               </div>
             )}
+            {isGeneratingMode && generationPhase === 'generated' && (
+              <div className="form-group">
+                <label className="form-label flex items-center gap-2">
+                  Generation Description
+                  <span className="text-xs font-normal text-muted">(Modify and Regenerate to overwrite generated fields)</span>
+                </label>
+                <textarea
+                  className="form-textarea"
+                  value={genDescription}
+                  onChange={e => setGenDescription(e.target.value)}
+                  placeholder="Refine or change concept, themes, mood, motivations, relationships, era, genre..."
+                  rows={3}
+                />
+                <small className="text-xs text-muted mt-1">Regenerate overwrites Scenario, Personality, First Message, Example Dialogue. Minimum 10 chars.</small>
+              </div>
+            )}
             {isGeneratingMode && (
               <div className="generation-sliders">
                 <div className="generation-sliders-header">
@@ -1253,7 +1328,7 @@ export default function CharactersPage() {
                                   const val = parseInt(e.target.value);
                                   setSliderValues(v => ({ ...v, [cfg.key]: { value: isNaN(val) ? sv.value : val, auto: false } }));
                                 }}
-                                className="form-range"
+                                className={`form-range ${sv.auto ? 'range-auto' : 'range-active'}`}
                               />
                             </div>
                           );
@@ -1264,9 +1339,33 @@ export default function CharactersPage() {
                 </div>
                 {genError && <div className="text-error text-sm mt-4">{genError}</div>}
                 <div className="generation-actions">
-                  <button type="button" className="btn btn-secondary" onClick={performGeneration} disabled={genLoading}>{genLoading ? 'Generating…' : generationPhase === 'generated' ? 'Regenerate' : 'Generate'}</button>
-                  {generationPhase === 'generated' && (
-                    <button type="button" className="btn btn-secondary" onClick={() => setIsGeneratingMode(false)}>Hide Sliders</button>
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => performGeneration()}
+                    disabled={genLoading}
+                    aria-busy={genLoading ? 'true' : 'false'}
+                  >
+                    {genLoading ? (
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <span>Generating…</span>
+                        <span className="loading-spinner" aria-hidden="true" />
+                      </span>
+                    ) : generationPhase === 'generated' ? 'Regenerate' : 'Generate'}
+                  </button>
+                  {generationPhase === 'generated' && !genLoading && (
+                    <>
+                      <button
+                        type="button"
+                        className="btn btn-secondary"
+                        onClick={handleSaveAndRegenerate}
+                        disabled={savingVariant}
+                        title="Save current character (new record) then regenerate with incremented Version suffix"
+                      >
+                        {savingVariant ? 'Saving…' : 'Save & Regenerate'}
+                      </button>
+                      <button type="button" className="btn btn-secondary" onClick={() => setIsGeneratingMode(false)}>Hide Generation Tools</button>
+                    </>
                   )}
                 </div>
                 {/* styles moved to globals.css */}
@@ -1279,7 +1378,7 @@ export default function CharactersPage() {
             )}
             <div className="flex flex-col sm:flex-row gap-3">
               {(!isGeneratingMode || generationPhase === 'generated') && (
-                <button type="submit" className="btn btn-primary">Create Character</button>
+                <button type="submit" className="btn btn-primary">Save Character</button>
               )}
               <button 
                 type="button" 

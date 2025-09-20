@@ -15,7 +15,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const body = validateBody(schemas.updateCharacter, req, res);
     if (!body) return;
     const { name, profileName, bio, scenario, personality, firstMessage, exampleDialogue } = body as any;
+    const normalizedProfileName = (profileName !== undefined && profileName !== null && profileName.toString().trim().length > 0)
+      ? profileName.toString().trim()
+      : null;
     try {
+      if (normalizedProfileName === null) {
+        // Ensure another character (not this one) does not already have same name with null profile
+        const existing = await prisma.character.findFirst({ where: { name: name, profileName: null, NOT: { id: charId } } });
+        if (existing) {
+          return conflict(res, 'Another character with this name already exists without a profile name. Provide a profile name or change the character name.', 'CHARACTER_NAME_CONFLICT_NULL_PROFILE');
+        }
+      } else {
+        const existingCombo = await prisma.character.findFirst({ where: { name: name, profileName: normalizedProfileName, NOT: { id: charId } } });
+        if (existingCombo) {
+          return conflict(res, 'This character name + profile name combination already exists.', 'CHARACTER_NAME_PROFILE_CONFLICT');
+        }
+      }
       const updated = await prisma.character.update({
         where: { id: charId },
         data: {
@@ -24,7 +39,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           personality: personality || '',
           firstMessage: firstMessage || "You didn't enter a first message for this character :(",
           exampleDialogue: exampleDialogue || '',
-          ...(profileName !== undefined && { profileName }),
+          ...(profileName !== undefined && { profileName: normalizedProfileName }),
           ...(bio !== undefined && { bio })
         }
       });

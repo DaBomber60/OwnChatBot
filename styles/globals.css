@@ -283,6 +283,44 @@ p {
   margin: var(--space-2) 0;
 }
 
+/* Slider state variants */
+.form-range.range-auto {
+  background: linear-gradient(90deg, #302b3a 0%, #332c44 100%);
+  filter: saturate(60%);
+  opacity: 0.8;
+}
+.form-range.range-auto::-webkit-slider-thumb,
+.form-range.range-auto::-moz-range-thumb {
+  background: #4c3a73; /* darker muted purple */
+  box-shadow: 0 0 0 1px #2d2342;
+}
+.form-range.range-auto:hover {
+  background: linear-gradient(90deg, #3a3450 0%, #43385c 100%);
+  filter: saturate(90%);
+  opacity: 0.95;
+}
+.form-range.range-auto:hover::-webkit-slider-thumb,
+.form-range.range-auto:hover::-moz-range-thumb {
+  background: #6d4fb3;
+}
+
+.form-range.range-active {
+  background: linear-gradient(90deg, rgba(139,92,246,0.25) 0%, rgba(139,92,246,0.4) 100%);
+  box-shadow: inset 0 0 0 1px rgba(139,92,246,0.35);
+}
+.form-range.range-active::-webkit-slider-thumb,
+.form-range.range-active::-moz-range-thumb {
+  background: var(--primary);
+}
+.form-range.range-active:hover {
+  background: linear-gradient(90deg, rgba(139,92,246,0.35) 0%, rgba(139,92,246,0.55) 100%);
+}
+.form-range.range-active:hover::-webkit-slider-thumb,
+.form-range.range-active:hover::-moz-range-thumb {
+  background: var(--primary-hover);
+  box-shadow: 0 0 0 4px rgba(139,92,246,0.25);
+}
+
 .form-range::-webkit-slider-thumb {
   -webkit-appearance: none;
   appearance: none;
@@ -429,6 +467,21 @@ p {
 .slider-help { font-size: 10px; color: var(--text-muted); margin-bottom: var(--space-2); line-height: 1.2; min-height: 1.2rem; }
 .generation-actions { display: flex; flex-direction: column; gap: var(--space-3); margin-top: var(--space-4); }
 @media (min-width: 640px) { .generation-actions { flex-direction: row; } }
+
+/* Loading spinner (small) */
+.loading-spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(139,92,246,0.25);
+  border-top-color: var(--primary);
+  border-radius: 50%;
+  animation: spin 0.75s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
 
 .button-container { display: flex; flex-direction: column; gap: 12px; }
 @media (min-width: 640px) { .button-container { flex-direction: row; } }
