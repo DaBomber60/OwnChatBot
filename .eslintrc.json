@@ -10,5 +10,16 @@
     "react-hooks/exhaustive-deps": "warn",
   "prefer-const": "warn",
   "import/no-anonymous-default-export": "off"
-  }
+  },
+  "overrides": [
+    {
+      // API route handlers often need to accept arbitrary JSON bodies and external upstream payloads.
+      // We temporarily disable the explicit-any rule there to reduce CI/Docker build log noise.
+      // When refining types, remove this override (preferred long-term) or switch to `unknown` + runtime guards.
+      "files": ["pages/api/**/*.ts"],
+      "rules": {
+        "@typescript-eslint/no-explicit-any": "off"
+      }
+    }
+  ]
 }
