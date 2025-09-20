@@ -25,12 +25,22 @@ echo "Open: http://localhost:3000"
 ```
 
 ### Windows PowerShell One‑Liner (Creates .env)
+Multi-line (recommended for readability):
 ```powershell
-$pw = -join ((48..57 + 97..102) | Get-Random -Count 32 | % {[char]$_}); \
-@"\nPOSTGRES_PASSWORD=$pw\nCOMPOSE_PROJECT_NAME=ownchatbot\nAPP_IMAGE=dabomber/ownchatbot:latest\n"@ | Set-Content .env; \
-Invoke-WebRequest https://raw.githubusercontent.com/dabomber60/ownchatbot/main/docker-compose.simple.yml -OutFile docker-compose.yml; \
-docker compose up -d; \
+$pw = -join ((48..57 + 97..102) | Get-Random -Count 32 | % {[char]$_})
+@"
+POSTGRES_PASSWORD=$pw
+COMPOSE_PROJECT_NAME=ownchatbot
+APP_IMAGE=dabomber/ownchatbot:latest
+"@ | Set-Content .env
+Invoke-WebRequest https://raw.githubusercontent.com/dabomber60/ownchatbot/main/docker-compose.simple.yml -OutFile docker-compose.yml
+docker compose up -d
 Write-Host 'Open: http://localhost:3000'
+```
+
+Pure single-line variant (copy/paste friendly):
+```powershell
+$pw = -join ((48..57 + 97..102) | Get-Random -Count 32 | % {[char]$_}); "POSTGRES_PASSWORD=$pw`nCOMPOSE_PROJECT_NAME=ownchatbot`nAPP_IMAGE=dabomber/ownchatbot:latest`n" | Out-File -Encoding utf8 .env; Invoke-WebRequest https://raw.githubusercontent.com/dabomber60/ownchatbot/main/docker-compose.simple.yml -OutFile docker-compose.yml; docker compose up -d; Write-Host 'Open: http://localhost:3000'
 ```
 
 This starts:
@@ -107,8 +117,10 @@ COMPOSE_PROJECT_NAME=ownchatbot docker compose up -d
 
 Windows PowerShell:
 ```powershell
-Invoke-WebRequest https://raw.githubusercontent.com/dabomber60/ownchatbot/main/docker-compose.simple.yml -OutFile docker-compose.yml; \
-$Env:COMPOSE_PROJECT_NAME='ownchatbot'; docker compose pull; docker compose up -d
+Invoke-WebRequest https://raw.githubusercontent.com/dabomber60/ownchatbot/main/docker-compose.simple.yml -OutFile docker-compose.yml
+$Env:COMPOSE_PROJECT_NAME='ownchatbot'
+docker compose pull
+docker compose up -d
 ```
 
 ## Changing Port

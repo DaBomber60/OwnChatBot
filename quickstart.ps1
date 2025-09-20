@@ -34,16 +34,23 @@ if (-not (Test-Path '.env')) {
 POSTGRES_DB=ownchatbot
 POSTGRES_USER=ownchatbot
 POSTGRES_PASSWORD=$pgPass
+COMPOSE_PROJECT_NAME=ownchatbot
+APP_IMAGE=dabomber/ownchatbot:latest
 # APP_PORT=3000
 # JWT_SECRET=
-"@ | Out-File -Encoding ascii .env
+"@ | Out-File -Encoding utf8 .env
   Write-Host 'Stored random POSTGRES_PASSWORD in .env'
 } else {
-  Write-Host '.env already present (not modifying)'
+  Write-Host '.env already present (not modifying base values)'
+  # Ensure COMPOSE_PROJECT_NAME and APP_IMAGE exported if present in file
+  (Get-Content .env | ForEach-Object { $_ }) | ForEach-Object {
+    if ($_ -match '^(COMPOSE_PROJECT_NAME)=(.*)$') { $Env:COMPOSE_PROJECT_NAME = $Matches[2] }
+    if ($_ -match '^(APP_IMAGE)=(.*)$') { $Env:APP_IMAGE = $Matches[2] }
+    if ($_ -match '^(APP_PORT)=(.*)$') { $Env:APP_PORT = $Matches[2] }
+  }
 }
 
-$Env:APP_IMAGE = 'dabomber/ownchatbot:latest'
-# Ensure consistent compose project (stack) name instead of defaulting to the directory / user folder
+if (-not $Env:APP_IMAGE) { $Env:APP_IMAGE = 'dabomber/ownchatbot:latest' }
 if (-not $Env:COMPOSE_PROJECT_NAME) { $Env:COMPOSE_PROJECT_NAME = 'ownchatbot' }
 
 Write-Host "Starting containers (project: $($Env:COMPOSE_PROJECT_NAME))..."
@@ -51,10 +58,11 @@ Write-Host "Starting containers (project: $($Env:COMPOSE_PROJECT_NAME))..."
 
 Write-Host 'Waiting for app health...' -NoNewline
 $attempts = 60
+$port = if ($Env:APP_PORT) { $Env:APP_PORT } else { 3000 }
 while ($attempts -gt 0) {
   try {
-    $resp = Invoke-WebRequest -Uri "http://localhost:$($Env:APP_PORT ?? 3000)/api/health" -UseBasicParsing -TimeoutSec 3
-    if ($resp.StatusCode -eq 200) { Write-Host " OK"; break }
+    $resp = Invoke-WebRequest -Uri "http://localhost:$port/api/health" -UseBasicParsing -TimeoutSec 3
+    if ($resp.StatusCode -eq 200) { Write-Host ' OK'; break }
   } catch {}
   Start-Sleep -Seconds 2
   $attempts--
@@ -62,7 +70,7 @@ while ($attempts -gt 0) {
 }
 if ($attempts -le 0) { Write-Host "\nWARN: Timed out waiting for health endpoint." -ForegroundColor Yellow }
 
-Write-Host "`nOpen: http://localhost:$($Env:APP_PORT ?? 3000)" -ForegroundColor Green
+Write-Host "`nOpen: http://localhost:$port" -ForegroundColor Green
 Write-Host "Logs: $composeCmd logs -f"
 Write-Host "Stop: $composeCmd down"
 Write-Host 'Data persists in named volumes.'
