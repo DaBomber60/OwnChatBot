@@ -1,6 +1,7 @@
 import Head from 'next/head';
 import { useRouter } from 'next/router';
 import useSWR from 'swr';
+import { useState, useMemo } from 'react';
 
 // Session data shape
 type Session = { 
@@ -16,9 +17,45 @@ const fetcher = (url: string) => fetch(url).then(res => res.json());
 export default function Home() {
   const router = useRouter();
   const { data: sessions } = useSWR<Session[] | { error?: string }>(
-    '/api/sessions', 
+    '/api/sessions',
     fetcher
   );
+  // Fetch global settings to determine if an API key exists or the reminder was dismissed
+  const { data: settings, mutate: mutateSettings } = useSWR<Record<string, string> | { error?: string }>(
+    '/api/settings',
+    fetcher
+  );
+
+  // Local UI state for modal dismissal and checkbox
+  const [dontShowAgain, setDontShowAgain] = useState(false);
+  const [dismissedThisSession, setDismissedThisSession] = useState(false);
+
+  const hasAnyApiKey = useMemo(() => {
+    if (!settings || 'error' in settings) return false;
+    return Object.entries(settings).some(([k, v]) => k.startsWith('apiKey') && (v || '').trim().length > 0);
+  }, [settings]);
+
+  const hideFlag = settings && !('error' in settings) && (settings as Record<string,string>).hideApiKeySetup === 'true';
+  const showApiKeyModal = !!settings && !('error' in settings) && !hasAnyApiKey && !hideFlag && !dismissedThisSession;
+
+  async function persistHideFlag() {
+    try {
+      await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ hideApiKeySetup: true })
+      });
+      mutateSettings();
+    } catch {
+      // Silently ignore – non-critical
+    }
+  }
+
+  function closeModal(navigateToSettings: boolean) {
+    if (dontShowAgain) persistHideFlag();
+    setDismissedThisSession(true);
+    if (navigateToSettings) router.push('/settings');
+  }
   const recent = Array.isArray(sessions)
     ? [...sessions]
         .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
@@ -33,6 +70,7 @@ export default function Home() {
       </Head>
 
       <div className="container">
+        {/* Inline first-time API key guidance (above Conversations card) */}
         {/* Header */}
         <header className="text-center mb-12">
           <h1 className="text-4xl font-bold mb-6">OwnChatBot</h1>
@@ -85,6 +123,48 @@ export default function Home() {
         {/* Main Actions */}
         <section className="mb-8">
           <div className="grid gap-6">
+            {showApiKeyModal && (
+              <div className="card border border-warning/30 bg-warning/10">
+                <div className="card-header">
+                  <h2 className="card-title">🔑 Set Up Your AI Provider</h2>
+                  <p className="card-description">No API key detected – configure one to enable AI responses.</p>
+                </div>
+                <div className="space-y-4 text-sm leading-relaxed">
+                  <p>
+                    Head over to <strong>Settings</strong> to add an API key for your preferred provider (DeepSeek, OpenAI, OpenRouter, Anthropic, or a custom-compatible endpoint). Without a key, chats can&apos;t generate responses.
+                  </p>
+                  <ol className="list-decimal list-inside space-y-1 text-muted">
+                    <li>Open Settings</li>
+                    <li>Select a provider (or Custom)</li>
+                    <li>Paste your API key (and optional model override)</li>
+                    <li>Save and start chatting 🚀</li>
+                  </ol>
+                  <label className="flex items-center gap-2 mt-2 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      className="form-checkbox"
+                      checked={dontShowAgain}
+                      onChange={e => setDontShowAgain(e.target.checked)}
+                    />
+                    <span>Don&apos;t show this again</span>
+                  </label>
+                </div>
+                <div className="mt-6 flex flex-col sm:flex-row gap-3">
+                  <button
+                    className="btn btn-primary flex-1"
+                    onClick={() => closeModal(true)}
+                  >
+                    Go to Settings
+                  </button>
+                  <button
+                    className="btn btn-secondary flex-1"
+                    onClick={() => closeModal(false)}
+                  >
+                    Dismiss
+                  </button>
+                </div>
+              </div>
+            )}
             {/* Start New Chat - Hero Action */}
             <div 
               className="card text-center cursor-pointer"
