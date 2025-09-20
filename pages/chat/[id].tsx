@@ -554,7 +554,7 @@ export default function ChatSessionPage() {
       // Get current settings for streaming
       const settingsRes = await fetch('/api/settings');
       const settings = await settingsRes.json();
-      const streamSetting = settings.stream === 'true';
+  const streamSetting = settings.stream === undefined ? true : settings.stream === 'true';
       
       // Get current variants to calculate the new index
       const currentVariants = messageVariants.get(messageId) || [];
@@ -2315,7 +2315,7 @@ export default function ChatSessionPage() {
     const settingsRes = await fetch('/api/settings');
     const settings = await settingsRes.json();
     
-    const streamSetting = settings.stream === 'true';
+  const streamSetting = settings.stream === undefined ? true : settings.stream === 'true';
     const defaultPromptId = settings.defaultPromptId ? Number(settings.defaultPromptId) : undefined;
   const tempSetting = settings.temperature ? parseFloat(settings.temperature) : 0.7;
   const maxTokensSetting = settings.maxTokens ? Math.max(256, Math.min(8192, parseInt(settings.maxTokens))) : 4096;
@@ -2463,7 +2463,7 @@ export default function ChatSessionPage() {
     const settingsRes = await fetch('/api/settings');
     const settings = await settingsRes.json();
     
-    const streamSetting = settings.stream === 'true';
+  const streamSetting = settings.stream === undefined ? true : settings.stream === 'true';
     const defaultPromptId = settings.defaultPromptId ? Number(settings.defaultPromptId) : undefined;
   const tempSetting = settings.temperature ? parseFloat(settings.temperature) : 0.7;
   const maxTokensSetting = settings.maxTokens ? Math.max(256, Math.min(8192, parseInt(settings.maxTokens))) : 4096;
@@ -2786,7 +2786,7 @@ export default function ChatSessionPage() {
     const settingsRes = await fetch('/api/settings');
     const settings = await settingsRes.json();
     
-    const streamSetting = settings.stream === 'true';
+  const streamSetting = settings.stream === undefined ? true : settings.stream === 'true';
     const defaultPromptId = settings.defaultPromptId ? Number(settings.defaultPromptId) : undefined;
   const tempSetting = settings.temperature ? parseFloat(settings.temperature) : 0.7;
   const maxTokensSetting = settings.maxTokens ? Math.max(256, Math.min(8192, parseInt(settings.maxTokens))) : 4096;
@@ -3037,7 +3037,7 @@ export default function ChatSessionPage() {
     setLoading(true);
     const settingsRes = await fetch('/api/settings');
     const settings = await settingsRes.json();
-    const streamSetting = settings.stream === 'true';
+  const streamSetting = settings.stream === undefined ? true : settings.stream === 'true';
     const defaultPromptId = settings.defaultPromptId ? Number(settings.defaultPromptId) : undefined;
   const tempSetting = settings.temperature ? parseFloat(settings.temperature) : 0.7;
   const maxTokensSetting = settings.maxTokens ? Math.max(256, Math.min(8192, parseInt(settings.maxTokens))) : 4096;

@@ -84,13 +84,14 @@ export default function SettingsPage() {
       setModelName(dbSettings.modelName || '');
   setEnableTemperatureOverride(dbSettings.modelEnableTemperature === undefined ? true : dbSettings.modelEnableTemperature === 'true');
   setMaxTokenFieldName(dbSettings.maxTokenFieldName || '');
-      setStream(dbSettings.stream === 'true');
+  // Default streaming to true if the setting has never been saved (undefined)
+  setStream(dbSettings.stream === undefined ? true : dbSettings.stream === 'true');
       setDefaultPromptId(dbSettings.defaultPromptId ? Number(dbSettings.defaultPromptId) : null);
       setTemperature(dbSettings.temperature ? parseFloat(dbSettings.temperature) : 0.7);
       setMaxCharacters(dbSettings.maxCharacters ? Math.max(30000, Math.min(320000, parseInt(dbSettings.maxCharacters))) : 150000);
       setMaxTokens(dbSettings.maxTokens ? Math.max(256, Math.min(8192, parseInt(dbSettings.maxTokens))) : 4096);
       setDevMode(dbSettings.devMode === 'true');
-      setSummaryPrompt(dbSettings.summaryPrompt || 'Create a brief, focused summary (~50 words) of the roleplay between {{char}} and {{user}}. Include:\\n\\n- Key events and decisions\\n- Important emotional moments\\n- Location/time changes\\n\\nRules: Only summarize provided transcript. No speculation. Single paragraph format.');
+      setSummaryPrompt(dbSettings.summaryPrompt || 'Create a brief, focused summary (~100 words) of the roleplay between {{char}} and {{user}}. Include:\\n\\n- Key events and decisions\\n- Important emotional moments\\n- Location/time changes\\n\\nRules: Only summarize provided transcript. No speculation. Single paragraph format.');
     }
   }, [dbSettings, apiKeyEditing]);
 
