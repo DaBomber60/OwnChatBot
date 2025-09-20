@@ -49,8 +49,11 @@ jobs:
           platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=registry,ref=${{ env.IMAGE_NAME }}:buildcache
-          cache-to: type=registry,ref=${{ env.IMAGE_NAME }}:buildcache,mode=max
+          # Use GitHub Actions cache backend only (fast, ephemeral). Scope keeps cache coherent across runs.
+          cache-from: type=gha,scope=ownchatbot
+          cache-to: type=gha,mode=min,scope=ownchatbot
+          # Disable provenance/SBOM generation to shave a little time (reenable if you need supply-chain metadata)
+          provenance: false
 
       - name: Summary
         run: |
