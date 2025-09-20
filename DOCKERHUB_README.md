@@ -79,6 +79,18 @@ docker compose up -d
 ```
 Data persists (volumes reused). If schema migrations are needed, the app runs them automatically via Prisma client init.
 
+### Linux / macOS One-Liner
+```bash
+docker compose pull && docker compose up -d
+```
+
+### Windows PowerShell One-Liner
+```powershell
+docker compose pull; docker compose up -d
+```
+
+Above commands pull the latest tag you are using (e.g. `latest` or a specific version) and recreate changed containers while retaining named volumes.
+
 ## Changing Port
 ```bash
 APP_PORT=4000 docker compose up -d
