@@ -829,7 +829,7 @@ export default function ImportPage() {
         <div className="card-header">
           <h3 className="card-title">Import from External Tools</h3>
           <p className="card-description">
-            Import characters, personas, and chats from external tools like SillyTavern
+            Import characters, personas, and chats from external tools!
           </p>
         </div>
 

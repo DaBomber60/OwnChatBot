@@ -16,7 +16,7 @@ export default function SettingsPage() {
   const [enableTemperatureOverride, setEnableTemperatureOverride] = useState(true);
   const [maxTokenFieldName, setMaxTokenFieldName] = useState('');
   const isFixedTemp = (prov: string, model: string) => prov === 'openai' && /^gpt-5/i.test(model || '');
-  const [stream, setStream] = useState(false);
+  const [stream, setStream] = useState(true);
   // Added state for API key edit mode
   const [apiKeyEditing, setApiKeyEditing] = useState(false);
   const [originalApiKey, setOriginalApiKey] = useState('');
@@ -32,7 +32,7 @@ export default function SettingsPage() {
   const [maxCharacters, setMaxCharacters] = useState(150000);
   const [maxTokens, setMaxTokens] = useState(4096);
   const [devMode, setDevMode] = useState(false);
-  const [summaryPrompt, setSummaryPrompt] = useState('Create a brief, focused summary (~50 words) of the roleplay between {{char}} and {{user}}. Include:\\n\\n- Key events and decisions\\n- Important emotional moments\\n- Location/time changes\\n\\nRules: Only summarize provided transcript. No speculation. Single paragraph format.');
+  const [summaryPrompt, setSummaryPrompt] = useState('Create a brief, focused summary (~100 words) of the roleplay between {{char}} and {{user}}. Include:\\n\\n- Key events and decisions\\n- Important emotional moments\\n- Location/time changes\\n\\nRules: Only summarize provided transcript. No speculation. Single paragraph format.');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showPasswordSection, setShowPasswordSection] = useState(false);
@@ -682,7 +682,7 @@ export default function SettingsPage() {
 
           <div className="form-group">
             <label className="form-label">
-              Max Characters (context window cap): {maxCharacters.toLocaleString()}
+              Max characters in context: {maxCharacters.toLocaleString()}
             </label>
             <input
               type="range"
@@ -702,7 +702,7 @@ export default function SettingsPage() {
 
           <div className="form-group">
             <label className="form-label">
-              Max Tokens per response: {maxTokens}
+              Max tokens per response: {maxTokens}
             </label>
             <input
               type="range"
@@ -987,8 +987,7 @@ export default function SettingsPage() {
           <div className="mt-6 p-4 bg-warning/10 border border-warning/20 rounded-lg">
             <h4 className="text-warning font-semibold mb-2">⚠️ Important Notes:</h4>
             <ul className="text-sm text-secondary space-y-1 list-disc list-inside">
-              <li><strong>Export:</strong> Creates a compressed ZIP backup (much smaller than JSON) of your entire database</li>
-              <li><strong>Import:</strong> Supports both ZIP format and legacy JSON files</li>
+              <li><strong>Export:</strong> Creates a compressed ZIP backup of your entire OwnChatBot</li>
               <li><strong>Duplicates:</strong> Records with the same name/identifier will be skipped to prevent conflicts</li>
               <li><strong>Settings:</strong> New settings are imported, existing ones are updated with new values</li>
               <li><strong>Chat History:</strong> Messages and their versions are fully preserved during import</li>
