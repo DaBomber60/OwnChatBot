@@ -1,13 +1,20 @@
 name: Update Docker Hub Description
 
 on:
-  push:
-    tags: [ 'v*.*.*' ]
+  # Run automatically after the image build workflow completes successfully
+  workflow_run:
+    workflows: ["Build & Publish Docker Image"]
+    types: [completed]
+  # Allow manual triggering still
   workflow_dispatch:
 
 jobs:
   update-description:
     name: Sync README to Docker Hub
+    # Run only if:
+    #  - Manually dispatched OR
+    #  - Triggered by workflow_run where upstream concluded successfully
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read

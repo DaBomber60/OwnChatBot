@@ -109,4 +109,4 @@ Full stack (`docker-compose.yml`) includes a scheduled backup sidecar.
 | Need clean slate | `docker compose down --volumes` (data loss) |
 
 ## License
-See repository LICENSE file.
+GPL-3.0 license
