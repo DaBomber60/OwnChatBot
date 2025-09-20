@@ -7,7 +7,7 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-ownchatbot}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ownchatbot_secure_password}
     volumes:
-      - ownchatbot_pg_data:/var/lib/postgresql/data
+      - pg_data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ownchatbot} -d ${POSTGRES_DB:-ownchatbot}"]
       interval: 30s
@@ -16,7 +16,6 @@ services:
 
   app:
     image: ${APP_IMAGE:-dabomber/ownchatbot:latest}
-    container_name: ownchatbot
     restart: unless-stopped
     depends_on:
       postgres:
@@ -30,8 +29,10 @@ services:
     ports:
       - "${APP_PORT:-3000}:3000"
     volumes:
-      - ownchatbot_app_data:/app/data
+      - app_data:/app/data
 
 volumes:
-  ownchatbot_pg_data:
-  ownchatbot_app_data:
+  pg_data:
+    name: ownchatbot_pg_data
+  app_data:
+    name: ownchatbot_app_data

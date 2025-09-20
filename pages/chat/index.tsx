@@ -240,7 +240,7 @@ export default function ChatIndexPage() {
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-3xl font-semibold mb-0">Start New Chat</h1>
         <button className="btn btn-secondary" onClick={() => router.push('/')}>
-          🏠 Home
+          🏠 Homee
         </button>
       </div>
 

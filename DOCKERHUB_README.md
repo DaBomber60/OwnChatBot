@@ -15,21 +15,21 @@ Image: `dabomber/ownchatbot:latest`
 
 ## Quick Start (Two Containers via Compose)
 
-### Linux / macOS One‑Liner
+### Linux / macOS One‑Liner (Creates .env)
 ```bash
-export POSTGRES_PASSWORD=$(openssl rand -hex 16); \
+PW=$(openssl rand -hex 16); \
+printf "POSTGRES_PASSWORD=%s\nCOMPOSE_PROJECT_NAME=ownchatbot\nAPP_IMAGE=dabomber/ownchatbot:latest\n" "$PW" > .env; \
 curl -fsSL https://raw.githubusercontent.com/dabomber60/ownchatbot/main/docker-compose.simple.yml -o docker-compose.yml; \
-APP_IMAGE=dabomber/ownchatbot:latest COMPOSE_PROJECT_NAME=ownchatbot docker compose up -d; \
+docker compose up -d; \
 echo "Open: http://localhost:3000"
 ```
 
-### Windows PowerShell One‑Liner
+### Windows PowerShell One‑Liner (Creates .env)
 ```powershell
-$Env:POSTGRES_PASSWORD = -join ((48..57 + 97..102) | Get-Random -Count 32 | % {[char]$_})
-Invoke-WebRequest https://raw.githubusercontent.com/dabomber60/ownchatbot/main/docker-compose.simple.yml -OutFile docker-compose.yml
-$Env:APP_IMAGE = 'dabomber/ownchatbot:latest'
-$Env:COMPOSE_PROJECT_NAME = 'ownchatbot'
-docker compose up -d
+$pw = -join ((48..57 + 97..102) | Get-Random -Count 32 | % {[char]$_}); \
+@"\nPOSTGRES_PASSWORD=$pw\nCOMPOSE_PROJECT_NAME=ownchatbot\nAPP_IMAGE=dabomber/ownchatbot:latest\n"@ | Set-Content .env; \
+Invoke-WebRequest https://raw.githubusercontent.com/dabomber60/ownchatbot/main/docker-compose.simple.yml -OutFile docker-compose.yml; \
+docker compose up -d; \
 Write-Host 'Open: http://localhost:3000'
 ```
 
@@ -47,7 +47,7 @@ Download from Releases or clone repo, then run:
 ./quickstart.sh   # or
 ./quickstart.ps1  # or quickstart.bat
 ```
-They create a `.env` (if absent) with a random `POSTGRES_PASSWORD`, start containers, and poll `/api/health`.
+They create a `.env` with a random `POSTGRES_PASSWORD` plus `COMPOSE_PROJECT_NAME` and `APP_IMAGE`, then start containers. (Quickstart scripts additionally poll `/api/health`.)
 
 ## Environment Variables
 Place in `.env` or export before `docker compose up`.
@@ -63,7 +63,7 @@ Place in `.env` or export before `docker compose up`.
 | TZ | Timezone (backup stack only) | UTC |
 
 ## Data Persistence
-Named volumes (from compose file):
+Named volumes:
 - `ownchatbot_pg_data` – PostgreSQL data
 - `ownchatbot_app_data` – App data (JWT secret, future local artifacts)
 
@@ -73,6 +73,9 @@ docker compose down --volumes   # Destroys ALL data
 ```
 
 ## Upgrading
+Always use the same project name you used at initial creation so Compose recognizes existing containers (avoids a name conflict with the fixed `container_name: ownchatbot`). The installation one-liners already wrote `COMPOSE_PROJECT_NAME=ownchatbot` into `.env`.
+
+Upgrade:
 ```bash
 docker compose pull
 docker compose up -d
@@ -81,15 +84,32 @@ Data persists (volumes reused). If schema migrations are needed, the app runs th
 
 ### Linux / macOS One-Liner
 ```bash
-docker compose pull && docker compose up -d
+COMPOSE_PROJECT_NAME=ownchatbot docker compose pull && \
+COMPOSE_PROJECT_NAME=ownchatbot docker compose up -d
 ```
 
 ### Windows PowerShell One-Liner
 ```powershell
-docker compose pull; docker compose up -d
+$Env:COMPOSE_PROJECT_NAME='ownchatbot'; docker compose pull; docker compose up -d
 ```
 
-Above commands pull the latest tag you are using (e.g. `latest` or a specific version) and recreate changed containers while retaining named volumes.
+Above commands ensure the same project name so Compose reuses the existing `ownchatbot` container instead of trying to create a second one and failing with a name conflict.
+
+### (Optional) Re-download + Upgrade One-Liners
+Use these if you did not customize `docker-compose.simple.yml` locally on first install and no longer have the file on hand.
+
+Linux / macOS:
+```bash
+curl -fsSL https://raw.githubusercontent.com/dabomber60/ownchatbot/main/docker-compose.simple.yml -o docker-compose.yml && \
+COMPOSE_PROJECT_NAME=ownchatbot docker compose pull && \
+COMPOSE_PROJECT_NAME=ownchatbot docker compose up -d
+```
+
+Windows PowerShell:
+```powershell
+Invoke-WebRequest https://raw.githubusercontent.com/dabomber60/ownchatbot/main/docker-compose.simple.yml -OutFile docker-compose.yml; \
+$Env:COMPOSE_PROJECT_NAME='ownchatbot'; docker compose pull; docker compose up -d
+```
 
 ## Changing Port
 ```bash
