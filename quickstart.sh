@@ -66,8 +66,10 @@ else
 fi
 
 export APP_IMAGE="dabomber/ownchatbot:latest"
+# Allow override but default a clean predictable compose project name
+export COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-ownchatbot}"
 
-echo "Starting containers..."
+echo "Starting containers (project: $COMPOSE_PROJECT_NAME)..."
 $DOCKER_COMPOSE -f "$COMPOSE_FILE" up -d
 
 echo "Waiting for app to become healthy (HTTP 200 /api/health)..."

@@ -43,8 +43,10 @@ POSTGRES_PASSWORD=$pgPass
 }
 
 $Env:APP_IMAGE = 'dabomber/ownchatbot:latest'
+# Ensure consistent compose project (stack) name instead of defaulting to the directory / user folder
+if (-not $Env:COMPOSE_PROJECT_NAME) { $Env:COMPOSE_PROJECT_NAME = 'ownchatbot' }
 
-Write-Host 'Starting containers...'
+Write-Host "Starting containers (project: $($Env:COMPOSE_PROJECT_NAME))..."
 & $composeCmd -f $composeFile up -d | Write-Host
 
 Write-Host 'Waiting for app health...' -NoNewline

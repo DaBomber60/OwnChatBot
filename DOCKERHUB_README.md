@@ -19,7 +19,7 @@ Image: `dabomber/ownchatbot:latest`
 ```bash
 export POSTGRES_PASSWORD=$(openssl rand -hex 16); \
 curl -fsSL https://raw.githubusercontent.com/dabomber60/ownchatbot/main/docker-compose.simple.yml -o docker-compose.yml; \
-APP_IMAGE=dabomber/ownchatbot:latest docker compose up -d; \
+APP_IMAGE=dabomber/ownchatbot:latest COMPOSE_PROJECT_NAME=ownchatbot docker compose up -d; \
 echo "Open: http://localhost:3000"
 ```
 
@@ -28,6 +28,7 @@ echo "Open: http://localhost:3000"
 $Env:POSTGRES_PASSWORD = -join ((48..57 + 97..102) | Get-Random -Count 32 | % {[char]$_})
 Invoke-WebRequest https://raw.githubusercontent.com/dabomber60/ownchatbot/main/docker-compose.simple.yml -OutFile docker-compose.yml
 $Env:APP_IMAGE = 'dabomber/ownchatbot:latest'
+$Env:COMPOSE_PROJECT_NAME = 'ownchatbot'
 docker compose up -d
 Write-Host 'Open: http://localhost:3000'
 ```
@@ -37,6 +38,8 @@ This starts:
 - app (OwnChatBot) — depends_on Postgres health
 
 Compose automatically creates a dedicated network; the app reaches Postgres via hostname `postgres`.
+
+The project (stack) name is set to `ownchatbot` above via `COMPOSE_PROJECT_NAME` by default. If you host multiple instances, change this value per instance.
 
 ### Quickstart Scripts
 Download from Releases or clone repo, then run:
