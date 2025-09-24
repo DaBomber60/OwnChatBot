@@ -1,86 +1,75 @@
-# Use Node.js 24 Alpine for smaller image size and security updates
-FROM node:24-alpine AS base
+## syntax=docker/dockerfile:1.7
+# Layer-reduced multi-stage build for Next.js + Prisma
+# Goals:
+#  - Consolidate RUN steps
+#  - Produce a single artifact directory then one COPY into final image
+#  - Use BuildKit cache mounts for faster npm ci + build
 
-# Install dependencies only when needed
-FROM base AS deps
-RUN apk add --no-cache libc6-compat openssl netcat-openbsd
+FROM node:24-alpine AS build
 WORKDIR /app
 
-# Copy manifest & schema first for better layer caching
+# System packages needed during build (prisma engines, openssl) and for generating standalone output
+RUN apk add --no-cache libc6-compat openssl netcat-openbsd
+
+# Copy only manifests + prisma schema first for better dependency layer caching
 COPY package.json package-lock.json* ./
 COPY prisma ./prisma
 
-# Install ALL deps (dev + prod) so build tools (TypeScript, Tailwind, Prisma CLI) are available.
-# If a lockfile is missing, fall back to npm install (less reproducible) but do not fail.
-RUN if [ -f package-lock.json ]; then \
+# Install all dependencies (dev + prod) with cache mount; fall back if lockfile missing
+RUN --mount=type=cache,target=/root/.npm \
+    if [ -f package-lock.json ]; then \
       echo "Using package-lock.json with npm ci" && npm ci; \
     else \
       echo "WARNING: package-lock.json not found. Falling back to 'npm install' (consider committing a lockfile)." && npm install; \
-    fi \
-    && npm cache clean --force
+    fi && \
+    npm cache clean --force
 
-# Rebuild the source code only when needed
-FROM base AS builder
-WORKDIR /app
-COPY --from=deps /app/node_modules ./node_modules
+# Copy full source (after deps to keep cache stable on code-only changes)
 COPY . .
 
-# Generate Prisma client (will use local schema & full deps)
-RUN npx prisma generate
+# Generate Prisma client, build Next.js (standalone), then prune dev deps in a single layer
+RUN --mount=type=cache,target=/root/.npm \
+    npx prisma generate && \
+    npm run build && \
+    npm prune --omit=dev || true
 
-# Build the application (Next.js standalone output)
-RUN npm run build
+# Assemble minimal runtime artifact set under /out for a single COPY later
+RUN set -eux; \
+    mkdir -p /out; \
+    cp -R public /out/public; \
+    # Place standalone server files at root of /out (server.js, etc.). Use trailing '/.' to include dotfiles/directories like '.next'
+    cp -R .next/standalone/. /out/; \
+    # Static assets required by Next.js (standalone excludes static assets)
+    mkdir -p /out/.next && cp -R .next/static /out/.next/static; \
+    # Prisma schema and engines/CLI pieces (for migrations & runtime queries)
+    cp -R prisma /out/prisma; \
+    mkdir -p /out/node_modules; \
+    cp -R node_modules/.prisma /out/node_modules/.prisma; \
+    cp -R node_modules/prisma /out/node_modules/prisma; \
+    cp -R node_modules/@prisma /out/node_modules/@prisma; \
+    cp -R node_modules/.bin /out/node_modules/.bin; \
+    cp docker-entrypoint.sh /out/docker-entrypoint.sh; \
+    cp healthcheck.js /out/healthcheck.js
 
-# Now that prisma CLI is a production dependency, we can safely prune dev deps.
-RUN npm prune --omit=dev || true
-
-# Production image, copy all the files and run next
-FROM base AS runner
+FROM node:24-alpine AS runner
 WORKDIR /app
 
-# Install required runtime packages (netcat for DB checks, openssl for secrets)
-RUN apk add --no-cache netcat-openbsd openssl su-exec
+# Install only runtime packages & create user in a single layer
+RUN apk add --no-cache netcat-openbsd openssl su-exec && \
+    addgroup --system --gid 1001 nodejs && \
+    adduser --system --uid 1001 nextjs
 
-ENV NODE_ENV=production
+ENV NODE_ENV=production PORT=3000 HOSTNAME=0.0.0.0 \
+    PATH="/app/node_modules/.bin:${PATH}"
 
-# Create a non-root user
-RUN addgroup --system --gid 1001 nodejs
-RUN adduser --system --uid 1001 nextjs
+# Single COPY of prepared artifacts; assign ownership directly
+COPY --chown=nextjs:nodejs --from=build /out/ ./
 
-# Copy necessary files
-COPY --from=builder /app/public ./public
-COPY --from=builder /app/.next/standalone ./
-COPY --from=builder /app/.next/static ./.next/static
-COPY --from=builder /app/prisma ./prisma
-COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
-# Copy prisma CLI and related packages to avoid dynamic install during migrations
-COPY --from=builder /app/node_modules/prisma ./node_modules/prisma
-## Copy @prisma namespace (engines, platform helpers, etc.) needed by the CLI
-COPY --from=builder /app/node_modules/@prisma ./node_modules/@prisma
-## Copy entire .bin to preserve prisma symlink & any other required binaries
-COPY --from=builder /app/node_modules/.bin ./node_modules/.bin
-## (Optional) Ensure PATH includes local binaries
-ENV PATH="/app/node_modules/.bin:${PATH}"
-COPY --from=builder /app/docker-entrypoint.sh ./docker-entrypoint.sh
-COPY --from=builder /app/healthcheck.js ./healthcheck.js
-
-# Fix line endings and set permissions for entrypoint script
+# Normalize line endings & ensure entrypoint is executable
 RUN sed -i 's/\r$//' ./docker-entrypoint.sh && chmod +x ./docker-entrypoint.sh
 
-# Change ownership to nextjs user for existing files (volumes may override later)
-RUN chown -R nextjs:nodejs /app
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 CMD node healthcheck.js || exit 1
 
-# Stay as root for entrypoint so we can fix ownership of mounted volumes at runtime; entrypoint will drop privileges.
-# (Security note: entrypoint uses su-exec to run the final process as nextjs.)
-
-# Expose the port the app runs on
 EXPOSE 3000
-
-ENV PORT=3000
-ENV HOSTNAME="0.0.0.0"
-
-# Health check (ensure healthcheck.js present in final image)
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 CMD node healthcheck.js
-
 ENTRYPOINT ["./docker-entrypoint.sh"]
 CMD ["node", "server.js"]
