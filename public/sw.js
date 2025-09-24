@@ -33,12 +33,6 @@ self.addEventListener('fetch', (event) => {
   const req = event.request;
   const url = new URL(req.url);
 
-  // Never intercept the streaming chat API; let the browser handle the connection directly.
-  // This avoids SW buffering/timeout behavior that can truncate SSE.
-  if (url.origin === self.location.origin && url.pathname.startsWith('/api/chat')) {
-    return; // do not call respondWith
-  }
-
   if (req.mode === 'navigate') {
     event.respondWith(
       fetch(req).then(res => {

@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import UserPromptsManager from '../components/UserPromptsManager';
+import { DEFAULT_USER_PROMPT_TITLE } from '../lib/defaultUserPrompt';
 import useSWR from 'swr';
 import { useRouter } from 'next/router';
 import { logout } from '../lib/auth';
@@ -20,7 +21,7 @@ export default function SettingsPage() {
   // Added state for API key edit mode
   const [apiKeyEditing, setApiKeyEditing] = useState(false);
   const [originalApiKey, setOriginalApiKey] = useState('');
-  const { data: userPrompts, error: userPromptsError } = useSWR<{id: number; title: string; body: string;} | { error?: string } | null>(
+  const { data: userPrompts, error: userPromptsError, mutate: mutateUserPrompts } = useSWR<{id: number; title: string; body: string;} | { error?: string } | null>(
     '/api/user-prompts',
     (url: string) => fetch(url).then(async res => {
       const json = await res.json();
@@ -1000,9 +1001,28 @@ export default function SettingsPage() {
 
       <div className="mt-8">
         <div className="card">
-          <div className="card-header">
-            <h2 className="card-title">Global User Prompts</h2>
-            <p className="card-description">Manage system-wide prompt templates</p>
+          <div className="card-header flex items-start justify-between gap-4">
+            <div>
+              <h2 className="card-title">Global User Prompts</h2>
+              <p className="card-description">Manage system-wide prompt templates</p>
+            </div>
+            {devMode && Array.isArray(userPrompts) && !userPrompts.some(p => p.title === DEFAULT_USER_PROMPT_TITLE) && (
+              <button
+                className="btn btn-secondary btn-small"
+                onClick={async () => {
+                  const res = await fetch('/api/user-prompts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'recreate_default' }) });
+                  if (res.ok) {
+                    mutateUserPrompts();
+                    showToast('Default prompt created');
+                  } else {
+                    showToast('Failed to create default prompt', 'error');
+                  }
+                }}
+                title="Recreate the built-in default prompt"
+              >
+                Create Default Prompt
+              </button>
+            )}
           </div>
           <UserPromptsManager />
         </div>
