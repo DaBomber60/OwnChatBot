@@ -65,7 +65,7 @@ function parseChatData(requestData: any) {
     personalityEndIndex = firstTag.index;
     logs.push(`Found ${firstTag.name} tag first at index ${personalityEndIndex}`);
     
-    const personality = contentAfterMarker.substring(0, personalityEndIndex).trim();
+  let personality = contentAfterMarker.substring(0, personalityEndIndex).trim();
     logs.push(`Extracted personality: "${personality.substring(0, 50)}..."`);
     
     // Extract scenario
@@ -80,7 +80,7 @@ function parseChatData(requestData: any) {
     
     // Extract example dialogue
     const exampleDialogueMatch = contentAfterMarker.match(/<example_dialogs>(.*?)<\/example_dialogs>/s);
-    const exampleDialogue = exampleDialogueMatch ? exampleDialogueMatch[1].trim() : '';
+  let exampleDialogue = exampleDialogueMatch ? exampleDialogueMatch[1].trim() : '';
     logs.push(`Extracted example dialogue: "${exampleDialogue.substring(0, 50)}..."`);
     
     // Extract summary if present
@@ -103,17 +103,25 @@ function parseChatData(requestData: any) {
       characterName = ''; // Leave empty, user will provide name
     } else {
       // Only try to detect names if no placeholders are present
+      // Updated heuristics: ensure the token after intro phrase starts with an actual uppercase letter.
+      // Removed /i flag so [A-Z] does not match lowercase. Limit to a handful of capitalized words (names or title-style phrases).
       const namePatterns = [
-        /(?:I am|I'm|My name is|Call me)\s+([A-Z][a-zA-Z\s]+?)(?:\.|,|\n|$)/i,
-        /^([A-Z][a-zA-Z\s]+?)(?:\s+is|,)/,
+        /(?:I am|I'm|My name is|Call me)\s+([A-Z][A-Za-z]*(?:[ \-][A-Z][A-Za-z]*){0,5})(?:[\.,]|\n|$)/,
+        /^([A-Z][A-Za-z]*(?:[ \-][A-Z][A-Za-z]*){0,5})(?:\s+is|,)/,
       ];
       
       for (const pattern of namePatterns) {
         const match = personality.match(pattern);
         if (match && match[1]) {
-          characterName = match[1].trim();
-          logs.push(`Detected character name from personality: ${characterName}`);
-          break;
+          const candidate = match[1].trim();
+          // Basic sanity: avoid capturing overly long sequences (> 60 chars)
+          if (candidate.length <= 60) {
+            characterName = candidate;
+            logs.push(`Detected character name from personality: ${characterName}`);
+            break;
+          } else {
+            logs.push(`Skipped overlong detected name candidate (length ${candidate.length})`);
+          }
         }
       }
       
@@ -128,7 +136,7 @@ function parseChatData(requestData: any) {
     
     // Find the assistant's first message
     const firstAssistantMessage = chatMessages.find((msg: any) => msg.role === 'assistant');
-    const assistantFirstMessage = firstAssistantMessage ? firstAssistantMessage.content : '';
+  let assistantFirstMessage = firstAssistantMessage ? firstAssistantMessage.content : '';
     logs.push(`Assistant first message: "${assistantFirstMessage.substring(0, 50)}..."`);
     
     // Extract persona name from ALL user messages in the request (not just chat messages)
@@ -150,26 +158,23 @@ function parseChatData(requestData: any) {
       logs.push('No persona name detected from user messages');
     }
 
-    // Always replace detected persona name with {{user}} in character data
-    // This makes the character data reusable across different personas
-    let finalPersonality = personality;
-    let finalScenario = scenario;
-    let finalExampleDialogue = exampleDialogue;
-    let finalFirstMessage = assistantFirstMessage.trim();
-    
+    // Always replace detected persona name with {{user}} in character data BEFORE split suggestion logic
+    // We mutate the base variables so downstream (split suggestion) sees the replaced text.
     if (detectedPersonaName && detectedPersonaName.trim()) {
-      // Create a regex that matches the exact persona name (escape special regex characters)
-      const personaNameRegex = new RegExp(detectedPersonaName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
-      
-      finalPersonality = personality.replace(personaNameRegex, '{{user}}');
-      finalScenario = scenario.replace(personaNameRegex, '{{user}}');
-      finalExampleDialogue = exampleDialogue.replace(personaNameRegex, '{{user}}');
-      finalFirstMessage = assistantFirstMessage.trim().replace(personaNameRegex, '{{user}}');
-      
-      logs.push(`Converted persona name "${detectedPersonaName}" to {{user}} in character data`);
-      logs.push(`Replacement applied to: personality(${personality.length}→${finalPersonality.length}), scenario(${scenario.length}→${finalScenario.length}), exampleDialogue(${exampleDialogue.length}→${finalExampleDialogue.length}), firstMessage(${assistantFirstMessage.length}→${finalFirstMessage.length})`);
+      const escaped = detectedPersonaName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const personaNameRegex = new RegExp(`(?<![A-Za-z0-9])${escaped}(?![A-Za-z0-9])`, 'gi'); // add simple word boundary style guards
+      const origPersonalityLen = personality.length;
+      const origScenarioLen = scenario.length;
+      const origExampleLen = exampleDialogue.length;
+      const origFirstLen = assistantFirstMessage.length;
+      personality = personality.replace(personaNameRegex, '{{user}}');
+      scenario = scenario.replace(personaNameRegex, '{{user}}');
+      exampleDialogue = exampleDialogue.replace(personaNameRegex, '{{user}}');
+      assistantFirstMessage = assistantFirstMessage.trim().replace(personaNameRegex, '{{user}}');
+      logs.push(`Converted persona name "${detectedPersonaName}" to {{user}} in character data (pre-split stage)`);
+      logs.push(`Replacement applied to: personality(${origPersonalityLen}→${personality.length}), scenario(${origScenarioLen}→${scenario.length}), exampleDialogue(${origExampleLen}→${exampleDialogue.length}), firstMessage(${origFirstLen}→${assistantFirstMessage.length})`);
     } else {
-      logs.push('No persona name replacement applied - no persona name detected');
+      logs.push('No persona name replacement applied - no persona name detected (pre-split stage)');
     }
 
     // Determine if this import has substantial chat history beyond the initial setup
@@ -210,10 +215,10 @@ function parseChatData(requestData: any) {
     const parsedData = {
       characterData: {
         name: characterName,
-        personality: finalPersonality,
-        scenario: finalScenario || scenario, // prefer replacement version but fall back to original extraction
-        exampleDialogue: finalExampleDialogue,
-        firstMessage: finalFirstMessage
+        personality: personality,
+        scenario: scenario,
+        exampleDialogue: exampleDialogue,
+        firstMessage: assistantFirstMessage.trim()
       },
       userPersona,
       detectedPersonaName,
