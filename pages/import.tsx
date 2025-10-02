@@ -154,6 +154,13 @@ export default function ImportPage() {
   // Import execution state
   const [isImporting, setIsImporting] = useState(false);
 
+  // Recent success banner state (for non-chat imports that stay on page)
+  const [recentImportSuccess, setRecentImportSuccess] = useState<null | {
+    persona?: { name: string; existing: boolean };
+    character?: { name: string; existing: boolean };
+  }>(null);
+  const [showSuccess, setShowSuccess] = useState(false);
+
   // Multi-import queue removed – single import mode only
 
   const checkForImport = async () => {
@@ -167,6 +174,11 @@ export default function ImportPage() {
       
       if (data.imported && data.data) {
         console.log('New import detected:', data.data);
+        // Clear any prior success banner when a new import arrives
+        if (recentImportSuccess) {
+          setRecentImportSuccess(null);
+          setShowSuccess(false);
+        }
         setImportedData(data.data);
         setIsPolling(false);
         if (data.data.detectedPersonaName) setNewPersonaName(data.data.detectedPersonaName);
@@ -448,6 +460,12 @@ export default function ImportPage() {
       }
 
   // If no chat import, stay on importer page and resume listening
+  // Record success details for banner before resetting
+  setRecentImportSuccess({
+    persona: personaId ? { name: (importOptions.persona ? newPersonaName.trim() : (existingPersona?.name || newPersonaName.trim())), existing: !importOptions.persona } : undefined,
+    character: characterId ? { name: (importOptions.character ? newCharacterName.trim() : (existingCharacter?.name || newCharacterName.trim())), existing: !importOptions.character } : undefined
+  });
+  setShowSuccess(true);
   resetImport();
   // (No navigation) — user can immediately import the next item
 
@@ -457,6 +475,14 @@ export default function ImportPage() {
       setIsImporting(false);
     }
   };
+
+  // Auto-hide success banner after a delay
+  useEffect(() => {
+    if (showSuccess) {
+      const t = setTimeout(() => setShowSuccess(false), 6000);
+      return () => clearTimeout(t);
+    }
+  }, [showSuccess]);
 
   useEffect(() => {
     if (!importedData) {
@@ -541,6 +567,36 @@ export default function ImportPage() {
         {!showImportOptions ? (
           <>
             <div className="space-y-4">
+              {showSuccess && recentImportSuccess && (
+                <div className="bg-success rounded-lg p-4 flex gap-3 items-start shadow-sm border border-gray-300">
+                  <div className="text-2xl">✅</div>
+                  <div className="flex-1">
+                    <h4 className="font-semibold mb-1">Import Completed</h4>
+                    <ul className="text-sm list-disc pl-5 space-y-1">
+                      {recentImportSuccess.persona && (
+                        <li>
+                          Persona: {recentImportSuccess.persona.name}{' '}
+                          {recentImportSuccess.persona.existing && <span className="text-xs text-gray-600">(existing)</span>}
+                        </li>
+                      )}
+                      {recentImportSuccess.character && (
+                        <li>
+                          Character: {recentImportSuccess.character.name}{' '}
+                          {recentImportSuccess.character.existing && <span className="text-xs text-gray-600">(existing)</span>}
+                        </li>
+                      )}
+                    </ul>
+                    <p className="text-xs text-gray-600 mt-2">You can start another import by triggering it from the external tool.</p>
+                  </div>
+                  <button
+                    className="btn btn-ghost btn-small"
+                    onClick={() => setShowSuccess(false)}
+                    aria-label="Dismiss success banner"
+                  >
+                    ✕
+                  </button>
+                </div>
+              )}
               <div className="bg-info rounded-lg p-4">
                 <h4 className="font-semibold mb-2">Setup Instructions:</h4>
                 <ol className="text-sm space-y-1 mb-4">
