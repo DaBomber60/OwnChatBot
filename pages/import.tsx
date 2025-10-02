@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import useSWR from 'swr';
 import { useRouter } from 'next/router';
 import Head from 'next/head';
@@ -22,6 +22,8 @@ interface ImportedData {
   chatMessages?: Array<{ role: 'user' | 'assistant'; content: string }>;
   summary?: string;
   hasSubstantialChat?: boolean;
+  scenarioWasMissing?: boolean;
+  splitSuggestion?: { canSplit: boolean; newlineCount: number; rawCombined: string } | null;
 }
 
 interface ImportOptions {
@@ -82,6 +84,70 @@ export default function ImportPage() {
   const [isCreatingNewGroup, setIsCreatingNewGroup] = useState(false);
   const [newGroupName, setNewGroupName] = useState('');
   const [newGroupColor, setNewGroupColor] = useState('#6366f1');
+  const [enableSplit, setEnableSplit] = useState(false);
+  const [selectedSplitIndex, setSelectedSplitIndex] = useState<number | null>(null);
+  const [splitText, setSplitText] = useState('');
+  const [splitPersonalityFirst, setSplitPersonalityFirst] = useState(true);
+
+  const splitLines = useMemo(() => splitText.split('\n'), [splitText]);
+  const paragraphBlocks = useMemo(() => {
+    const blocks: Array<{ text: string; startIndex: number; endIndex: number; blankCountAfter: number }> = [];
+    const isBlankLine = (idx: number) => ((splitLines[idx] ?? '').trim().length === 0);
+
+    let index = 0;
+    while (index < splitLines.length) {
+      while (index < splitLines.length && isBlankLine(index)) {
+        index++;
+      }
+
+      if (index >= splitLines.length) {
+        break;
+      }
+
+      const start = index;
+      while (index < splitLines.length && !isBlankLine(index)) {
+        index++;
+      }
+      const end = index - 1;
+
+      let blankCursor = index;
+      while (blankCursor < splitLines.length && isBlankLine(blankCursor)) {
+        blankCursor++;
+      }
+      const blankCount = blankCursor - index;
+
+      blocks.push({
+        text: splitLines.slice(start, end + 1).join('\n'),
+        startIndex: start,
+        endIndex: end,
+        blankCountAfter: blankCount
+      });
+
+      index = blankCursor;
+    }
+
+    return blocks;
+  }, [splitLines]);
+
+  const availableSplitIndices = useMemo(() => {
+    return paragraphBlocks.slice(0, -1).map(block => block.endIndex + 1);
+  }, [paragraphBlocks]);
+
+  const splitSegments = useMemo(() => {
+    if (!enableSplit || selectedSplitIndex === null) {
+      return null;
+    }
+    if (!availableSplitIndices.includes(selectedSplitIndex)) {
+      return null;
+    }
+
+    const topPart = splitLines.slice(0, selectedSplitIndex).join('\n').trim();
+    const bottomPart = splitLines.slice(selectedSplitIndex).join('\n').trim();
+
+    return splitPersonalityFirst
+      ? { personality: topPart, scenario: bottomPart }
+      : { personality: bottomPart, scenario: topPart };
+  }, [enableSplit, selectedSplitIndex, availableSplitIndices, splitLines, splitPersonalityFirst]);
 
   // Import execution state
   const [isImporting, setIsImporting] = useState(false);
@@ -222,6 +288,10 @@ export default function ImportPage() {
     setNewGroupName('');
     setNewGroupColor('#6366f1');
     setIsImporting(false);
+    setEnableSplit(false);
+    setSelectedSplitIndex(null);
+    setSplitText('');
+    setSplitPersonalityFirst(true);
   };
 
   const resetImport = () => {
@@ -423,8 +493,8 @@ export default function ImportPage() {
             const characterPayload: any = {
               name: characterName.trim(),
               profileName: characterProfileName.trim() || undefined,
-              personality: item.data.characterData.personality,
-              scenario: item.data.characterData.scenario,
+              personality: splitSegments ? splitSegments.personality : item.data.characterData.personality,
+              scenario: splitSegments ? splitSegments.scenario : item.data.characterData.scenario,
               exampleDialogue: item.data.characterData.exampleDialogue,
               firstMessage: item.data.characterData.firstMessage
             };
@@ -702,11 +772,18 @@ export default function ImportPage() {
           }
         }
 
+        let effectivePersonality = importedData.characterData.personality;
+        let effectiveScenario = importedData.characterData.scenario;
+        if (splitSegments) {
+          effectivePersonality = splitSegments.personality;
+          effectiveScenario = splitSegments.scenario;
+        }
+
         const characterPayload: any = {
           name: newCharacterName.trim(),
           profileName: newCharacterProfileName.trim() || undefined,
-          personality: importedData.characterData.personality,
-          scenario: importedData.characterData.scenario,
+          personality: effectivePersonality,
+          scenario: effectiveScenario,
           exampleDialogue: importedData.characterData.exampleDialogue,
           firstMessage: importedData.characterData.firstMessage
         };
@@ -774,6 +851,32 @@ export default function ImportPage() {
       setIsImporting(false);
     }
   };
+
+  useEffect(() => {
+    if (!importedData) {
+      setSplitText('');
+      setSelectedSplitIndex(null);
+      setEnableSplit(false);
+      setSplitPersonalityFirst(true);
+      return;
+    }
+    if (importedData.splitSuggestion?.rawCombined) {
+      setSplitText(importedData.splitSuggestion.rawCombined);
+    } else if (importedData.characterData?.personality) {
+      setSplitText(importedData.characterData.personality);
+    } else {
+      setSplitText('');
+    }
+    setSelectedSplitIndex(null);
+    setEnableSplit(false);
+    setSplitPersonalityFirst(true);
+  }, [importedData?.splitSuggestion?.rawCombined, importedData?.characterData?.personality, importedData]);
+
+  useEffect(() => {
+    if (selectedSplitIndex !== null && !availableSplitIndices.includes(selectedSplitIndex)) {
+      setSelectedSplitIndex(null);
+    }
+  }, [availableSplitIndices, selectedSplitIndex]);
 
   // Polling effect - only listen when in multiple mode OR when not processing queue
   useEffect(() => {
@@ -1029,7 +1132,18 @@ export default function ImportPage() {
                         <div className="bg-secondary rounded p-3">
                           <h6 className="text-xs font-medium text-accent mb-2">Character Preview:</h6>
                           <div className="text-xs text-secondary space-y-1">
-                            <p><strong>Personality:</strong> {currentQueueItem.data.characterData.personality.substring(0, 100)}...</p>
+                            <p><strong>Personality:</strong> {(() => {
+                              const baseText = splitSegments
+                                ? (splitSegments.personality || '(empty)')
+                                : (currentQueueItem.data.characterData.personality || '(empty)');
+                              return baseText.substring(0, 100) + '...';
+                            })()}</p>
+                            <p><strong>Scenario:</strong> {(() => {
+                              const baseText = splitSegments
+                                ? (splitSegments.scenario || '(empty)')
+                                : (currentQueueItem.data.characterData.scenario || '(empty)');
+                              return baseText.substring(0, 100) + '...';
+                            })()}</p>
                             <p><strong>First Message:</strong> {currentQueueItem.data.characterData.firstMessage.substring(0, 100)}...</p>
                           </div>
                         </div>
@@ -1575,10 +1689,112 @@ export default function ImportPage() {
                       <div className="bg-secondary rounded p-3">
                         <h6 className="text-xs font-medium text-accent mb-2">Character Preview:</h6>
                         <div className="text-xs text-secondary space-y-1">
-                          <p><strong>Personality:</strong> {importedData?.characterData.personality.substring(0, 100)}...</p>
+                          <p><strong>Personality:</strong> {(() => {
+                            const baseText = splitSegments
+                              ? (splitSegments.personality || '(empty)')
+                              : (importedData?.characterData.personality || '(empty)');
+                            return baseText.substring(0, 100) + '...';
+                          })()}</p>
+                          <p><strong>Scenario:</strong> {(() => {
+                            const baseText = splitSegments
+                              ? (splitSegments.scenario || '(empty)')
+                              : (importedData?.characterData.scenario || '(empty)');
+                            return baseText.substring(0, 100) + '...';
+                          })()}</p>
                           <p><strong>First Message:</strong> {importedData?.characterData.firstMessage.substring(0, 100)}...</p>
                         </div>
                       </div>
+                      {(!existingCharacter && importedData?.scenarioWasMissing && importedData?.splitSuggestion?.canSplit && !importedData.characterData.scenario) && (
+                        <div className="mt-3 border rounded p-3 space-y-3" style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-primary)' }}>
+                          <div className="flex items-center gap-2 text-sm font-medium">
+                            <input
+                              type="checkbox"
+                              checked={enableSplit}
+                              onChange={() => {
+                                const next = !enableSplit;
+                                setEnableSplit(next);
+                                if (!next) {
+                                  setSelectedSplitIndex(null);
+                                  setSplitPersonalityFirst(true);
+                                }
+                              }}
+                            />
+                            <span>Split personality & scenario?</span>
+                          </div>
+                          {enableSplit && (
+                            <div className="space-y-3">
+                              {paragraphBlocks.length > 1 ? (
+                                <div className="split-stack max-h-96 overflow-y-auto">
+                                  {paragraphBlocks.map((block, idx) => {
+                                    const boundaryIndex = block.endIndex + 1;
+                                    const isLast = idx === paragraphBlocks.length - 1;
+                                    const isPersonalityTop = selectedSplitIndex === boundaryIndex && splitPersonalityFirst;
+                                    const isScenarioTop = selectedSplitIndex === boundaryIndex && !splitPersonalityFirst;
+
+                                    return (
+                                      <div key={`${block.startIndex}-${block.endIndex}`} className="space-y-3">
+                                        <div className="split-block">
+                                          <div className="split-block__text">
+                                            {block.text || <span className="italic text-muted">(blank paragraph)</span>}
+                                          </div>
+                                        </div>
+
+                                        {!isLast && (
+                                          <div
+                                            className="split-divider"
+                                            role="group"
+                                            aria-label={`Split options between paragraph ${idx + 1} and ${idx + 2}`}
+                                          >
+                                            <div className="split-divider__line" aria-hidden="true" />
+                                            {block.blankCountAfter > 1 && (
+                                              <div className="split-divider__badge">
+                                                <span aria-hidden="true">⋯</span>
+                                                {block.blankCountAfter} blank lines collapsed
+                                              </div>
+                                            )}
+                                            <div className="split-divider__buttons">
+                                              <button
+                                                type="button"
+                                                className={`btn ${isPersonalityTop ? 'btn-primary' : 'btn-secondary'} split-pill`}
+                                                onClick={() => {
+                                                  setSelectedSplitIndex(boundaryIndex);
+                                                  setSplitPersonalityFirst(true);
+                                                }}
+                                                aria-label={`Split after paragraph ${idx + 1} with personality first`}
+                                              >
+                                                <strong>Personality end</strong>
+                                                <span>Scenario continues ↓</span>
+                                              </button>
+                                              <button
+                                                type="button"
+                                                className={`btn ${isScenarioTop ? 'btn-primary' : 'btn-secondary'} split-pill`}
+                                                onClick={() => {
+                                                  setSelectedSplitIndex(boundaryIndex);
+                                                  setSplitPersonalityFirst(false);
+                                                }}
+                                                aria-label={`Split after paragraph ${idx + 1} with scenario first`}
+                                              >
+                                                <strong>Scenario end</strong>
+                                                <span>Personality continues ↓</span>
+                                              </button>
+                                            </div>
+                                            <div className="split-divider__line" aria-hidden="true" />
+                                          </div>
+                                        )}
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              ) : (
+                                <p className="text-xs text-muted">Add a newline to provide a split option.</p>
+                              )}
+                              {selectedSplitIndex === null && paragraphBlocks.length > 1 && (
+                                <p className="text-warning text-xs">Choose where to split and which portion should become the personality.</p>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
                   ) : null}
                 </div>

@@ -32,15 +32,15 @@ function parseChatData(requestData: any) {
     const systemContent = systemMessage.content;
     logs.push(`System content length: ${systemContent.length} characters`);
     
-    // Look for the import marker
+    // Look for the required import marker
     const importMarkerIndex = systemContent.indexOf('<ownchatbot_importer>');
     if (importMarkerIndex === -1) {
       throw new Error('No <ownchatbot_importer> marker found. Please set your custom prompt to "<ownchatbot_importer>" for import to work.');
     }
     logs.push('Found <ownchatbot_importer> marker');
-    
+
     // Extract character data from system content
-    const contentAfterMarker = systemContent.substring(importMarkerIndex + 22); // 22 = length of '<ownchatbot_importer>'
+    const contentAfterMarker = systemContent.substring(importMarkerIndex + '<ownchatbot_importer>'.length);
     console.log('Content after marker:', contentAfterMarker);
     logs.push(`Content after marker: "${contentAfterMarker.substring(0, 100)}..."`);
     
@@ -69,8 +69,8 @@ function parseChatData(requestData: any) {
     logs.push(`Extracted personality: "${personality.substring(0, 50)}..."`);
     
     // Extract scenario
-    const scenarioMatch = contentAfterMarker.match(/<scenario>(.*?)<\/scenario>/s);
-    const scenario = scenarioMatch ? scenarioMatch[1].trim() : '';
+  const scenarioMatch = contentAfterMarker.match(/<scenario>(.*?)<\/scenario>/s);
+  let scenario = scenarioMatch ? scenarioMatch[1].trim() : '';
     logs.push(`Extracted scenario: "${scenario.substring(0, 50)}..."`);
     
     // Extract user persona
@@ -193,11 +193,25 @@ function parseChatData(requestData: any) {
     
     logs.push(`Chat analysis: ${hasSubstantialChat ? 'Substantial chat history detected' : 'Minimal/setup chat detected'} (${chatMessages.length} chat messages)`);
     
+    // If scenario tag was missing AND the (pre-replacement) personality block contained at least one newline
+    // we assume (new upstream schema) personality and scenario may have been concatenated with a single newline.
+    // We surface a hint so the client UI can optionally split.
+    const scenarioWasMissing = !scenarioMatch; // true if no <scenario> tag
+    let splitSuggestion: { canSplit: boolean; newlineCount: number; rawCombined: string } | null = null;
+    if (scenarioWasMissing && personality.includes('\n')) {
+      splitSuggestion = {
+        canSplit: true,
+        newlineCount: (personality.match(/\n/g) || []).length,
+        rawCombined: personality
+      };
+      logs.push(`Scenario tag missing; offering split suggestion with ${splitSuggestion.newlineCount} newline(s).`);
+    }
+
     const parsedData = {
       characterData: {
         name: characterName,
         personality: finalPersonality,
-        scenario: finalScenario,
+        scenario: finalScenario || scenario, // prefer replacement version but fall back to original extraction
         exampleDialogue: finalExampleDialogue,
         firstMessage: finalFirstMessage
       },
@@ -205,7 +219,9 @@ function parseChatData(requestData: any) {
       detectedPersonaName,
       chatMessages,
       summary,
-      hasSubstantialChat
+      hasSubstantialChat,
+      scenarioWasMissing,
+      splitSuggestion
     };
     
     logs.push('Data parsing completed successfully!');
