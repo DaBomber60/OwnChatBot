@@ -624,6 +624,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     try {
       if (content !== undefined) {
+        // Dynamic variant content length enforcement
+        try {
+          const limitSetting = await prisma.setting.findUnique({ where: { key: 'limit_messageContent' } });
+          const dynLimit = limitSetting ? parseInt(limitSetting.value) : undefined;
+          if (dynLimit && content.length > dynLimit) {
+            return validationError(res, `Variant content exceeds dynamic limit of ${dynLimit} characters`, [{ path: ['content'], message: 'Too long', code: 'VARIANT_CONTENT_TOO_LONG' }]);
+          }
+        } catch {}
         // Edit variant content
         const updatedVariant = await prisma.messageVersion.update({
           where: { id: variantId },

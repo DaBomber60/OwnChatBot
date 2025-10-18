@@ -17,6 +17,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const body = validateBody(schemas.summaryUpdate, req, res);
     if (!body) return;
     const { summary } = body as any;
+    // Dynamic summary limit enforcement
+    try {
+      const limitSetting = await prisma.setting.findUnique({ where: { key: 'limit_summary' } });
+      const dynLimit = limitSetting ? parseInt(limitSetting.value) : undefined;
+      if (dynLimit && summary.length > dynLimit) {
+        return badRequest(res, `Summary exceeds dynamic limit of ${dynLimit} characters`, 'SUMMARY_TOO_LONG');
+      }
+    } catch {}
     try {
       const updatedSession = await prisma.chatSession.update({
         where: { id: sessionId },

@@ -112,7 +112,7 @@ export const schemas = {
   }),
   updateVariant: z.object({
     variantId: z.number().int().positive(),
-    content: z.string().trim().min(1).max(10000).optional()
+    content: z.string().trim().min(1).max(8000).optional()
   }),
   rollbackVariant: z.object({
     action: z.literal('rollback_stopped_variant')

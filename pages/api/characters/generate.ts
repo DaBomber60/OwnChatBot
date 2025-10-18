@@ -22,6 +22,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const body = validateBody(schemas.generateCharacter, req, res);
   if (!body) return; // validation already responded
   const { name, profileName, description, sliders, perspective = 'first' } = body as any;
+  // Dynamic generate description limit enforcement
+  try {
+    const limitSetting = await prisma.setting.findUnique({ where: { key: 'limit_generateDescription' } });
+    const dynLimit = limitSetting ? parseInt(limitSetting.value) : undefined;
+    if (dynLimit && description.length > dynLimit) {
+      return badRequest(res, `Description exceeds dynamic limit of ${dynLimit} characters`, 'GENERATE_DESCRIPTION_TOO_LONG');
+    }
+  } catch {}
 
   try {
     const aiCfg = await getAIConfig();

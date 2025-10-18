@@ -34,6 +34,17 @@ export default function SettingsPage() {
   const [maxTokens, setMaxTokens] = useState(4096);
   const [devMode, setDevMode] = useState(false);
   const [summaryPrompt, setSummaryPrompt] = useState('Create a brief, focused summary (~100 words) of the roleplay between {{char}} and {{user}}. Include:\\n\\n- Key events and decisions\\n- Important emotional moments\\n- Location/time changes\\n\\nRules: Only summarize provided transcript. No speculation. Single paragraph format.');
+  // Limits (defaults align with validate.ts)
+  const [limitBio, setLimitBio] = useState(2500);
+  const [limitScenario, setLimitScenario] = useState(25000);
+  const [limitPersonality, setLimitPersonality] = useState(25000);
+  const [limitFirstMessage, setLimitFirstMessage] = useState(25000);
+  const [limitExampleDialogue, setLimitExampleDialogue] = useState(25000);
+  const [limitSummary, setLimitSummary] = useState(20000);
+  const [limitNotes, setLimitNotes] = useState(10000);
+  const [limitGenerateDescription, setLimitGenerateDescription] = useState(3000);
+  const [limitMessageContent, setLimitMessageContent] = useState(8000); // shared with variants
+  const [limitsOpen, setLimitsOpen] = useState(false);
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showPasswordSection, setShowPasswordSection] = useState(false);
@@ -93,6 +104,16 @@ export default function SettingsPage() {
       setMaxTokens(dbSettings.maxTokens ? Math.max(256, Math.min(8192, parseInt(dbSettings.maxTokens))) : 4096);
       setDevMode(dbSettings.devMode === 'true');
       setSummaryPrompt(dbSettings.summaryPrompt || 'Create a brief, focused summary (~100 words) of the roleplay between {{char}} and {{user}}. Include:\\n\\n- Key events and decisions\\n- Important emotional moments\\n- Location/time changes\\n\\nRules: Only summarize provided transcript. No speculation. Single paragraph format.');
+      // Dynamic limits (fallback to defaults)
+      setLimitBio(dbSettings.limit_bio ? parseInt(dbSettings.limit_bio) : 2500);
+      setLimitScenario(dbSettings.limit_scenario ? parseInt(dbSettings.limit_scenario) : 25000);
+      setLimitPersonality(dbSettings.limit_personality ? parseInt(dbSettings.limit_personality) : 25000);
+      setLimitFirstMessage(dbSettings.limit_firstMessage ? parseInt(dbSettings.limit_firstMessage) : 25000);
+      setLimitExampleDialogue(dbSettings.limit_exampleDialogue ? parseInt(dbSettings.limit_exampleDialogue) : 25000);
+      setLimitSummary(dbSettings.limit_summary ? parseInt(dbSettings.limit_summary) : 20000);
+      setLimitNotes(dbSettings.limit_notes ? parseInt(dbSettings.limit_notes) : 10000);
+      setLimitGenerateDescription(dbSettings.limit_generateDescription ? parseInt(dbSettings.limit_generateDescription) : 3000);
+      setLimitMessageContent(dbSettings.limit_messageContent ? parseInt(dbSettings.limit_messageContent) : 8000);
     }
   }, [dbSettings, apiKeyEditing]);
 
@@ -122,6 +143,17 @@ export default function SettingsPage() {
           maxTokens: String(maxTokens),
           devMode: String(devMode),
           summaryPrompt: summaryPrompt
+          ,
+          // Limits persistence
+          limit_bio: String(limitBio),
+          limit_scenario: String(limitScenario),
+          limit_personality: String(limitPersonality),
+          limit_firstMessage: String(limitFirstMessage),
+          limit_exampleDialogue: String(limitExampleDialogue),
+          limit_summary: String(limitSummary),
+          limit_notes: String(limitNotes),
+          limit_generateDescription: String(limitGenerateDescription),
+          limit_messageContent: String(limitMessageContent)
         })
       });
       if (res.ok) {
@@ -631,6 +663,62 @@ export default function SettingsPage() {
                   />
                   <p className="text-xs text-secondary mt-1">Override the upstream JSON field name for token limit. Leave blank for auto-detect ({aiProvider === 'openai' ? 'max_completion_tokens' : 'max_tokens'}).</p>
                 </div>
+              </div>
+            )}
+          </div>
+
+          {/* Limits Dropdown */}
+          <div className="form-group">
+            <button
+              type="button"
+              className="btn btn-secondary w-full flex items-center justify-between"
+              onClick={() => setLimitsOpen(o => !o)}
+            >
+              <span>Limits</span>
+              <span>{limitsOpen ? '▲' : '▼'}</span>
+            </button>
+            {limitsOpen && (
+              <div className="mt-3 p-3 border rounded-lg space-y-4 bg-black/5">
+                <p className="text-xs text-secondary">Configure maximum character lengths. These affect validation when creating or updating data. Message & Variant share one limit.</p>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="form-label">Bio</label>
+                    <input type="number" className="form-input" value={limitBio} onChange={e=>setLimitBio(parseInt(e.target.value)||0)} min={500} max={200000} />
+                  </div>
+                  <div>
+                    <label className="form-label">Scenario</label>
+                    <input type="number" className="form-input" value={limitScenario} onChange={e=>setLimitScenario(parseInt(e.target.value)||0)} min={1000} max={300000} />
+                  </div>
+                  <div>
+                    <label className="form-label">Personality</label>
+                    <input type="number" className="form-input" value={limitPersonality} onChange={e=>setLimitPersonality(parseInt(e.target.value)||0)} min={1000} max={300000} />
+                  </div>
+                  <div>
+                    <label className="form-label">First Message</label>
+                    <input type="number" className="form-input" value={limitFirstMessage} onChange={e=>setLimitFirstMessage(parseInt(e.target.value)||0)} min={500} max={300000} />
+                  </div>
+                  <div>
+                    <label className="form-label">Example Dialogue</label>
+                    <input type="number" className="form-input" value={limitExampleDialogue} onChange={e=>setLimitExampleDialogue(parseInt(e.target.value)||0)} min={500} max={300000} />
+                  </div>
+                  <div>
+                    <label className="form-label">Summary</label>
+                    <input type="number" className="form-input" value={limitSummary} onChange={e=>setLimitSummary(parseInt(e.target.value)||0)} min={1000} max={50000} />
+                  </div>
+                  <div>
+                    <label className="form-label">Notes</label>
+                    <input type="number" className="form-input" value={limitNotes} onChange={e=>setLimitNotes(parseInt(e.target.value)||0)} min={1000} max={100000} />
+                  </div>
+                  <div>
+                    <label className="form-label">Generate Description</label>
+                    <input type="number" className="form-input" value={limitGenerateDescription} onChange={e=>setLimitGenerateDescription(parseInt(e.target.value)||0)} min={200} max={6000} />
+                  </div>
+                  <div>
+                    <label className="form-label">Message & Variant Content</label>
+                    <input type="number" className="form-input" value={limitMessageContent} onChange={e=>setLimitMessageContent(parseInt(e.target.value)||0)} min={1000} max={20000} />
+                  </div>
+                </div>
+                <p className="text-xs text-secondary">Keep limits reasonable to avoid extremely large payloads. Some hard upper bounds may still apply upstream via token limits.</p>
               </div>
             )}
           </div>

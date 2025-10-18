@@ -10,6 +10,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const body = validateBody(schemas.createMessage, req, res);
       if (!body) return;
       const { sessionId, role, content } = body as any;
+      // Dynamic content length enforcement (falls back to schema max if not set)
+      try {
+        const limitSetting = await prisma.setting.findUnique({ where: { key: 'limit_messageContent' } });
+        const dynLimit = limitSetting ? parseInt(limitSetting.value) : undefined;
+        if (dynLimit && content.length > dynLimit) {
+          return res.status(400).json({ error: `Message content exceeds dynamic limit of ${dynLimit} characters`, code: 'MESSAGE_CONTENT_TOO_LONG' });
+        }
+      } catch {}
       const message = await prisma.chatMessage.create({
         data: {
           sessionId: sessionId,

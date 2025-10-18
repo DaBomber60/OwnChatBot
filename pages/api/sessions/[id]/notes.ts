@@ -31,6 +31,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const body = validateBody(schemas.notesUpdate, req, res);
       if (!body) return;
       const { notes } = body as any;
+      // Dynamic notes limit enforcement
+      try {
+        const limitSetting = await prisma.setting.findUnique({ where: { key: 'limit_notes' } });
+        const dynLimit = limitSetting ? parseInt(limitSetting.value) : undefined;
+        if (dynLimit && notes.length > dynLimit) {
+          return badRequest(res, `Notes exceed dynamic limit of ${dynLimit} characters`, 'NOTES_TOO_LONG');
+        }
+      } catch {}
       try {
         const session = await prisma.chatSession.findUnique({ where: { id: sessionId } });
         if (!session) return notFound(res, 'Session not found', 'SESSION_NOT_FOUND');
