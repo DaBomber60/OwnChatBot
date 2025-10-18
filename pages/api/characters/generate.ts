@@ -4,6 +4,7 @@ import { apiKeyNotConfigured, badRequest, methodNotAllowed, serverError } from '
 import { getAIConfig, tokenFieldFor, normalizeTemperature } from '../../../lib/aiProvider';
 import prisma from '../../../lib/prisma';
 import { schemas, validateBody } from '../../../lib/validate';
+import { z } from 'zod';
 
 // This endpoint does NOT persist a character; it returns generated fields so the client can review/edit then save.
 // POST /api/characters/generate
@@ -19,17 +20,27 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return methodNotAllowed(res, req.method);
   }
 
-  const body = validateBody(schemas.generateCharacter, req, res);
-  if (!body) return; // validation already responded
-  const { name, profileName, description, sliders, perspective = 'first' } = body as any;
-  // Dynamic generate description limit enforcement
+  // Fetch dynamic limit (does NOT change default unless user configured it).
+  let dynLimit = 3000; // default fallback (do not change globally)
   try {
     const limitSetting = await prisma.setting.findUnique({ where: { key: 'limit_generateDescription' } });
-    const dynLimit = limitSetting ? parseInt(limitSetting.value) : undefined;
-    if (dynLimit && description.length > dynLimit) {
-      return badRequest(res, `Description exceeds dynamic limit of ${dynLimit} characters`, 'GENERATE_DESCRIPTION_TOO_LONG');
+    if (limitSetting?.value) {
+      const parsed = parseInt(limitSetting.value);
+      if (!isNaN(parsed) && parsed >= 200 && parsed <= 6000) {
+        dynLimit = parsed;
+      }
     }
-  } catch {}
+  } catch {
+    // ignore settings lookup failure; keep fallback
+  }
+
+  // Build dynamic schema (clone base then override description constraint)
+  const dynamicGenerateSchema = schemas.generateCharacter.extend({
+    description: z.string().trim().min(10).max(dynLimit)
+  });
+  const body = validateBody(dynamicGenerateSchema, req, res);
+  if (!body) return; // validation already responded
+  const { name, profileName, description, sliders, perspective = 'first' } = body as any;
 
   try {
     const aiCfg = await getAIConfig();
@@ -55,7 +66,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // Build structured parameters list for prompt
     const sliderText = sliders && Object.keys(sliders).length
       ? Object.entries(sliders).map(([k, v]) => `${k}: ${v}`).join('; ')
-      : 'NONE (assistant may determine appropriate values)';
+      : 'AUTO (assistant determines appropriate values)';
 
     // Provide instructions to produce four clearly delimited sections
     const perspectiveLine = perspective === 'third'
