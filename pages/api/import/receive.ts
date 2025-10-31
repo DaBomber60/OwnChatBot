@@ -10,7 +10,7 @@ if (!(global as any).latestImport) {
   (global as any).latestImport = null;
 }
 
-function parseChatData(requestData: any) {
+export function parseChatData(requestData: any) {
   const logs: string[] = [];
   
   try {
@@ -44,34 +44,38 @@ function parseChatData(requestData: any) {
     console.log('Content after marker:', contentAfterMarker);
     logs.push(`Content after marker: "${contentAfterMarker.substring(0, 100)}..."`);
     
-    // Extract personality (everything until <scenario>, <example_dialogs>, or <UserPersona> tag, whichever comes first)
-    const scenarioIndex = contentAfterMarker.indexOf('<scenario>');
-    const exampleDialogsIndex = contentAfterMarker.indexOf('<example_dialogs>');
-    const userPersonaIndex = contentAfterMarker.indexOf('<UserPersona>');
-    
-    // Find which tag comes first (or if only one exists)
-    let personalityEndIndex = -1;
-    const tagPositions = [
-      { name: 'scenario', index: scenarioIndex },
-      { name: 'example_dialogs', index: exampleDialogsIndex },
-      { name: 'UserPersona', index: userPersonaIndex }
-    ].filter(tag => tag.index !== -1).sort((a, b) => a.index - b.index);
-    
-    if (tagPositions.length === 0) {
-      throw new Error('No <scenario>, <example_dialogs>, or <UserPersona> tag found');
+    // New schema support: personality may be inside a dynamic persona tag like <CharacterName's Persona>...</CharacterName's Persona>
+    // Attempt to extract personality from such a tag first (case-insensitive match on *Persona)
+    const personaTagMatch = contentAfterMarker.match(/<([^>]*?Persona)>([\s\S]*?)<\/\1>/i);
+    let personality: string;
+    if (personaTagMatch) {
+      personality = personaTagMatch[2].trim();
+      logs.push(`Extracted personality from persona tag \"${personaTagMatch[1]}\" (${personality.length} chars)`);
+    } else {
+      // Legacy schema fallback: personality is the raw preamble before first structural tag
+      const scenarioIndexRaw = contentAfterMarker.search(/<scenario>/i); // case-insensitive
+      const exampleDialogsIndex = contentAfterMarker.indexOf('<example_dialogs>');
+      const userPersonaIndex = contentAfterMarker.indexOf('<UserPersona>');
+      let personalityEndIndex = -1;
+      const tagPositions = [
+        { name: 'scenario', index: scenarioIndexRaw },
+        { name: 'example_dialogs', index: exampleDialogsIndex },
+        { name: 'UserPersona', index: userPersonaIndex }
+      ].filter(tag => tag.index !== -1).sort((a, b) => a.index - b.index);
+      if (tagPositions.length === 0) {
+        throw new Error('No <scenario>/<Scenario>, <example_dialogs>, or <UserPersona> tag found');
+      }
+      const firstTag = tagPositions[0]!;
+      personalityEndIndex = firstTag.index;
+      logs.push(`(fallback) Found ${firstTag.name} tag first at index ${personalityEndIndex}`);
+      personality = contentAfterMarker.substring(0, personalityEndIndex).trim();
+      logs.push(`(fallback) Extracted personality preamble: \"${personality.substring(0, 50)}...\"`);
     }
     
-    const firstTag = tagPositions[0]!;
-    personalityEndIndex = firstTag.index;
-    logs.push(`Found ${firstTag.name} tag first at index ${personalityEndIndex}`);
-    
-  let personality = contentAfterMarker.substring(0, personalityEndIndex).trim();
-    logs.push(`Extracted personality: "${personality.substring(0, 50)}..."`);
-    
-    // Extract scenario
-  const scenarioMatch = contentAfterMarker.match(/<scenario>(.*?)<\/scenario>/s);
-  let scenario = scenarioMatch ? scenarioMatch[1].trim() : '';
-    logs.push(`Extracted scenario: "${scenario.substring(0, 50)}..."`);
+    // Extract scenario (support both <scenario> and <Scenario>)
+    const scenarioMatch = contentAfterMarker.match(/<scenario>([\s\S]*?)<\/scenario>/i);
+    let scenario = scenarioMatch ? scenarioMatch[1].trim() : '';
+    logs.push(`Extracted scenario (${scenario ? 'found' : 'missing'}): \"${scenario.substring(0, 50)}...\"`);
     
     // Extract user persona
     const userPersonaMatch = contentAfterMarker.match(/<UserPersona>(.*?)<\/UserPersona>/s);
@@ -79,12 +83,12 @@ function parseChatData(requestData: any) {
     logs.push(`Extracted user persona: "${userPersona.substring(0, 50)}..."`);
     
     // Extract example dialogue
-    const exampleDialogueMatch = contentAfterMarker.match(/<example_dialogs>(.*?)<\/example_dialogs>/s);
+  const exampleDialogueMatch = contentAfterMarker.match(/<example_dialogs>([\s\S]*?)<\/example_dialogs>/i);
   let exampleDialogue = exampleDialogueMatch ? exampleDialogueMatch[1].trim() : '';
     logs.push(`Extracted example dialogue: "${exampleDialogue.substring(0, 50)}..."`);
     
     // Extract summary if present
-    const summaryMatch = contentAfterMarker.match(/<summary>(.*?)<\/summary>/s);
+  const summaryMatch = contentAfterMarker.match(/<summary>([\s\S]*?)<\/summary>/i);
     const summary = summaryMatch ? summaryMatch[1].trim() : '';
     if (summary) {
       logs.push(`Found summary: "${summary.substring(0, 50)}..."`);
