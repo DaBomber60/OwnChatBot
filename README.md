@@ -233,6 +233,53 @@ npm run db:reset        # CAUTION: drops & recreates data
 ### GitHub Actions (Container Image CI)
 Add `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` repo secrets. The workflow (`.github/workflows/docker-image.yml`) builds multi‑arch images on pushes & tags. For how those images are consumed in deployment, see the Docker Hub README.
 
+### Image Version Injection During Docker Build
+
+The `Dockerfile` accepts a build arg `APP_VERSION`. Early in the build it rewrites the `package.json` `version` field so the running container (and any diagnostics/UI referencing it) reflects the git tag version.
+
+Key points:
+- If the tag starts with a leading `v` (e.g. `v1.6.0`) it is automatically stripped → `1.6.0`.
+- Semver is validated (`major.minor.patch[-prerelease]`). Invalid values fail the build early.
+- Default when not supplied: `0.0.0-untagged`.
+
+PowerShell local build example:
+```powershell
+$tag = git describe --tags --abbrev=0
+docker build --build-arg APP_VERSION=$tag -t yourrepo/ownchatbot:$tag .
+```
+
+GitHub Actions snippet:
+```yaml
+jobs:
+	build:
+		runs-on: ubuntu-latest
+		steps:
+			- uses: actions/checkout@v4
+			- name: Derive tag
+				run: echo "TAG=${GITHUB_REF##*/}" >> $GITHUB_ENV
+			- name: Build image
+				run: docker build --build-arg APP_VERSION=${TAG} -t yourrepo/ownchatbot:${TAG#v} .
+			- name: Push
+				run: |
+					echo "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
+					docker push yourrepo/ownchatbot:${TAG#v}
+```
+
+docker-compose override example:
+```yaml
+services:
+	app:
+		build:
+			context: .
+			args:
+				APP_VERSION: v1.6.0
+```
+
+To confirm inside a running container:
+```bash
+docker exec -it ownchatbot-app node -p "require('./package.json').version"
+```
+
 ---
 ## 9. 💾 Data & Migration
 - Primary persistence: PostgreSQL

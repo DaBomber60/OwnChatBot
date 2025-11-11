@@ -6,6 +6,9 @@
 #  - Use BuildKit cache mounts for faster npm ci + build
 
 FROM node:24-alpine AS build
+ARG APP_VERSION=0.0.0-untagged
+# Normalize a leading 'v' (e.g. v1.2.3) and basic semver validation; fallback stays as provided
+ENV NORMALIZED_VERSION=${APP_VERSION#v}
 WORKDIR /app
 
 # System packages needed during build (prisma engines, openssl) and for generating standalone output
@@ -13,6 +16,8 @@ RUN apk add --no-cache libc6-compat openssl netcat-openbsd
 
 # Copy only manifests + prisma schema first for better dependency layer caching
 COPY package.json package-lock.json* ./
+# Rewrite package.json version field early so subsequent layers (install/build) embed correct version
+RUN node -e "const fs=require('fs');const p=require('./package.json');const v=process.env.NORMALIZED_VERSION||'0.0.0';if(!/^\\d+\\.\\d+\\.\\d+(-[0-9A-Za-z.-]+)?$/.test(v)){console.error('Invalid APP_VERSION semver:',v);process.exit(1);}p.version=v;fs.writeFileSync('package.json',JSON.stringify(p,null,2));console.log('Updated package.json version to',v);"
 COPY prisma ./prisma
 
 # Install all dependencies (dev + prod) with cache mount; fall back if lockfile missing
