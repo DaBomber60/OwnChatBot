@@ -79,6 +79,8 @@ RUN set -eux; \
         apk list --installed busybox >&2; \
         exit 1; \
     fi; \
+    npm install -g npm@11.7.0; \
+    npm --version; \
     addgroup --system --gid 1001 nodejs; \
     adduser --system --uid 1001 nextjs
 
