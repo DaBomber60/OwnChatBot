@@ -7,6 +7,7 @@ import { logout } from '../lib/auth';
 import Head from 'next/head';
 
 export default function SettingsPage() {
+  const appVersion = (process.env.NEXT_PUBLIC_APP_VERSION || '0.0.0').replace(/^v/, '');
   // Provider-specific API keys (stored independently)
   const [apiKey, setApiKey] = useState(''); // Currently selected provider key (UI convenience)
   const [keysByProvider, setKeysByProvider] = useState<Record<string, string>>({});
@@ -498,7 +499,10 @@ export default function SettingsPage() {
       </Head>
 
       <div className="flex items-center justify-between mb-6">
-        <h1 className="text-3xl font-semibold mb-0">Settings</h1>
+        <div>
+          <h1 className="text-3xl font-semibold mb-0">Settings</h1>
+          <p className="text-xs text-secondary mt-1">Version {appVersion}</p>
+        </div>
         <button className="btn btn-secondary" onClick={() => router.push('/')}>
           🏠 Home
         </button>

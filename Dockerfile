@@ -7,8 +7,8 @@
 
 FROM node:24-alpine3.21 AS build
 ARG APP_VERSION=0.0.0-untagged
-# Normalize a leading 'v' (e.g. v1.2.3) and basic semver validation; fallback stays as provided
-ENV NORMALIZED_VERSION=${APP_VERSION#v}
+ENV NEXT_PUBLIC_APP_VERSION=${APP_VERSION} \
+    APP_VERSION=${APP_VERSION}
 WORKDIR /app
 
 # System packages needed during build (prisma engines, openssl) and for generating standalone output
@@ -25,7 +25,7 @@ RUN set -eux; \
 # Copy only manifests + prisma schema first for better dependency layer caching
 COPY package.json package-lock.json* ./
 # Rewrite package.json version field early so subsequent layers (install/build) embed correct version
-RUN node -e "const fs=require('fs');const p=require('./package.json');const v=process.env.NORMALIZED_VERSION||'0.0.0';if(!/^\\d+\\.\\d+\\.\\d+(-[0-9A-Za-z.-]+)?$/.test(v)){console.error('Invalid APP_VERSION semver:',v);process.exit(1);}p.version=v;fs.writeFileSync('package.json',JSON.stringify(p,null,2));console.log('Updated package.json version to',v);"
+RUN node -e "const fs=require('fs');const p=require('./package.json');const raw=(process.env.NEXT_PUBLIC_APP_VERSION||'0.0.0').trim();const normalized=raw.startsWith('v')?raw.slice(1):raw;if(!/^\\d+\\.\\d+\\.\\d+(-[0-9A-Za-z.-]+)?$/.test(normalized)){console.error('Invalid APP_VERSION semver:',normalized,'from',raw);process.exit(1);}p.version=normalized;fs.writeFileSync('package.json',JSON.stringify(p,null,2));console.log('Updated package.json version to',normalized,'(raw:',raw,')');"
 COPY prisma ./prisma
 
 # Install all dependencies (dev + prod) with cache mount; fall back if lockfile missing
@@ -65,6 +65,9 @@ RUN set -eux; \
     cp healthcheck.js /out/healthcheck.js
 
 FROM node:24-alpine3.21 AS runner
+ARG APP_VERSION=0.0.0-untagged
+ENV NEXT_PUBLIC_APP_VERSION=${APP_VERSION} \
+    APP_VERSION=${APP_VERSION}
 WORKDIR /app
 
 # Install only runtime packages & create user in a single layer
