@@ -20,7 +20,9 @@ RUN set -eux; \
         apk list --installed busybox >&2; \
         exit 1; \
     fi; \
-    apk list --installed busybox
+    apk list --installed busybox; \
+    npm install -g npm@11.7.0; \
+    npm --version
 
 # Copy only manifests + prisma schema first for better dependency layer caching
 COPY package.json package-lock.json* ./
@@ -79,6 +81,8 @@ RUN set -eux; \
         apk list --installed busybox >&2; \
         exit 1; \
     fi; \
+    npm install -g npm@11.7.0; \
+    npm --version; \
     addgroup --system --gid 1001 nodejs; \
     adduser --system --uid 1001 nextjs
 
