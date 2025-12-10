@@ -12,7 +12,8 @@ ENV NORMALIZED_VERSION=${APP_VERSION#v}
 WORKDIR /app
 
 # System packages needed during build (prisma engines, openssl) and for generating standalone output
-RUN apk add --no-cache libc6-compat openssl netcat-openbsd
+RUN apk add --no-cache libc6-compat openssl netcat-openbsd \
+    && apk upgrade --no-cache busybox=1.37.0-r20
 
 # Copy only manifests + prisma schema first for better dependency layer caching
 COPY package.json package-lock.json* ./
@@ -60,7 +61,8 @@ FROM node:24-alpine AS runner
 WORKDIR /app
 
 # Install only runtime packages & create user in a single layer
-RUN apk add --no-cache netcat-openbsd openssl su-exec && \
+RUN apk add --no-cache netcat-openbsd openssl su-exec \
+    && apk upgrade --no-cache busybox=1.37.0-r20 && \
     addgroup --system --gid 1001 nodejs && \
     adduser --system --uid 1001 nextjs
 
