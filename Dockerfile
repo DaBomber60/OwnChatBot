@@ -5,15 +5,22 @@
 #  - Produce a single artifact directory then one COPY into final image
 #  - Use BuildKit cache mounts for faster npm ci + build
 
-FROM node:24-alpine AS build
+FROM node:24-alpine3.21 AS build
 ARG APP_VERSION=0.0.0-untagged
 # Normalize a leading 'v' (e.g. v1.2.3) and basic semver validation; fallback stays as provided
 ENV NORMALIZED_VERSION=${APP_VERSION#v}
 WORKDIR /app
 
 # System packages needed during build (prisma engines, openssl) and for generating standalone output
-RUN apk add --no-cache libc6-compat openssl netcat-openbsd \
-    && apk upgrade --no-cache busybox=1.37.0-r20
+RUN set -eux; \
+    apk add --no-cache libc6-compat openssl netcat-openbsd; \
+    apk upgrade --no-cache busybox; \
+    if apk version -l '<' busybox=1.37.0-r20 | grep -q busybox; then \
+        echo "BusyBox upgrade did not reach required version (>=1.37.0-r20)" >&2; \
+        apk list --installed busybox >&2; \
+        exit 1; \
+    fi; \
+    apk list --installed busybox
 
 # Copy only manifests + prisma schema first for better dependency layer caching
 COPY package.json package-lock.json* ./
@@ -57,13 +64,19 @@ RUN set -eux; \
     cp docker-entrypoint.sh /out/docker-entrypoint.sh; \
     cp healthcheck.js /out/healthcheck.js
 
-FROM node:24-alpine AS runner
+FROM node:24-alpine3.21 AS runner
 WORKDIR /app
 
 # Install only runtime packages & create user in a single layer
-RUN apk add --no-cache netcat-openbsd openssl su-exec \
-    && apk upgrade --no-cache busybox=1.37.0-r20 && \
-    addgroup --system --gid 1001 nodejs && \
+RUN set -eux; \
+    apk add --no-cache netcat-openbsd openssl su-exec; \
+    apk upgrade --no-cache busybox; \
+    if apk version -l '<' busybox=1.37.0-r20 | grep -q busybox; then \
+        echo "BusyBox upgrade did not reach required version (>=1.37.0-r20)" >&2; \
+        apk list --installed busybox >&2; \
+        exit 1; \
+    fi; \
+    addgroup --system --gid 1001 nodejs; \
     adduser --system --uid 1001 nextjs
 
 ENV NODE_ENV=production PORT=3000 HOSTNAME=0.0.0.0 \
