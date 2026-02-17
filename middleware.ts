@@ -161,7 +161,7 @@ export async function middleware(req: NextRequest) {
   try {
     const result = await verifyJwtHs256(cookie.value, JWT_SECRET);
     if (!result.valid) throw new Error('INVALID');
-    const decoded = result.payload as { v?: number };
+    const decoded = result.payload as { v?: number; iat?: number; exp?: number };
     const currentVersion = await getPasswordVersionCached();
     // Only enforce version mismatch when we have a definitive current version.
     // If currentVersion is null (fetch failed, no cache), skip the check —
