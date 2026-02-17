@@ -106,7 +106,7 @@ if [ -d prisma/migrations ]; then
     done
 fi
 
-MIGRATE_OUTPUT=$(npx prisma migrate deploy 2>&1)
+MIGRATE_OUTPUT=$(prisma migrate deploy 2>&1)
 MIGRATE_STATUS=$?
 echo "$MIGRATE_OUTPUT"
 set -e
@@ -120,13 +120,13 @@ if [ $MIGRATE_STATUS -ne 0 ]; then
             FIRST_MIGRATION=$(ls -1 prisma/migrations | head -n1 || true)
             if [ -n "$FIRST_MIGRATION" ]; then
                 echo "   -> Using migration: $FIRST_MIGRATION"
-                npx prisma migrate resolve --rolled-back "$FIRST_MIGRATION" || echo "⚠️  resolve --rolled-back failed (continuing)"
+                prisma migrate resolve --rolled-back "$FIRST_MIGRATION" || echo "⚠️  resolve --rolled-back failed (continuing)"
                 echo "🔁 Re-running migrate deploy..."
-                if ! npx prisma migrate deploy; then
+                if ! prisma migrate deploy; then
                                         echo "❌ Prisma migrate failed again after attempted auto-resolve.";
                                         if [ "${PRISMA_FALLBACK_DB_PUSH:-0}" = "1" ]; then
                                             echo "🩹 Falling back to 'prisma db push' (schema sync without migration history)."
-                                            if npx prisma db push --accept-data-loss; then
+                                            if prisma db push --accept-data-loss; then
                                                 echo "✅ prisma db push completed (migration history skipped)."
                                             else
                                                 echo "❌ prisma db push fallback failed."; exit 1
@@ -145,7 +145,7 @@ if [ $MIGRATE_STATUS -ne 0 ]; then
                 echo "⚠️  Detected Prisma error P3018 (migration apply failure)."
                 if [ "${PRISMA_FALLBACK_DB_PUSH:-0}" = "1" ]; then
                     echo "🩹 Falling back to 'prisma db push' (will create/update tables directly)."
-                    if npx prisma db push --accept-data-loss; then
+                    if prisma db push --accept-data-loss; then
                         echo "✅ prisma db push completed after P3018."
                     else
                         echo "❌ prisma db push fallback failed."; exit 1
@@ -154,7 +154,7 @@ if [ $MIGRATE_STATUS -ne 0 ]; then
                     echo "❌ P3018 encountered. Set PRISMA_FALLBACK_DB_PUSH=1 to attempt non-migration schema sync or clear the database volume."; exit 1
                 fi
     else
-        echo "⚠️  'npx prisma migrate deploy' failed (status $MIGRATE_STATUS). Attempting direct fallback binary..."
+        echo "⚠️  'prisma migrate deploy' failed (status $MIGRATE_STATUS). Attempting fallback..."
         if [ -x ./node_modules/.bin/prisma ]; then
             set +e
             FALLBACK_OUTPUT=$(./node_modules/.bin/prisma migrate deploy 2>&1)
@@ -164,7 +164,7 @@ if [ $MIGRATE_STATUS -ne 0 ]; then
             if [ $FALLBACK_STATUS -ne 0 ]; then
                                 if echo "$FALLBACK_OUTPUT" | grep -q 'P3018' && [ "${PRISMA_FALLBACK_DB_PUSH:-0}" = "1" ]; then
                                      echo "🩹 Falling back to prisma db push after binary migrate failure."
-                                     if npx prisma db push --accept-data-loss; then
+                                     if prisma db push --accept-data-loss; then
                                             echo "✅ prisma db push completed."
                                      else
                                             echo "❌ prisma db push fallback failed."; exit 1
@@ -184,8 +184,8 @@ echo "✅ Database migrations completed"
 
 # Generate Prisma client (in case of any schema changes)
 echo "🔧 Generating Prisma client..."
-if ! npx prisma generate; then
-    echo "⚠️  'npx prisma generate' failed. Trying direct binary..."
+if ! prisma generate; then
+    echo "⚠️  'prisma generate' failed. Trying direct binary path..."
     if [ -x ./node_modules/.bin/prisma ]; then
         ./node_modules/.bin/prisma generate || { echo "❌ Prisma generate failed"; exit 1; }
     else

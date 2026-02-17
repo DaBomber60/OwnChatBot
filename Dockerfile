@@ -72,6 +72,8 @@ ENV NEXT_PUBLIC_APP_VERSION=${APP_VERSION} \
 WORKDIR /app
 
 # Install only runtime packages & create user in a single layer
+# npm/npx are NOT needed at runtime — prisma binary is invoked directly via PATH.
+# Removing npm eliminates its transitive CVEs (tar, @isaacs/brace-expansion, diff).
 RUN set -eux; \
     apk add --no-cache netcat-openbsd openssl su-exec; \
     apk upgrade --no-cache busybox; \
@@ -81,8 +83,7 @@ RUN set -eux; \
         exit 1; \
     fi; \
     apk upgrade --no-cache openssl; \
-    npm install -g npm@11.7.0; \
-    npm --version; \
+    rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx; \
     addgroup --system --gid 1001 nodejs; \
     adduser --system --uid 1001 nextjs
 
