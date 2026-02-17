@@ -20,7 +20,8 @@ RUN set -eux; \
         apk list --installed busybox >&2; \
         exit 1; \
     fi; \
-    apk list --installed busybox
+    apk upgrade --no-cache openssl; \
+    apk list --installed busybox openssl
 
 # Copy only manifests + prisma schema first for better dependency layer caching
 COPY package.json package-lock.json* ./
@@ -79,6 +80,7 @@ RUN set -eux; \
         apk list --installed busybox >&2; \
         exit 1; \
     fi; \
+    apk upgrade --no-cache openssl; \
     npm install -g npm@11.7.0; \
     npm --version; \
     addgroup --system --gid 1001 nodejs; \
