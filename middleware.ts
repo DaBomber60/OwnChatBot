@@ -21,6 +21,10 @@ function uint8ArrayToB64url(bytes: Uint8Array): string {
   return b64;
 }
 
+// Token lifetime constants (seconds)
+const TOKEN_LIFETIME = 14 * 24 * 60 * 60; // 14 days
+const TOKEN_RENEWAL_THRESHOLD = 7 * 24 * 60 * 60; // renew when >7 days old (halfway)
+
 async function verifyJwtHs256(token: string, secret: string): Promise<{ valid: boolean; payload?: any }>{
   const parts = token.split('.');
   if (parts.length !== 3) return { valid: false };
@@ -30,11 +34,10 @@ async function verifyJwtHs256(token: string, secret: string): Promise<{ valid: b
     const keyData = enc.encode(secret);
     const key = await crypto.subtle.importKey('raw', keyData, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign', 'verify']);
     const data = enc.encode(`${headerB64}.${payloadB64}`);
-  const signature = b64urlToUint8Array(sigB64);
     const computed = new Uint8Array(await crypto.subtle.sign('HMAC', key, data));
     const computedB64 = uint8ArrayToB64url(computed);
     if (computedB64 !== sigB64) return { valid: false };
-  const json = atob(payloadB64.replace(/-/g, '+').replace(/_/g, '/'));
+    const json = atob(payloadB64.replace(/-/g, '+').replace(/_/g, '/'));
     const payload = JSON.parse(json);
     // Basic exp check if present
     if (payload.exp && Date.now() / 1000 > payload.exp) return { valid: false };
@@ -44,30 +47,52 @@ async function verifyJwtHs256(token: string, secret: string): Promise<{ valid: b
   }
 }
 
+// Edge-compatible JWT HS256 signing (used for sliding token renewal)
+async function signJwtHs256(payload: Record<string, any>, secret: string): Promise<string> {
+  const enc = new TextEncoder();
+  const header = { alg: 'HS256', typ: 'JWT' };
+  const nowSec = Math.floor(Date.now() / 1000);
+  const fullPayload = { ...payload, iat: nowSec, exp: nowSec + TOKEN_LIFETIME };
+  const headerB64 = btoa(JSON.stringify(header)).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
+  const payloadB64 = btoa(JSON.stringify(fullPayload)).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
+  const key = await crypto.subtle.importKey('raw', enc.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const sig = new Uint8Array(await crypto.subtle.sign('HMAC', key, enc.encode(`${headerB64}.${payloadB64}`)));
+  const sigB64 = uint8ArrayToB64url(sig);
+  return `${headerB64}.${payloadB64}.${sigB64}`;
+}
+
 // JWT secret resolved dynamically; middleware runs in node runtime (see config)
 
 // Paths that do not require auth (exact or prefix handling below)
 const PUBLIC_PREFIXES = ['/api/auth/', '/_next/', '/favicon', '/api/health', '/api/internal/password-version'];
 const PUBLIC_EXACT = ['/', '/login', '/setup'];
 
-// Simple in-process cache to avoid hitting API repeatedly per navigation
+// In-process cache for password version. Uses a longer TTL and graceful degradation:
+// - On success: cache for 60s (reduced fetch frequency)
+// - On failure with stale cache: use stale value (no logout)
+// - On failure with NO cache: return null to signal "skip version check" rather than
+//   defaulting to 1 which would cause a mismatch and force logout
 let cachedVersion: { value: number; ts: number } | null = null;
-async function getPasswordVersionCached(): Promise<number> {
+async function getPasswordVersionCached(): Promise<number | null> {
   const now = Date.now();
-  if (cachedVersion && now - cachedVersion.ts < 30_000) {
+  if (cachedVersion && now - cachedVersion.ts < 60_000) {
     return cachedVersion.value;
   }
   try {
     const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000'}/api/internal/password-version`);
-    if (!res.ok) return 1;
+    if (!res.ok) {
+      // Non-OK response: use stale cache if available, otherwise skip check
+      return cachedVersion ? cachedVersion.value : null;
+    }
     const data = await res.json();
     const v = data.version || 1;
     cachedVersion = { value: v, ts: now };
     return v;
   } catch {
-    // Offline-tolerant: if we have a cached value, keep using it even if stale; else default to 1
+    // Network/server error: use stale cache if available, otherwise skip check
+    // This prevents logouts during server restarts or transient network issues
     if (cachedVersion) return cachedVersion.value;
-    return 1;
+    return null;
   }
 }
 
@@ -138,9 +163,11 @@ export async function middleware(req: NextRequest) {
     if (!result.valid) throw new Error('INVALID');
     const decoded = result.payload as { v?: number };
     const currentVersion = await getPasswordVersionCached();
-    if (typeof decoded.v === 'number' && decoded.v !== currentVersion) {
+    // Only enforce version mismatch when we have a definitive current version.
+    // If currentVersion is null (fetch failed, no cache), skip the check —
+    // the API-layer requireAuth() will do its own definitive DB check.
+    if (currentVersion !== null && typeof decoded.v === 'number' && decoded.v !== currentVersion) {
       console.warn('[middleware] Password version mismatch. token v', decoded.v, 'current', currentVersion, 'path', pathname);
-      // Redirect to login but don’t aggressively clear cookie to avoid PWA disruption
       const loginUrl = req.nextUrl.clone();
       loginUrl.pathname = '/login';
       return NextResponse.redirect(loginUrl);
@@ -150,6 +177,32 @@ export async function middleware(req: NextRequest) {
     }
   const ok = NextResponse.next();
   attachSecurityHeaders(ok, req);
+
+    // Sliding token renewal: if token is past the halfway point of its lifetime,
+    // mint a fresh token so active users never get hard-logged out.
+    const tokenAge = decoded.iat ? (Date.now() / 1000 - decoded.iat) : 0;
+    if (tokenAge > TOKEN_RENEWAL_THRESHOLD) {
+      try {
+        const freshToken = await signJwtHs256(
+          { authenticated: true, v: decoded.v },
+          JWT_SECRET
+        );
+        ok.cookies.set('hcb_auth', freshToken, {
+          path: '/',
+          httpOnly: true,
+          sameSite: 'lax',
+          maxAge: TOKEN_LIFETIME,
+          secure: process.env.NODE_ENV === 'production',
+        });
+        if (Math.random() < 0.05) {
+          console.log('[middleware] Renewed token for path', pathname, '(age', Math.round(tokenAge / 3600), 'h)');
+        }
+      } catch (renewErr) {
+        // Non-fatal: if renewal fails, the user keeps their existing token
+        console.warn('[middleware] Token renewal failed:', renewErr);
+      }
+    }
+
   return ok;
   } catch (err: any) {
     console.warn('[middleware] JWT verify failed for path', pathname, err?.name, err?.message);
@@ -190,6 +243,12 @@ function attachSecurityHeaders(res: NextResponse, req: NextRequest) {
   res.headers.set('X-Content-Type-Options', 'nosniff');
   res.headers.set('X-Frame-Options', 'DENY');
   res.headers.set('X-XSS-Protection', '0'); // modern browsers deprecated header
+  // Prevent browsers, proxies, and SW from caching auth-sensitive responses (redirects, 401s).
+  // Only applied to non-2xx or redirect responses; 2xx pages use browser defaults.
+  const status = res.status;
+  if (status >= 300 || status === 401 || status === 403) {
+    res.headers.set('Cache-Control', 'no-store, no-cache, must-revalidate');
+  }
 }
 
 export const config = {

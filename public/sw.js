@@ -36,8 +36,12 @@ self.addEventListener('fetch', (event) => {
   if (req.mode === 'navigate') {
     event.respondWith(
       fetch(req).then(res => {
-        const copy = res.clone();
-        caches.open(STATIC_CACHE).then(c => c.put(req, copy));
+        // Only cache successful (2xx) responses — never cache redirects (302 to /login)
+        // or error responses, which would create a logout loop in PWA/offline mode.
+        if (res.ok) {
+          const copy = res.clone();
+          caches.open(STATIC_CACHE).then(c => c.put(req, copy));
+        }
         return res;
       }).catch(() => caches.match(req))
     );
