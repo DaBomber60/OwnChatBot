@@ -1,7 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { requireAuth } from '../../../lib/apiAuth';
 import { apiKeyNotConfigured, badRequest, methodNotAllowed, serverError } from '../../../lib/apiErrors';
-import { getAIConfig, tokenFieldFor, normalizeTemperature } from '../../../lib/aiProvider';
+import { getAIConfig, tokenFieldFor, normalizeTemperature, DEFAULT_FALLBACK_URL } from '../../../lib/aiProvider';
 import prisma from '../../../lib/prisma';
 import { schemas, validateBody } from '../../../lib/validate';
 import { z } from 'zod';
@@ -10,8 +10,6 @@ import { z } from 'zod';
 // POST /api/characters/generate
 // Body: { name, profileName?, description, sliders?: { key: number } }
 // Returns: { scenario, personality, firstMessage, exampleDialogue, rawPrompt }
-
-const DEFAULT_FALLBACK_URL = 'https://api.deepseek.com/chat/completions';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!(await requireAuth(req, res))) return;

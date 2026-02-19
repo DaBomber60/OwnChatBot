@@ -2,24 +2,37 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import prisma from '../../../lib/prisma';
 import { requireAuth } from '../../../lib/apiAuth';
 import { schemas, validateBody } from '../../../lib/validate';
-import { badRequest } from '../../../lib/apiErrors';
+import { badRequest, methodNotAllowed } from '../../../lib/apiErrors';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!(await requireAuth(req, res))) return;
   try {
     if (req.method === 'GET') {
-      const sessions = await prisma.chatSession.findMany({
-        include: {
-          persona: true,
-          character: true,
-          _count: {
-            select: { messages: true }
-          }
-        },
-        orderBy: { createdAt: 'desc' }
-      });
-      
-      // Shape the response to include needed fields including summary, description and message count
+      // Optional query params: ?limit=N&sort=updatedAt
+      const limitParam = typeof req.query.limit === 'string' ? parseInt(req.query.limit, 10) : undefined;
+      const take = limitParam && !isNaN(limitParam) && limitParam > 0 ? limitParam : undefined;
+      const sortField = req.query.sort === 'updatedAt' ? 'updatedAt' as const : 'createdAt' as const;
+
+      // Run count in parallel with findMany when a limit is applied (cheap COUNT(*) query)
+      const [sessions, totalCount] = await Promise.all([
+        prisma.chatSession.findMany({
+          select: {
+            id: true,
+            personaId: true,
+            characterId: true,
+            updatedAt: true,
+            summary: true,
+            description: true,
+            persona: { select: { id: true, name: true, profileName: true } },
+            character: { select: { id: true, name: true, profileName: true } },
+            _count: { select: { messages: true } }
+          },
+          orderBy: { [sortField]: 'desc' },
+          ...(take ? { take } : {})
+        }),
+        take ? prisma.chatSession.count() : Promise.resolve(undefined)
+      ]);
+
       const shapedSessions = sessions.map(session => ({
         id: session.id,
         personaId: session.personaId,
@@ -28,18 +41,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         summary: session.summary,
         description: session.description,
         messageCount: session._count.messages,
-        persona: {
-          id: session.persona.id,
-          name: session.persona.name,
-          profileName: session.persona.profileName
-        },
-        character: {
-          id: session.character.id,
-          name: session.character.name,
-          profileName: session.character.profileName
-        }
+        persona: session.persona,
+        character: session.character
       }));
-      
+
+      if (totalCount !== undefined) {
+        res.setHeader('X-Total-Count', String(totalCount));
+      }
       return res.status(200).json(shapedSessions);
     }
     if (req.method === 'POST') {
@@ -64,7 +72,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   return res.status(201).json(session);
     }
     res.setHeader('Allow', ['GET', 'POST']);
-    res.status(405).end(`Method ${req.method} Not Allowed`);
+    return methodNotAllowed(res, req.method);
   } catch (error: unknown) {
     console.error('Sessions API error:', error);
     const errorMessage = error instanceof Error ? error.message : 'Internal Server Error';

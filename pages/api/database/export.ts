@@ -3,13 +3,13 @@ import prisma from '../../../lib/prisma';
 import JSZip from 'jszip';
 import { requireAuth } from '../../../lib/apiAuth';
 import { limiters, clientIp } from '../../../lib/rateLimit';
-import { tooManyRequests } from '../../../lib/apiErrors';
+import { tooManyRequests, methodNotAllowed } from '../../../lib/apiErrors';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!(await requireAuth(req, res))) return;
   if (req.method !== 'GET') {
     res.setHeader('Allow', ['GET']);
-    return res.status(405).end(`Method ${req.method} Not Allowed`);
+    return methodNotAllowed(res, req.method);
   }
 
   const ip = clientIp(req as any);

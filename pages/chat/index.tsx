@@ -2,14 +2,8 @@ import { useState, useEffect } from 'react';
 import useSWR from 'swr';
 import { useRouter } from 'next/router';
 import Head from 'next/head';
-
-const fetcher = (url: string) => fetch(url).then(res => res.json());
-
-type Persona = { id: number; name: string; profileName?: string };
-type Character = { id: number; name: string; profileName?: string; firstMessage?: string; groupId?: number | null; group?: CharacterGroup | null };
-type CharacterGroup = { id: number; name: string; color: string; isCollapsed: boolean; sortOrder: number };
-type Session = { id: number; persona: Persona; character: Character; updatedAt: string; summary?: string; description?: string; messageCount: number };
-type Message = { id: number; role: string; content: string };
+import { fetcher } from '../../lib/fetcher';
+import type { Persona, Character, CharacterGroup, Session, Message } from '../../types/models';
 
 export default function ChatIndexPage() {
   const router = useRouter();

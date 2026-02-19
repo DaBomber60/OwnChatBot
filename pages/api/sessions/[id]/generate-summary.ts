@@ -3,9 +3,8 @@ import prisma from '../../../../lib/prisma';
 import { truncateMessagesIfNeeded } from '../../../../lib/messageUtils';
 import { requireAuth } from '../../../../lib/apiAuth';
 import { apiKeyNotConfigured, badRequest, methodNotAllowed, notFound, serverError } from '../../../../lib/apiErrors';
-import { getAIConfig, tokenFieldFor, normalizeTemperature } from '../../../../lib/aiProvider';
-
-const DEFAULT_FALLBACK_URL = 'https://api.deepseek.com/chat/completions';
+import { getAIConfig, tokenFieldFor, normalizeTemperature, DEFAULT_FALLBACK_URL } from '../../../../lib/aiProvider';
+import { parseId } from '../../../../lib/validate';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!(await requireAuth(req, res))) return;
@@ -14,10 +13,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return methodNotAllowed(res, req.method);
   }
 
-  const { id } = req.query;
-  const sessionId = Number(id);
+  const sessionId = parseId(req.query.id);
 
-  if (!sessionId || isNaN(sessionId)) {
+  if (sessionId === null) {
     return badRequest(res, 'Invalid session ID', 'INVALID_SESSION_ID');
   }
 

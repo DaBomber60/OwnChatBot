@@ -3,24 +3,9 @@ import { flushSync } from 'react-dom';
 import { useRouter } from 'next/router';
 import useSWR from 'swr';
 import Head from 'next/head';
+import { fetcher } from '../../lib/fetcher';
+import type { ChatMessage, Message, MessageVersion, SessionData } from '../../types/models';
 
-// message shape for UI only
-type ChatMessage = { role: 'user' | 'assistant'; content: string; messageId?: number; };
-type Message = { id: number; role: string; content: string; versions?: MessageVersion[] };
-type MessageVersion = { id: number; content: string; version: number; isActive: boolean };
-type SessionData = {
-  id: number;
-  personaId: number;
-  characterId: number;
-  summary?: string;
-  lastSummary?: number;
-  persona: { id: number; name: string; profileName?: string };
-  character: { id: number; name: string; profileName?: string };
-  messages: Message[];
-  hasMore?: boolean; // present when using pagination
-};
-
-const fetcher = (url: string) => fetch(url).then(res => res.json());
 const INITIAL_PAGE_SIZE = 20; // messages for initial load
 const SCROLL_PAGE_SIZE = 60; // messages to load per top-scroll fetch
 

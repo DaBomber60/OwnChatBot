@@ -2,17 +2,9 @@ import { useState, useEffect } from 'react';
 import useSWR from 'swr';
 import { useRouter } from 'next/router';
 import Head from 'next/head';
-
-const fetcher = (url: string) => fetch(url).then(res => res.json());
-
-type Persona = { id: number; name: string; profileName?: string; profile: string }; // removed userPrompt
-
-// Utility to render multiline text into paragraphs
-function renderMultiline(text: string) {
-  return text.split(/\r?\n/).map((line, idx) => (
-    <p key={idx} style={{ margin: '0.05rem 0' }}>{line}</p>
-  ));
-}
+import { fetcher } from '../../lib/fetcher';
+import type { Persona } from '../../types/models';
+import { renderMultiline } from '../../components/RenderMultiline';
 
 // Utility to get preview text for persona cards
 function getPersonaPreview(persona: Persona): { text: string; label: string } | null {
@@ -78,7 +70,7 @@ export default function PersonasPage() {
     // Fill the create form with persona data and append " - [Clone]" to profile name
     setName(persona.name);
     setProfileName(persona.profileName ? `${persona.profileName} - [Clone]` : `${persona.name} - [Clone]`);
-    setProfile(persona.profile);
+    setProfile(persona.profile || '');
     
     // Open the create form and close the menu
     setIsAdding(true);
@@ -266,7 +258,7 @@ export default function PersonasPage() {
                             setEditingId(p.id);
                             setEditName(p.name);
                             setEditProfileName(p.profileName || '');
-                            setEditProfile(p.profile);
+                            setEditProfile(p.profile || '');
                             closeMenu();
                           }}
                         >
@@ -439,7 +431,7 @@ export default function PersonasPage() {
                     <div style={{ marginBottom: '0' }}>
                       <h4 className="character-section-title" style={{ marginBottom: '0.125rem' }}>Profile</h4>
                       <div className="character-section-content">
-                        {renderMultiline(p.profile)}
+                        {renderMultiline(p.profile || '')}
                       </div>
                     </div>
                   </div>

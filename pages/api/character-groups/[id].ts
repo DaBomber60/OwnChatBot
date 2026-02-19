@@ -1,15 +1,15 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import prisma from '../../../lib/prisma';
 import { requireAuth } from '../../../lib/apiAuth';
-import { schemas, validateBody } from '../../../lib/validate';
+import { schemas, validateBody, parseId } from '../../../lib/validate';
+import { methodNotAllowed } from '../../../lib/apiErrors';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!(await requireAuth(req, res))) return;
 
-  const { id } = req.query;
-  const groupId = parseInt(id as string);
+  const groupId = parseId(req.query.id);
 
-  if (isNaN(groupId)) {
+  if (groupId === null) {
     return res.status(400).json({ error: 'Invalid group ID', code: 'INVALID_GROUP_ID' });
   }
 
@@ -77,7 +77,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         where: { id: groupId }
       });
 
-      res.status(200).json({ message: 'Group deleted successfully' });
+      res.status(204).end();
     } catch (error: any) {
       console.error('Error deleting character group:', error);
       if (error.code === 'P2025') {
@@ -88,6 +88,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
   } else {
     res.setHeader('Allow', ['GET', 'PUT', 'DELETE']);
-    res.status(405).json({ error: `Method ${req.method} Not Allowed`, code: 'METHOD_NOT_ALLOWED' });
+    return methodNotAllowed(res, req.method);
   }
 }

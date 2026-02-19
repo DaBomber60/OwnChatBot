@@ -2,14 +2,13 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import prisma from '../../../lib/prisma';
 import { requireAuth } from '../../../lib/apiAuth';
 import { badRequest, methodNotAllowed, conflict, notFound, serverError } from '../../../lib/apiErrors';
-import { schemas, validateBody } from '../../../lib/validate';
+import { schemas, validateBody, parseId } from '../../../lib/validate';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!(await requireAuth(req, res))) return;
 
-  const { id } = req.query;
-  const charId = Number(id);
-  if (isNaN(charId)) return badRequest(res, 'Invalid character ID', 'INVALID_CHARACTER_ID');
+  const charId = parseId(req.query.id);
+  if (charId === null) return badRequest(res, 'Invalid character ID', 'INVALID_CHARACTER_ID');
 
   if (req.method === 'PUT') {
     const body = validateBody(schemas.updateCharacter, req, res);

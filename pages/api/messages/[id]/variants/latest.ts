@@ -1,13 +1,14 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import prisma from '../../../../../lib/prisma';
 import { requireAuth } from '../../../../../lib/apiAuth';
+import { methodNotAllowed } from '../../../../../lib/apiErrors';
+import { parseId } from '../../../../../lib/validate';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!(await requireAuth(req, res))) return;
-  const { id } = req.query;
-  const messageId = Array.isArray(id) ? parseInt(id[0]!) : parseInt(id as string);
+  const messageId = parseId(req.query.id);
 
-  if (isNaN(messageId)) {
+  if (messageId === null) {
     return res.status(400).json({ error: 'Invalid message ID' });
   }
 
@@ -55,5 +56,5 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   res.setHeader('Allow', ['GET', 'DELETE']);
-  res.status(405).end(`Method ${req.method} Not Allowed`);
+  return methodNotAllowed(res, req.method);
 }

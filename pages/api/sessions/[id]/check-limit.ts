@@ -2,17 +2,20 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import prisma from '../../../../lib/prisma';
 import { truncateMessagesIfNeeded } from '../../../../lib/messageUtils';
 import { badRequest, methodNotAllowed, notFound, serverError } from '../../../../lib/apiErrors';
+import { requireAuth } from '../../../../lib/apiAuth';
+import { parseId } from '../../../../lib/validate';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  if (!(await requireAuth(req, res))) return;
+
   if (req.method !== 'GET') {
     res.setHeader('Allow', ['GET']);
     return methodNotAllowed(res, req.method);
   }
 
-  const { id } = req.query;
-  const sessionId = Number(id);
+  const sessionId = parseId(req.query.id);
 
-  if (!sessionId || isNaN(sessionId)) {
+  if (sessionId === null) {
     return badRequest(res, 'Invalid session ID', 'INVALID_SESSION_ID');
   }
 

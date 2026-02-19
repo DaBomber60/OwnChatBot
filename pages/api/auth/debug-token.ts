@@ -1,11 +1,12 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import jwt from 'jsonwebtoken';
 import { getJwtSecret } from '../../../lib/jwtSecret';
+import { methodNotAllowed } from '../../../lib/apiErrors';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     res.setHeader('Allow', ['GET']);
-    return res.status(405).end('Method Not Allowed');
+    return methodNotAllowed(res, req.method);
   }
 
   const cookieHeader = req.headers.cookie || '';

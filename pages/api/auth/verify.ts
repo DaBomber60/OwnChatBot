@@ -1,17 +1,10 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import jwt from 'jsonwebtoken';
 import { getJwtSecret } from '../../../lib/jwtSecret';
-import prisma from '../../../lib/prisma';
 import { methodNotAllowed, serverError, unauthorized } from '../../../lib/apiErrors';
+import { getPasswordVersion } from '../../../lib/passwordVersion';
 
 // Dynamic secret (env override or DB persisted)
-
-async function getPasswordVersion(): Promise<number> {
-  const versionSetting = await prisma.setting.findUnique({ where: { key: 'authPasswordVersion' } });
-  if (!versionSetting) return 1;
-  const parsed = parseInt(versionSetting.value, 10);
-  return isNaN(parsed) ? 1 : parsed;
-}
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {

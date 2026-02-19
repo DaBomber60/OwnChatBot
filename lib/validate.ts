@@ -138,3 +138,16 @@ export const schemas = {
   .refine((v: string) => /[^A-Za-z0-9]/.test(v), 'Password must contain at least one special character')
   })
 };
+
+/**
+ * Parse a route parameter ID into a positive integer, handling string | string[] | undefined.
+ * Returns null if the value is missing, not a number, or not a positive integer.
+ */
+export function parseId(raw: string | string[] | undefined): number | null {
+  if (raw == null) return null;
+  const str = Array.isArray(raw) ? raw[0] : raw;
+  if (!str) return null;
+  const num = parseInt(str, 10);
+  if (isNaN(num) || num <= 0) return null;
+  return num;
+}

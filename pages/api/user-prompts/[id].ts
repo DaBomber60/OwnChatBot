@@ -1,14 +1,15 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import prisma from '../../../lib/prisma';
 import { requireAuth } from '../../../lib/apiAuth';
+import { methodNotAllowed } from '../../../lib/apiErrors';
+import { parseId } from '../../../lib/validate';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!(await requireAuth(req, res))) return;
   try {
-    const { id } = req.query;
-    const promptId = parseInt(id as string, 10);
+    const promptId = parseId(req.query.id);
 
-    if (isNaN(promptId)) {
+    if (promptId === null) {
       return res.status(400).json({ error: 'Invalid prompt ID' });
     }
 
@@ -49,11 +50,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         where: { id: promptId }
       });
 
-      return res.status(200).json({ message: 'Prompt deleted successfully' });
+      return res.status(204).end();
     }
 
     res.setHeader('Allow', ['GET', 'PUT', 'DELETE']);
-    return res.status(405).end(`Method ${req.method} Not Allowed`);
+    return methodNotAllowed(res, req.method);
 
   } catch (error: unknown) {
     console.error('User-prompts [id] API error:', error);

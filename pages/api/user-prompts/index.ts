@@ -2,7 +2,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import prisma from '../../../lib/prisma';
 import { requireAuth } from '../../../lib/apiAuth';
 import { schemas, validateBody } from '../../../lib/validate';
-import { badRequest } from '../../../lib/apiErrors';
+import { badRequest, methodNotAllowed } from '../../../lib/apiErrors';
 import { DEFAULT_USER_PROMPT_TITLE, DEFAULT_USER_PROMPT_BODY } from '../../../lib/defaultUserPrompt';
 
 // Setting key to record that we have seeded the default prompt at least once.
@@ -78,7 +78,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
     res.setHeader('Allow', ['GET', 'POST']);
-    return res.status(405).end(`Method ${req.method} Not Allowed`);
+    return methodNotAllowed(res, req.method);
   } catch (error: unknown) {
     console.error('User-prompts API error:', error);
     const errorMessage = error instanceof Error ? error.message : 'Internal Server Error';

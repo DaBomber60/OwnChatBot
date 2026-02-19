@@ -2,12 +2,8 @@ import { useState, useEffect, useMemo } from 'react';
 import useSWR, { mutate } from 'swr';
 import { useRouter } from 'next/router';
 import Head from 'next/head';
-
-const fetcher = (url: string) => fetch(url).then(res => res.json());
-
-type Persona = { id: number; name: string; profileName?: string };
-type Character = { id: number; name: string; profileName?: string; firstMessage?: string };
-type CharacterGroup = { id: number; name: string; color: string; isCollapsed: boolean; sortOrder: number; characters: Character[]; };
+import { fetcher } from '../lib/fetcher';
+import type { Persona, Character, CharacterGroup } from '../types/models';
 
 interface ImportedData {
   characterData: {

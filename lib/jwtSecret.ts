@@ -20,3 +20,5 @@ export async function getJwtSecret(): Promise<string> {
 }
 
 export function clearJwtSecretCache() { cached = null; }
+
+export const FALLBACK_JWT_SECRET = process.env.JWT_SECRET || 'dev-fallback-insecure-secret-change-me';

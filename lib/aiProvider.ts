@@ -20,6 +20,8 @@ export interface AIConfig {
   enableTemperature?: boolean; // User toggle for including temperature param
 }
 
+export const DEFAULT_FALLBACK_URL = 'https://api.deepseek.com/chat/completions';
+
 interface RawSettingsMap { [k: string]: string | undefined }
 
 // Default presets (OpenAI-compatible response schema assumption)

@@ -2,16 +2,20 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import prisma from '../../../lib/prisma';
 import { IncomingForm, Fields, Files } from 'formidable';
 import { promises as fs } from 'fs';
+import path from 'path';
+import os from 'os';
 import JSZip from 'jszip';
 import { requireAuth } from '../../../lib/apiAuth';
 import { limiters, clientIp } from '../../../lib/rateLimit';
-import { tooManyRequests } from '../../../lib/apiErrors';
+import { tooManyRequests, methodNotAllowed } from '../../../lib/apiErrors';
 
 // Disable Next.js body parser for file uploads and increase size limits
 export const config = {
   api: {
     bodyParser: false,
     responseLimit: false,
+    // Increase the default body size limit for large imports (Next.js 13+)
+    externalResolver: true,
   },
 };
 
@@ -35,7 +39,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!(await requireAuth(req, res))) return;
   if (req.method !== 'POST') {
     res.setHeader('Allow', ['POST']);
-    return res.status(405).end(`Method ${req.method} Not Allowed`);
+    return methodNotAllowed(res, req.method);
   }
 
   const ip = clientIp(req as any);
@@ -45,18 +49,29 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
+    // Use a dedicated temp directory to avoid cross-device rename issues
+    const uploadDir = await fs.mkdtemp(path.join(os.tmpdir(), 'hcb-import-'));
+    
     const form = new IncomingForm({
       maxFileSize: 500 * 1024 * 1024, // 500MB limit for zip files
       maxFieldsSize: 500 * 1024 * 1024, // 500MB for form fields
-      maxFields: 1000, // Allow more fields if needed
+      maxTotalFileSize: 500 * 1024 * 1024, // total file size limit (formidable v3)
+      maxFields: 1000,
       keepExtensions: true,
-      multiples: false
+      multiples: false,
+      uploadDir, // explicit temp dir
+      allowEmptyFiles: false,
+      hashAlgorithm: false, // skip hashing for faster uploads
     });
     
     const { files } = await new Promise<{ files: Files }>((resolve, reject) => {
       form.parse(req, (err: any, fields: Fields, files: Files) => {
-        if (err) reject(err);
-        else resolve({ files });
+        if (err) {
+          console.error('[database/import] Formidable parse error:', err.code, err.httpCode, err.message);
+          reject(err);
+        } else {
+          resolve({ files });
+        }
       });
     });
 

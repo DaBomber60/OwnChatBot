@@ -3,13 +3,9 @@ import prisma from '../../../lib/prisma';
 import { truncateMessagesIfNeeded } from '../../../lib/messageUtils';
 import { requireAuth } from '../../../lib/apiAuth';
 import { apiKeyNotConfigured, badRequest, methodNotAllowed, notFound, serverError, tooManyRequests, payloadTooLarge } from '../../../lib/apiErrors';
-import { getAIConfig, tokenFieldFor, normalizeTemperature } from '../../../lib/aiProvider';
+import { getAIConfig, tokenFieldFor, normalizeTemperature, DEFAULT_FALLBACK_URL } from '../../../lib/aiProvider';
 import { limiters, clientIp } from '../../../lib/rateLimit';
 import { enforceBodySize } from '../../../lib/bodyLimit';
-
-// Removed fixed DeepSeek URL; now dynamic per settings.
-// Fallback kept only in case settings not yet saved (handled below).
-const DEFAULT_FALLBACK_URL = 'https://api.deepseek.com/chat/completions';
 const CONTINUE_PREFIX = '[SYSTEM NOTE: Ignore this message';
 const isContinuationPlaceholder = (msg?: string) => !!msg && msg.startsWith(CONTINUE_PREFIX);
 

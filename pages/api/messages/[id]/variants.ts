@@ -5,15 +5,14 @@ import { requireAuth } from '../../../../lib/apiAuth';
 import { apiKeyNotConfigured, badRequest, conflict, methodNotAllowed, notFound, serverError, validationError, tooManyRequests } from '../../../../lib/apiErrors';
 import { limiters, clientIp } from '../../../../lib/rateLimit';
 import { enforceBodySize } from '../../../../lib/bodyLimit';
-import { schemas, validateBody } from '../../../../lib/validate';
+import { schemas, validateBody, parseId } from '../../../../lib/validate';
 import { getAIConfig, tokenFieldFor, normalizeTemperature } from '../../../../lib/aiProvider';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!(await requireAuth(req, res))) return;
-  const { id } = req.query;
-  const messageId = Array.isArray(id) ? parseInt(id[0]!) : parseInt(id as string);
+  const messageId = parseId(req.query.id);
 
-  if (isNaN(messageId)) {
+  if (messageId === null) {
     return badRequest(res, 'Invalid message ID', 'INVALID_MESSAGE_ID');
   }
 

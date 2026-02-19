@@ -1,8 +1,10 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { limiters, clientIp } from '../../../lib/rateLimit';
-import { tooManyRequests } from '../../../lib/apiErrors';
+import { tooManyRequests, methodNotAllowed } from '../../../lib/apiErrors';
 import prisma from '../../../lib/prisma';
 import { getCachedImportToken } from '../../../lib/importToken';
+import { getPasswordVersion } from '../../../lib/passwordVersion';
+import { FALLBACK_JWT_SECRET } from '../../../lib/jwtSecret';
 
 // In-memory storage for the latest import (simple single-session approach)
 // Using global to share state between API endpoints
@@ -244,16 +246,7 @@ export function parseChatData(requestData: any) {
   }
 }
 
-async function getPasswordVersion(): Promise<number> {
-  try {
-    const setting = await prisma.setting.findUnique({ where: { key: 'authPasswordVersion' } });
-    return setting ? parseInt(setting.value, 10) || 1 : 1;
-  } catch {
-    return 1;
-  }
-}
 
-const FALLBACK_JWT_SECRET = process.env.JWT_SECRET || 'dev-fallback-insecure-secret-change-me';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   // Security Hardening (Item 9): Remove blanket wildcard CORS. This endpoint is intended for same-origin use.
@@ -348,5 +341,5 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
   
   res.setHeader('Allow', ['POST', 'OPTIONS']);
-  res.status(405).end(`Method ${req.method} Not Allowed`);
+  return methodNotAllowed(res, req.method);
 }

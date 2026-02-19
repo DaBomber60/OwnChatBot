@@ -1,21 +1,15 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import prisma from '../../../lib/prisma';
 import { requireAuth } from '../../../lib/apiAuth';
-import { schemas, validateBody } from '../../../lib/validate';
-import { badRequest } from '../../../lib/apiErrors';
+import { schemas, validateBody, parseId } from '../../../lib/validate';
+import { badRequest, methodNotAllowed } from '../../../lib/apiErrors';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!(await requireAuth(req, res))) return;
-  const { id } = req.query;
+  const sessionId = parseId(req.query.id);
   
-  if (!id || Array.isArray(id)) {
+  if (sessionId === null) {
     return res.status(400).json({ error: 'Invalid session ID' });
-  }
-  
-  const sessionId = parseInt(id, 10);
-  
-  if (isNaN(sessionId)) {
-    return res.status(400).json({ error: 'Invalid session ID format' });
   }
 
   if (req.method === 'GET') {
@@ -150,5 +144,5 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   res.setHeader('Allow', ['GET', 'PUT', 'PATCH', 'DELETE']);
-  res.status(405).end(`Method ${req.method} Not Allowed`);
+  return methodNotAllowed(res, req.method);
 }

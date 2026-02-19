@@ -1,15 +1,8 @@
 import { useState } from 'react';
 import useSWR from 'swr';
-
-const fetcher = (url: string) => fetch(url).then(res => res.json());
-type UserPrompt = { id: number; title: string; body: string };
-
-// Utility to render multiline text into paragraphs
-function renderMultiline(text: string) {
-  return text.split(/\r?\n/).map((line, idx) => (
-    <p key={idx} style={{ margin: '0.25rem 0' }}>{line}</p>
-  ));
-}
+import { fetcher } from '../lib/fetcher';
+import type { UserPrompt } from '../types/models';
+import { renderMultiline } from './RenderMultiline';
 
 export default function UserPromptsManager() {
   const { data: promptsData, error, mutate } = useSWR<UserPrompt[]>('/api/user-prompts', fetcher);

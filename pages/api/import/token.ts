@@ -1,25 +1,16 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
-import prisma from '../../../lib/prisma';
 import { getCachedImportToken } from '../../../lib/importToken';
+import { getPasswordVersion } from '../../../lib/passwordVersion';
+import { FALLBACK_JWT_SECRET } from '../../../lib/jwtSecret';
+import { methodNotAllowed } from '../../../lib/apiErrors';
 
 // This endpoint returns the current import bearer token (requires regular auth via middleware).
 // The token changes when the password version changes.
 
-const FALLBACK_JWT_SECRET = process.env.JWT_SECRET || 'dev-fallback-insecure-secret-change-me';
-
-async function getPasswordVersion(): Promise<number> {
-  try {
-    const setting = await prisma.setting.findUnique({ where: { key: 'authPasswordVersion' } });
-    return setting ? parseInt(setting.value, 10) || 1 : 1;
-  } catch {
-    return 1;
-  }
-}
-
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     res.setHeader('Allow', 'GET');
-    return res.status(405).json({ error: 'Method Not Allowed' });
+    return methodNotAllowed(res, req.method);
   }
   try {
     const version = await getPasswordVersion();

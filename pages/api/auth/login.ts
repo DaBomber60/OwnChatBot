@@ -5,17 +5,10 @@ import jwt from 'jsonwebtoken';
 import { getJwtSecret } from '../../../lib/jwtSecret';
 import { badRequest, serverError, unauthorized, methodNotAllowed, tooManyRequests } from '../../../lib/apiErrors';
 import { limiters, clientIp } from '../../../lib/rateLimit';
+import { getPasswordVersion } from '../../../lib/passwordVersion';
 
 
 // We now lazily obtain JWT secret (auto-generated & stored if absent)
-
-// Helper to get current password version (defaults to 1 if not set yet)
-async function getPasswordVersion(): Promise<number> {
-  const versionSetting = await prisma.setting.findUnique({ where: { key: 'authPasswordVersion' } });
-  if (!versionSetting) return 1;
-  const parsed = parseInt(versionSetting.value, 10);
-  return isNaN(parsed) ? 1 : parsed;
-}
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {

@@ -23,38 +23,9 @@ import {
   useSortable,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-
-const fetcher = (url: string) => fetch(url).then(res => res.json());
-
-type Character = {
-  id: number;
-  name: string;
-  profileName?: string;
-  bio?: string;
-  scenario: string;
-  personality: string;
-  firstMessage: string;
-  exampleDialogue: string;
-  groupId?: number | null;
-  sortOrder?: number;
-  group?: CharacterGroup | null;
-};
-
-type CharacterGroup = {
-  id: number;
-  name: string;
-  color: string;
-  isCollapsed: boolean;
-  sortOrder: number;
-  characters: Character[];
-};
-
-// Utility to render multiline text with paragraphs
-function renderMultiline(text: string) {
-  return text.split(/\r?\n/).map((line, idx) => (
-    <p key={idx} style={{ margin: '0.05rem 0' }}>{line}</p>
-  ));
-}
+import { fetcher } from '../../lib/fetcher';
+import type { Character, CharacterGroup } from '../../types/models';
+import { renderMultiline } from '../../components/RenderMultiline';
 
 // Utility to get preview text for character cards
 function getCharacterPreview(character: Character): { text: string; label: string } | null {
@@ -283,10 +254,10 @@ function SortableCharacterCard({
                       setEditName(character.name);
                       setEditProfileName(character.profileName || '');
                       setEditBio(character.bio || '');
-                      setEditScenario(character.scenario);
-                      setEditPersonality(character.personality);
-                      setEditFirstMessage(character.firstMessage);
-                      setEditExampleDialogue(character.exampleDialogue);
+                      setEditScenario(character.scenario || '');
+                      setEditPersonality(character.personality || '');
+                      setEditFirstMessage(character.firstMessage || '');
+                      setEditExampleDialogue(character.exampleDialogue || '');
                       closeMenu();
                     }}
                   >
@@ -502,28 +473,28 @@ function SortableCharacterCard({
               <div className="character-section" style={{ marginBottom: '0' }}>
                 <h4 className="character-section-title" style={{ marginBottom: '0.125rem' }}>Scenario</h4>
                 <div className="character-section-content">
-                  {renderMultiline(character.scenario)}
+                  {renderMultiline(character.scenario || '')}
                 </div>
               </div>
               
               <div className="character-section" style={{ marginBottom: '0' }}>
                 <h4 className="character-section-title" style={{ marginBottom: '0.125rem' }}>Personality</h4>
                 <div className="character-section-content">
-                  {renderMultiline(character.personality)}
+                  {renderMultiline(character.personality || '')}
                 </div>
               </div>
               
               <div className="character-section" style={{ marginBottom: '0' }}>
                 <h4 className="character-section-title" style={{ marginBottom: '0.125rem' }}>First Message</h4>
                 <div className="character-section-content">
-                  {renderMultiline(character.firstMessage)}
+                  {renderMultiline(character.firstMessage || '')}
                 </div>
               </div>
               
               <div className="character-section" style={{ marginBottom: '0' }}>
                 <h4 className="character-section-title" style={{ marginBottom: '0.125rem' }}>Example Dialogue</h4>
                 <div className="character-section-content">
-                  {renderMultiline(character.exampleDialogue)}
+                  {renderMultiline(character.exampleDialogue || '')}
                 </div>
               </div>
             </div>
@@ -852,10 +823,10 @@ export default function CharactersPage() {
     setName(character.name);
     setProfileName(character.profileName ? `${character.profileName} - [Clone]` : `${character.name} - [Clone]`);
     setBio(character.bio || '');
-    setScenario(character.scenario);
-    setPersonality(character.personality);
-    setFirstMessage(character.firstMessage);
-    setExampleDialogue(character.exampleDialogue);
+    setScenario(character.scenario || '');
+    setPersonality(character.personality || '');
+    setFirstMessage(character.firstMessage || '');
+    setExampleDialogue(character.exampleDialogue || '');
     
     // Open the create form and close the menu
     setIsAdding(true);

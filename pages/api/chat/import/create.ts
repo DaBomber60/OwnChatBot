@@ -1,6 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import prisma from '../../../../lib/prisma';
 import { requireAuth } from '../../../../lib/apiAuth';
+import { methodNotAllowed } from '../../../../lib/apiErrors';
 
 interface ChatMessage {
   role: 'user' | 'assistant';
@@ -25,7 +26,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!(await requireAuth(req, res))) return;
   if (req.method !== 'POST') {
     res.setHeader('Allow', ['POST']);
-    return res.status(405).end(`Method ${req.method} Not Allowed`);
+    return methodNotAllowed(res, req.method);
   }
 
   try {

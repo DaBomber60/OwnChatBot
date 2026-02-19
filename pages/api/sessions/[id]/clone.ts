@@ -1,6 +1,8 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import prisma from '../../../../lib/prisma';
 import { requireAuth } from '../../../../lib/apiAuth';
+import { methodNotAllowed } from '../../../../lib/apiErrors';
+import { parseId } from '../../../../lib/validate';
 
 // POST /api/sessions/:id/clone
 // Clones a session, duplicating: session row (summary, description, notes, lastSummary),
@@ -9,12 +11,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!(await requireAuth(req, res))) return;
   if (req.method !== 'POST') {
     res.setHeader('Allow', ['POST']);
-    return res.status(405).json({ error: `Method ${req.method} Not Allowed` });
+    return methodNotAllowed(res, req.method);
   }
 
-  const { id } = req.query;
-  const sessionId = parseInt(id as string, 10);
-  if (isNaN(sessionId)) {
+  const sessionId = parseId(req.query.id);
+  if (sessionId === null) {
     return res.status(400).json({ error: 'Invalid session ID' });
   }
 
