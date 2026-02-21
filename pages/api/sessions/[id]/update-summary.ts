@@ -3,7 +3,7 @@ import prisma from '../../../../lib/prisma';
 import { truncateMessagesIfNeeded } from '../../../../lib/messageUtils';
 import { requireAuth } from '../../../../lib/apiAuth';
 import { apiKeyNotConfigured, badRequest, methodNotAllowed, notFound, serverError } from '../../../../lib/apiErrors';
-import { getAIConfig, tokenFieldFor, normalizeTemperature, DEFAULT_FALLBACK_URL } from '../../../../lib/aiProvider';
+import { getAIConfig, tokenFieldFor, normalizeTemperature, DEFAULT_FALLBACK_URL, getTruncationLimit, getMaxTokens, getTemperature, getSummaryPrompt } from '../../../../lib/aiProvider';
 import { parseId } from '../../../../lib/validate';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -28,18 +28,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
   const { apiKey, url: upstreamUrl, model, provider, enableTemperature, tokenFieldOverride } = aiCfg as any;
 
-    // Get temperature setting from database
-    const temperatureSetting = await prisma.setting.findUnique({
-      where: { key: 'temperature' }
-    });
-    const temperature = temperatureSetting?.value ? parseFloat(temperatureSetting.value) : 0.7;
+    const temperature = await getTemperature();
 
-    // Get summary prompt from settings
-    const summaryPromptSetting = await prisma.setting.findUnique({
-      where: { key: 'summaryPrompt' }
-    });
-
-    const summaryPrompt = summaryPromptSetting?.value || 'Create a brief, focused summary (~100 words) of the roleplay between {{char}} and {{user}}. Include:\n\n- Key events and decisions\n- Important emotional moments\n- Location/time changes\n\nRules: Only summarize provided transcript. No speculation. Single paragraph format.';
+    const summaryPrompt = await getSummaryPrompt();
     
   // apiKey already extracted
 
@@ -115,15 +106,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       { role: 'user', content: summaryUserMessage }
     ];
 
-    // Truncate messages if needed to stay under token limits (settings-driven)
-    let truncationLimit = 150000;
-    try {
-      const maxCharsSetting = await prisma.setting.findUnique({ where: { key: 'maxCharacters' } });
-      if (maxCharsSetting?.value) {
-        const parsed = parseInt(maxCharsSetting.value);
-        if (!isNaN(parsed)) truncationLimit = Math.max(30000, Math.min(320000, parsed));
-      }
-    } catch {}
+    const truncationLimit = await getTruncationLimit();
     const truncationResult = truncateMessagesIfNeeded(allMessages, truncationLimit);
 
     // Add truncation note to system message if truncation occurred
@@ -134,14 +117,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
-    // Compute max_tokens first
-    let requestMaxTokens: number | undefined;
-    try {
-      const maxTokensSetting = await prisma.setting.findUnique({ where: { key: 'maxTokens' } });
-      const parsed = maxTokensSetting?.value ? parseInt(maxTokensSetting.value) : NaN;
-  const clamp = (n: number) => Math.max(256, Math.min(8192, n));
-      requestMaxTokens = !isNaN(parsed) ? clamp(parsed) : 4096;
-    } catch {}
+    const requestMaxTokens = await getMaxTokens();
 
   const tokenField = tokenFieldFor(provider, model, tokenFieldOverride);
   const normTemp = normalizeTemperature(provider, model, temperature, enableTemperature);

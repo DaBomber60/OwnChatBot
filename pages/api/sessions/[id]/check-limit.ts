@@ -4,6 +4,7 @@ import { truncateMessagesIfNeeded } from '../../../../lib/messageUtils';
 import { badRequest, methodNotAllowed, notFound, serverError } from '../../../../lib/apiErrors';
 import { requireAuth } from '../../../../lib/apiAuth';
 import { parseId } from '../../../../lib/validate';
+import { getTruncationLimit } from '../../../../lib/aiProvider';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!(await requireAuth(req, res))) return;
@@ -78,14 +79,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const totalCharacters = allMessages.reduce((sum, msg) => sum + msg.content.length, 0);
     // Use settings-based limit with defaults
-    let limit = 150000;
-    try {
-      const maxCharsSetting = await prisma.setting.findUnique({ where: { key: 'maxCharacters' } });
-      if (maxCharsSetting?.value) {
-        const parsed = parseInt(maxCharsSetting.value);
-        if (!isNaN(parsed)) limit = Math.max(30000, Math.min(320000, parsed));
-      }
-    } catch {}
+    const limit = await getTruncationLimit();
     const warningThreshold = Math.floor(limit * 0.9); // 90% of limit
     
   const isApproachingLimit = totalCharacters >= warningThreshold;

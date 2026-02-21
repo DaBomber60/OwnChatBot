@@ -124,3 +124,76 @@ export function normalizeTemperature(provider: AIProvider, model: string, reques
   const clamped = Math.max(0, Math.min(2, requested));
   return clamped;
 }
+
+// ---------------------------------------------------------------------------
+// Settings helpers — single source of truth for DB-backed AI settings.
+// Each returns a sensible default on missing/invalid data or DB error.
+// ---------------------------------------------------------------------------
+
+const DEFAULT_TRUNCATION_LIMIT = 150000;
+const TRUNCATION_MIN = 30000;
+const TRUNCATION_MAX = 320000;
+
+/** Read the max-characters truncation limit from settings. Default: 150 000. Clamped [30 000, 320 000]. */
+export async function getTruncationLimit(): Promise<number> {
+  try {
+    const row = await prisma.setting.findUnique({ where: { key: 'maxCharacters' } });
+    if (row?.value) {
+      const parsed = parseInt(row.value, 10);
+      if (!isNaN(parsed)) return Math.max(TRUNCATION_MIN, Math.min(TRUNCATION_MAX, parsed));
+    }
+  } catch { /* DB error — use default */ }
+  return DEFAULT_TRUNCATION_LIMIT;
+}
+
+const DEFAULT_MAX_TOKENS = 4096;
+const MAX_TOKENS_MIN = 256;
+const MAX_TOKENS_MAX = 8192;
+
+/** Clamp a max-tokens value to [min, 8192]. */
+export function clampMaxTokens(n: number, min = MAX_TOKENS_MIN): number {
+  return Math.max(min, Math.min(MAX_TOKENS_MAX, n));
+}
+
+/**
+ * Read the max-tokens setting from DB.
+ * @param opts.defaultValue — override default (default 4096)
+ * @param opts.min — override min clamp (default 256)
+ */
+export async function getMaxTokens(opts?: { defaultValue?: number; min?: number }): Promise<number> {
+  const def = opts?.defaultValue ?? DEFAULT_MAX_TOKENS;
+  const min = opts?.min ?? MAX_TOKENS_MIN;
+  try {
+    const row = await prisma.setting.findUnique({ where: { key: 'maxTokens' } });
+    if (row?.value) {
+      const parsed = parseInt(row.value, 10);
+      if (!isNaN(parsed)) return clampMaxTokens(parsed, min);
+    }
+  } catch { /* DB error — use default */ }
+  return def;
+}
+
+const DEFAULT_TEMPERATURE = 0.7;
+
+/** Read the temperature setting from DB. Default: 0.7. */
+export async function getTemperature(): Promise<number> {
+  try {
+    const row = await prisma.setting.findUnique({ where: { key: 'temperature' } });
+    if (row?.value) {
+      const parsed = parseFloat(row.value);
+      if (!isNaN(parsed)) return parsed;
+    }
+  } catch { /* DB error — use default */ }
+  return DEFAULT_TEMPERATURE;
+}
+
+const DEFAULT_SUMMARY_PROMPT = 'Create a brief, focused summary (~100 words) of the roleplay between {{char}} and {{user}}. Include:\n\n- Key events and decisions\n- Important emotional moments\n- Location/time changes\n\nRules: Only summarize provided transcript. No speculation. Single paragraph format.';
+
+/** Read the summary prompt from DB, with a sensible default. */
+export async function getSummaryPrompt(): Promise<string> {
+  try {
+    const row = await prisma.setting.findUnique({ where: { key: 'summaryPrompt' } });
+    if (row?.value) return row.value;
+  } catch { /* DB error — use default */ }
+  return DEFAULT_SUMMARY_PROMPT;
+}

@@ -3,7 +3,7 @@ import prisma from '../../../lib/prisma';
 import { truncateMessagesIfNeeded } from '../../../lib/messageUtils';
 import { requireAuth } from '../../../lib/apiAuth';
 import { apiKeyNotConfigured, badRequest, methodNotAllowed, notFound, serverError, tooManyRequests, payloadTooLarge } from '../../../lib/apiErrors';
-import { getAIConfig, tokenFieldFor, normalizeTemperature, DEFAULT_FALLBACK_URL } from '../../../lib/aiProvider';
+import { getAIConfig, tokenFieldFor, normalizeTemperature, DEFAULT_FALLBACK_URL, getTruncationLimit, getMaxTokens, clampMaxTokens } from '../../../lib/aiProvider';
 import { limiters, clientIp } from '../../../lib/rateLimit';
 import { enforceBodySize } from '../../../lib/bodyLimit';
 const CONTINUE_PREFIX = '[SYSTEM NOTE: Ignore this message';
@@ -153,16 +153,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   console.log(`[Truncation] Before truncation (without continuation directive): ${baseMessages.length} messages, ${totalCharsPre} total characters`);
 
   // Determine truncation limit from settings (fallback 150k)
-  let truncationLimit = 150000;
-  try {
-    const maxCharsSetting = await prisma.setting.findUnique({ where: { key: 'maxCharacters' } });
-    if (maxCharsSetting?.value) {
-      const parsed = parseInt(maxCharsSetting.value);
-      if (!isNaN(parsed)) {
-        truncationLimit = Math.max(30000, Math.min(320000, parsed));
-      }
-    }
-  } catch {}
+  const truncationLimit = await getTruncationLimit();
 
   const truncationResult = truncateMessagesIfNeeded(baseMessages, truncationLimit);
   console.log(`[Truncation] After truncation (still without continuation directive): ${truncationResult.messages.length} messages`);
@@ -184,16 +175,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   // Compute max_tokens first so we can include it before messages
+  const dbMaxTokens = await getMaxTokens();
   let computedMaxTokens: number | undefined;
-  try {
-    const maxTokensSetting = await prisma.setting.findUnique({ where: { key: 'maxTokens' } });
-    const parsed = maxTokensSetting?.value ? parseInt(maxTokensSetting.value) : NaN;
-  const clamp = (n: number) => Math.max(256, Math.min(8192, n));
-    const defaultMaxTokens = !isNaN(parsed) ? clamp(parsed) : 4096;
-    computedMaxTokens = typeof maxTokens === 'number'
-      ? clamp(maxTokens)
-      : (typeof maxTokens === 'string' ? clamp(parseInt(maxTokens)) : defaultMaxTokens);
-  } catch {}
+  if (typeof maxTokens === 'number') {
+    computedMaxTokens = clampMaxTokens(maxTokens);
+  } else if (typeof maxTokens === 'string') {
+    const parsed = parseInt(maxTokens, 10);
+    computedMaxTokens = isNaN(parsed) ? dbMaxTokens : clampMaxTokens(parsed);
+  } else {
+    computedMaxTokens = dbMaxTokens;
+  }
 
   const tokenField = tokenFieldFor(provider, model, tokenFieldOverride);
   const normTemp = normalizeTemperature(provider, model, temperature, enableTemperature);

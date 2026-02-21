@@ -6,7 +6,7 @@ import { apiKeyNotConfigured, badRequest, conflict, methodNotAllowed, notFound, 
 import { limiters, clientIp } from '../../../../lib/rateLimit';
 import { enforceBodySize } from '../../../../lib/bodyLimit';
 import { schemas, validateBody, parseId } from '../../../../lib/validate';
-import { getAIConfig, tokenFieldFor, normalizeTemperature } from '../../../../lib/aiProvider';
+import { getAIConfig, tokenFieldFor, normalizeTemperature, getTruncationLimit, getMaxTokens, getTemperature } from '../../../../lib/aiProvider';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!(await requireAuth(req, res))) return;
@@ -147,11 +147,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const { apiKey, url: upstreamUrl, model, provider, enableTemperature, tokenFieldOverride } = aiCfg as any;
 
   // Determine temperature: optional per-request override, else from database setting
-  const temperatureSetting = await prisma.setting.findUnique({ where: { key: 'temperature' } });
-  const defaultTemperature = temperatureSetting?.value ? parseFloat(temperatureSetting.value) : 0.7;
+  const defaultTemperature = await getTemperature();
   const parsedOverride = typeof bodyTemperature === 'string' ? parseFloat(bodyTemperature) : (typeof bodyTemperature === 'number' ? bodyTemperature : NaN);
-  const clamp = (n: number) => Math.max(0, Math.min(2, n)); // model supports 0..2 typical
-  const temperature = isNaN(parsedOverride) ? defaultTemperature : clamp(parsedOverride);
+  const temperature = isNaN(parsedOverride) ? defaultTemperature : Math.max(0, Math.min(2, parsedOverride));
 
       // Build the conversation context (messages before this one) - fetch full history explicitly
   const previousMessages = await prisma.chatMessage.findMany({
@@ -231,14 +229,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       ];
 
       // Truncate messages if needed to stay under token limits (settings-driven)
-      let truncationLimit = 150000;
-      try {
-        const maxCharsSetting = await prisma.setting.findUnique({ where: { key: 'maxCharacters' } });
-        if (maxCharsSetting?.value) {
-          const parsed = parseInt(maxCharsSetting.value);
-          if (!isNaN(parsed)) truncationLimit = Math.max(30000, Math.min(320000, parsed));
-        }
-      } catch {}
+      const truncationLimit = await getTruncationLimit();
       const truncationResult = truncateMessagesIfNeeded(allMessages, truncationLimit);
 
       // Add truncation note to system message if truncation occurred
@@ -250,13 +241,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
 
       // Compute max_tokens first and include it before messages
-      let requestMaxTokens: number | undefined;
-      try {
-        const maxTokensSetting = await prisma.setting.findUnique({ where: { key: 'maxTokens' } });
-        const parsed = maxTokensSetting?.value ? parseInt(maxTokensSetting.value) : NaN;
-  const clamp = (n: number) => Math.max(256, Math.min(8192, n));
-        requestMaxTokens = !isNaN(parsed) ? clamp(parsed) : 4096;
-      } catch {}
+      const requestMaxTokens = await getMaxTokens();
 
       // Prepare API request with ordering: model, temperature, stream, max_tokens, messages
   const tokenField = tokenFieldFor(provider, model, tokenFieldOverride);

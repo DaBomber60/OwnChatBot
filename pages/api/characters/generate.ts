@@ -1,7 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { requireAuth } from '../../../lib/apiAuth';
 import { apiKeyNotConfigured, badRequest, methodNotAllowed, serverError } from '../../../lib/apiErrors';
-import { getAIConfig, tokenFieldFor, normalizeTemperature, DEFAULT_FALLBACK_URL } from '../../../lib/aiProvider';
+import { getAIConfig, tokenFieldFor, normalizeTemperature, DEFAULT_FALLBACK_URL, getTemperature, getMaxTokens } from '../../../lib/aiProvider';
 import prisma from '../../../lib/prisma';
 import { schemas, validateBody } from '../../../lib/validate';
 import { z } from 'zod';
@@ -48,15 +48,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
     const { apiKey, url: upstreamUrl, model, provider, enableTemperature, tokenFieldOverride } = aiCfg as any;
 
-    // Pull optional temperature setting
-    let temperature = 0.7;
-    try {
-      const setting = await prisma.setting.findUnique({ where: { key: 'temperature' } });
-      if (setting?.value) {
-        const t = parseFloat(setting.value);
-        if (!isNaN(t)) temperature = t;
-      }
-    } catch {}
+    const temperature = await getTemperature();
 
     const tokenField = tokenFieldFor(provider, model, tokenFieldOverride);
     const normTemp = normalizeTemperature(provider, model, temperature, enableTemperature);
@@ -88,14 +80,7 @@ Perspective: ${perspective.toUpperCase()} POV. ${perspectiveLine}
     ];
 
     // Token limit logic similar to other endpoints
-    let requestMaxTokens: number | undefined = 2048;
-    try {
-      const maxTokensSetting = await prisma.setting.findUnique({ where: { key: 'maxTokens' } });
-      if (maxTokensSetting?.value) {
-        const parsed = parseInt(maxTokensSetting.value);
-        if (!isNaN(parsed)) requestMaxTokens = Math.max(512, Math.min(8192, parsed));
-      }
-    } catch {}
+    const requestMaxTokens = await getMaxTokens({ defaultValue: 2048, min: 512 });
 
     const bodyPayload: any = {
       model,
