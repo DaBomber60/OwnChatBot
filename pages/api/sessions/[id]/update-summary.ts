@@ -1,11 +1,12 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import prisma from '../../../../lib/prisma';
-import { truncateMessagesIfNeeded } from '../../../../lib/messageUtils';
+import { truncateMessagesIfNeeded, injectTruncationNote } from '../../../../lib/messageUtils';
 import { requireAuth } from '../../../../lib/apiAuth';
 import { apiKeyNotConfigured, badRequest, methodNotAllowed, notFound, serverError } from '../../../../lib/apiErrors';
-import { getAIConfig, tokenFieldFor, normalizeTemperature, DEFAULT_FALLBACK_URL, type AIConfig } from '../../../../lib/aiProvider';
+import { getAIConfig, tokenFieldFor, normalizeTemperature, type AIConfig } from '../../../../lib/aiProvider';
 import { parseId } from '../../../../lib/validate';
 import { buildSystemPrompt, replacePlaceholders } from '../../../../lib/systemPrompt';
+import { callUpstreamAI } from '../../../../lib/upstreamAI';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!(await requireAuth(req, res))) return;
@@ -85,13 +86,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const truncationResult = truncateMessagesIfNeeded(allMessages, truncationLimit);
 
-    // Add truncation note to system message if truncation occurred
-    if (truncationResult.wasTruncated) {
-      const systemMessage = truncationResult.messages[0];
-      if (systemMessage && systemMessage.role === 'system') {
-        systemMessage.content += '\n\n<truncation_note>The earliest messages of this conversation have been truncated for token count reasons, please see summary section above for any lost detail</truncation_note>';
-      }
-    }
+    injectTruncationNote(truncationResult);
 
   const tokenField = tokenFieldFor(provider, model, tokenFieldOverride);
   const normTemp = normalizeTemperature(provider, model, temperature, enableTemperature);
@@ -104,21 +99,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     };
 
     // Call API
-    const apiRes = await fetch(upstreamUrl || DEFAULT_FALLBACK_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`
-      },
-      body: JSON.stringify(body)
-    });
+    const upstream = await callUpstreamAI({ url: upstreamUrl, apiKey, body });
 
-    if (!apiRes.ok) {
-      const errorText = await apiRes.text();
-      return serverError(res, `API request failed: ${errorText}`, 'UPSTREAM_API_ERROR');
+    if (!upstream.ok) {
+      return serverError(res, `API request failed: ${upstream.rawText || 'Unknown error'}`, 'UPSTREAM_API_ERROR');
     }
 
-    const data = await apiRes.json();
+    const data = upstream.data;
 
     if (!data.choices || !data.choices[0]?.message?.content) {
       return serverError(res, 'Invalid API response format', 'INVALID_UPSTREAM_FORMAT');

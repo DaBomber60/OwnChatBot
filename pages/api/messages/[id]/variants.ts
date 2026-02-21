@@ -1,7 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import prisma from '../../../../lib/prisma';
 import { buildSystemPrompt } from '../../../../lib/systemPrompt';
-import { truncateMessagesIfNeeded } from '../../../../lib/messageUtils';
+import { truncateMessagesIfNeeded, injectTruncationNote } from '../../../../lib/messageUtils';
 import { requireAuth } from '../../../../lib/apiAuth';
 import { apiKeyNotConfigured, badRequest, conflict, methodNotAllowed, notFound, serverError, validationError, tooManyRequests } from '../../../../lib/apiErrors';
 import { limiters, clientIp } from '../../../../lib/rateLimit';
@@ -202,13 +202,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       // Truncate messages if needed to stay under token limits (from batched AI config)
       const truncationResult = truncateMessagesIfNeeded(allMessages, truncationLimit);
 
-      // Add truncation note to system message if truncation occurred
-      if (truncationResult.wasTruncated) {
-        const systemMessage = truncationResult.messages[0];
-        if (systemMessage && systemMessage.role === 'system') {
-          systemMessage.content += '\n\n<truncation_note>The earliest messages of this conversation have been truncated for token count reasons, please see summary section above for any lost detail</truncation_note>';
-        }
-      }
+      injectTruncationNote(truncationResult);
 
       // Use max_tokens from batched AI config
       const requestMaxTokens = cfgMaxTokens;

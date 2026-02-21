@@ -78,3 +78,18 @@ export function truncateMessagesIfNeeded(
     removedCount 
   };
 }
+
+const TRUNCATION_NOTE = '\n\n<truncation_note>The earliest messages of this conversation have been truncated for token count reasons, please see summary section above for any lost detail</truncation_note>';
+
+/**
+ * Inject a truncation note into the system message after truncation.
+ * Mutates the messages array in-place. No-op if truncation didn't occur
+ * or the first message isn't a system message.
+ */
+export function injectTruncationNote(result: { messages: MessageForTruncation[]; wasTruncated: boolean }): void {
+  if (!result.wasTruncated) return;
+  const systemMessage = result.messages[0];
+  if (systemMessage && systemMessage.role === 'system') {
+    systemMessage.content += TRUNCATION_NOTE;
+  }
+}

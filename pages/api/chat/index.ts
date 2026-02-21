@@ -1,7 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import prisma from '../../../lib/prisma';
 import { buildSystemPrompt } from '../../../lib/systemPrompt';
-import { truncateMessagesIfNeeded } from '../../../lib/messageUtils';
+import { truncateMessagesIfNeeded, injectTruncationNote } from '../../../lib/messageUtils';
 import { requireAuth } from '../../../lib/apiAuth';
 import { apiKeyNotConfigured, badRequest, methodNotAllowed, notFound, serverError, tooManyRequests, payloadTooLarge } from '../../../lib/apiErrors';
 import { getAIConfig, tokenFieldFor, normalizeTemperature, DEFAULT_FALLBACK_URL, clampMaxTokens } from '../../../lib/aiProvider';
@@ -128,14 +128,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const truncationResult = truncateMessagesIfNeeded(baseMessages, truncationLimit);
   console.log(`[Truncation] After truncation (still without continuation directive): ${truncationResult.messages.length} messages`);
   if (truncationResult.wasTruncated) {
-  console.log(`[Truncation] Truncated ${truncationResult.removedCount} messages`);
-    
-    // Add truncation note to system message if truncation occurred
-    const systemMessage = truncationResult.messages[0];
-    if (systemMessage && systemMessage.role === 'system') {
-      systemMessage.content += '\n\n<truncation_note>The earliest messages of this conversation have been truncated for token count reasons, please see summary section above for any lost detail</truncation_note>';
-    }
+    console.log(`[Truncation] Truncated ${truncationResult.removedCount} messages`);
   }
+  injectTruncationNote(truncationResult);
 
   // Now, if this is a continuation request, append the ephemeral continuation directive as the LAST message.
   // This guarantees it's kept (not subject to truncation) and not prefixed with persona name.

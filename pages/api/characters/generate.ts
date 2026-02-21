@@ -1,8 +1,9 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { requireAuth } from '../../../lib/apiAuth';
 import { apiKeyNotConfigured, badRequest, methodNotAllowed, serverError } from '../../../lib/apiErrors';
-import { getAIConfig, tokenFieldFor, normalizeTemperature, DEFAULT_FALLBACK_URL, getMaxTokens } from '../../../lib/aiProvider';
+import { getAIConfig, tokenFieldFor, normalizeTemperature, getMaxTokens } from '../../../lib/aiProvider';
 import type { AIConfig } from '../../../lib/aiProvider';
+import { callUpstreamAI } from '../../../lib/upstreamAI';
 import prisma from '../../../lib/prisma';
 import { schemas, validateBody } from '../../../lib/validate';
 import { z } from 'zod';
@@ -91,21 +92,13 @@ Perspective: ${perspective.toUpperCase()} POV. ${perspectiveLine}
       messages
     };
 
-    const upstreamRes = await fetch(upstreamUrl || DEFAULT_FALLBACK_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`
-      },
-      body: JSON.stringify(bodyPayload)
-    });
+    const upstream = await callUpstreamAI({ url: upstreamUrl, apiKey, body: bodyPayload });
 
-    if (!upstreamRes.ok) {
-      const text = await upstreamRes.text();
-      return serverError(res, 'Generation API error: ' + text, 'UPSTREAM_API_ERROR');
+    if (!upstream.ok) {
+      return serverError(res, 'Generation API error: ' + (upstream.rawText || 'Unknown error'), 'UPSTREAM_API_ERROR');
     }
 
-    const data = await upstreamRes.json();
+    const data = upstream.data;
     const content: string | undefined = data?.choices?.[0]?.message?.content;
     if (!content) return serverError(res, 'Malformed upstream response', 'INVALID_UPSTREAM');
 
