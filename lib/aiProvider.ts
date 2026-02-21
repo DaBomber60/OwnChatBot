@@ -18,6 +18,11 @@ export interface AIConfig {
   model: string;          // Model name sent upstream
   tokenFieldOverride?: string; // User override for max token field name
   enableTemperature?: boolean; // User toggle for including temperature param
+  // Batched settings — fetched in the same query to avoid extra DB round-trips
+  temperature: number;        // Default 0.7
+  maxTokens: number;          // Default 4096, clamped [256, 8192]
+  truncationLimit: number;    // Default 150000, clamped [30000, 320000]
+  summaryPrompt: string;      // Default long prompt
 }
 
 export const DEFAULT_FALLBACK_URL = 'https://api.deepseek.com/chat/completions';
@@ -33,7 +38,8 @@ const PRESET_CONFIG: Record<Exclude<AIProvider, 'custom'>, { url: string; model:
 };
 
 export async function getAIConfig(): Promise<AIConfig | { error: string; code: string }> {
-  // Pull all potentially relevant settings in a single query to reduce latency.
+  // Pull ALL relevant settings in a single query — includes AI provider config
+  // plus temperature, maxTokens, maxCharacters, and summaryPrompt to avoid extra round-trips.
   const rows = await prisma.setting.findMany({
     where: { key: { in: [
       'apiKey', // legacy / fallback
@@ -43,7 +49,9 @@ export async function getAIConfig(): Promise<AIConfig | { error: string; code: s
       'apiKey_anthropic',
       'apiKey_custom',
       'aiProvider', 'apiBaseUrl', 'modelName',
-      'modelEnableTemperature', 'maxTokenFieldName'
+      'modelEnableTemperature', 'maxTokenFieldName',
+      // Batched settings (previously separate queries)
+      'temperature', 'maxTokens', 'maxCharacters', 'summaryPrompt'
     ] } }
   });
   const map: RawSettingsMap = {};
@@ -87,7 +95,18 @@ export async function getAIConfig(): Promise<AIConfig | { error: string; code: s
     : map.modelEnableTemperature === 'true';
   const tokenFieldOverride = (map.maxTokenFieldName || '').trim() || undefined;
 
-  return { apiKey, provider, url, model, enableTemperature, tokenFieldOverride };
+  // Parse batched settings from the same query
+  const temperature = map.temperature ? parseFloat(map.temperature) : NaN;
+  const maxTokensRaw = map.maxTokens ? parseInt(map.maxTokens, 10) : NaN;
+  const maxCharsRaw = map.maxCharacters ? parseInt(map.maxCharacters, 10) : NaN;
+
+  return {
+    apiKey, provider, url, model, enableTemperature, tokenFieldOverride,
+    temperature: !isNaN(temperature) ? temperature : DEFAULT_TEMPERATURE,
+    maxTokens: !isNaN(maxTokensRaw) ? clampMaxTokens(maxTokensRaw) : DEFAULT_MAX_TOKENS,
+    truncationLimit: !isNaN(maxCharsRaw) ? Math.max(TRUNCATION_MIN, Math.min(TRUNCATION_MAX, maxCharsRaw)) : DEFAULT_TRUNCATION_LIMIT,
+    summaryPrompt: map.summaryPrompt || DEFAULT_SUMMARY_PROMPT,
+  };
 }
 
 // Lightweight helper to lazily fetch at call sites while preserving existing error flows.

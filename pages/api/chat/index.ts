@@ -3,7 +3,8 @@ import prisma from '../../../lib/prisma';
 import { truncateMessagesIfNeeded } from '../../../lib/messageUtils';
 import { requireAuth } from '../../../lib/apiAuth';
 import { apiKeyNotConfigured, badRequest, methodNotAllowed, notFound, serverError, tooManyRequests, payloadTooLarge } from '../../../lib/apiErrors';
-import { getAIConfig, tokenFieldFor, normalizeTemperature, DEFAULT_FALLBACK_URL, getTruncationLimit, getMaxTokens, clampMaxTokens } from '../../../lib/aiProvider';
+import { getAIConfig, tokenFieldFor, normalizeTemperature, DEFAULT_FALLBACK_URL, clampMaxTokens } from '../../../lib/aiProvider';
+import type { AIConfig } from '../../../lib/aiProvider';
 import { limiters, clientIp } from '../../../lib/rateLimit';
 import { enforceBodySize } from '../../../lib/bodyLimit';
 const CONTINUE_PREFIX = '[SYSTEM NOTE: Ignore this message';
@@ -31,7 +32,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (aiCfg.code === 'NO_API_KEY') return apiKeyNotConfigured(res);
     return serverError(res, aiCfg.error, aiCfg.code);
   }
-  const { apiKey, url: upstreamUrl, model, provider, enableTemperature, tokenFieldOverride } = aiCfg as any;
+  const { apiKey, url: upstreamUrl, model, provider, enableTemperature, tokenFieldOverride, temperature: cfgTemperature, maxTokens: cfgMaxTokens, truncationLimit } = aiCfg as AIConfig;
   // accept sessionId for existing chats, otherwise personaId and characterId to create new session
   const {
     sessionId,
@@ -152,9 +153,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const totalCharsPre = baseMessages.reduce((sum, msg) => sum + msg.content.length, 0);
   console.log(`[Truncation] Before truncation (without continuation directive): ${baseMessages.length} messages, ${totalCharsPre} total characters`);
 
-  // Determine truncation limit from settings (fallback 150k)
-  const truncationLimit = await getTruncationLimit();
-
+  // Truncation limit from batched AI config (fallback 150k)
   const truncationResult = truncateMessagesIfNeeded(baseMessages, truncationLimit);
   console.log(`[Truncation] After truncation (still without continuation directive): ${truncationResult.messages.length} messages`);
   if (truncationResult.wasTruncated) {
@@ -174,16 +173,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     truncationResult.messages.push({ role: 'user', content: userMessage });
   }
 
-  // Compute max_tokens first so we can include it before messages
-  const dbMaxTokens = await getMaxTokens();
+  // Compute max_tokens: use per-request override from body, else batched config value
   let computedMaxTokens: number | undefined;
   if (typeof maxTokens === 'number') {
     computedMaxTokens = clampMaxTokens(maxTokens);
   } else if (typeof maxTokens === 'string') {
     const parsed = parseInt(maxTokens, 10);
-    computedMaxTokens = isNaN(parsed) ? dbMaxTokens : clampMaxTokens(parsed);
+    computedMaxTokens = isNaN(parsed) ? cfgMaxTokens : clampMaxTokens(parsed);
   } else {
-    computedMaxTokens = dbMaxTokens;
+    computedMaxTokens = cfgMaxTokens;
   }
 
   const tokenField = tokenFieldFor(provider, model, tokenFieldOverride);

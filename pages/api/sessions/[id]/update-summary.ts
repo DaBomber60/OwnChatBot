@@ -3,7 +3,7 @@ import prisma from '../../../../lib/prisma';
 import { truncateMessagesIfNeeded } from '../../../../lib/messageUtils';
 import { requireAuth } from '../../../../lib/apiAuth';
 import { apiKeyNotConfigured, badRequest, methodNotAllowed, notFound, serverError } from '../../../../lib/apiErrors';
-import { getAIConfig, tokenFieldFor, normalizeTemperature, DEFAULT_FALLBACK_URL, getTruncationLimit, getMaxTokens, getTemperature, getSummaryPrompt } from '../../../../lib/aiProvider';
+import { getAIConfig, tokenFieldFor, normalizeTemperature, DEFAULT_FALLBACK_URL, type AIConfig } from '../../../../lib/aiProvider';
 import { parseId } from '../../../../lib/validate';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -26,13 +26,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (aiCfg.code === 'NO_API_KEY') return apiKeyNotConfigured(res);
       return serverError(res, aiCfg.error, aiCfg.code);
     }
-  const { apiKey, url: upstreamUrl, model, provider, enableTemperature, tokenFieldOverride } = aiCfg as any;
-
-    const temperature = await getTemperature();
-
-    const summaryPrompt = await getSummaryPrompt();
-    
-  // apiKey already extracted
+  const { apiKey, url: upstreamUrl, model, provider, enableTemperature, tokenFieldOverride, temperature, maxTokens: requestMaxTokens, truncationLimit, summaryPrompt } = aiCfg as AIConfig;
 
     // Load session details
     const session = await prisma.chatSession.findUnique({
@@ -106,7 +100,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       { role: 'user', content: summaryUserMessage }
     ];
 
-    const truncationLimit = await getTruncationLimit();
     const truncationResult = truncateMessagesIfNeeded(allMessages, truncationLimit);
 
     // Add truncation note to system message if truncation occurred
@@ -116,8 +109,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         systemMessage.content += '\n\n<truncation_note>The earliest messages of this conversation have been truncated for token count reasons, please see summary section above for any lost detail</truncation_note>';
       }
     }
-
-    const requestMaxTokens = await getMaxTokens();
 
   const tokenField = tokenFieldFor(provider, model, tokenFieldOverride);
   const normTemp = normalizeTemperature(provider, model, temperature, enableTemperature);

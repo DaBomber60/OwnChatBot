@@ -6,7 +6,8 @@ import { apiKeyNotConfigured, badRequest, conflict, methodNotAllowed, notFound, 
 import { limiters, clientIp } from '../../../../lib/rateLimit';
 import { enforceBodySize } from '../../../../lib/bodyLimit';
 import { schemas, validateBody, parseId } from '../../../../lib/validate';
-import { getAIConfig, tokenFieldFor, normalizeTemperature, getTruncationLimit, getMaxTokens, getTemperature } from '../../../../lib/aiProvider';
+import { getAIConfig, tokenFieldFor, normalizeTemperature } from '../../../../lib/aiProvider';
+import type { AIConfig } from '../../../../lib/aiProvider';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!(await requireAuth(req, res))) return;
@@ -144,12 +145,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (aiCfg.code === 'NO_API_KEY') return apiKeyNotConfigured(res);
         return serverError(res, aiCfg.error, aiCfg.code);
       }
-  const { apiKey, url: upstreamUrl, model, provider, enableTemperature, tokenFieldOverride } = aiCfg as any;
+  const { apiKey, url: upstreamUrl, model, provider, enableTemperature, tokenFieldOverride, temperature: cfgTemperature, maxTokens: cfgMaxTokens, truncationLimit } = aiCfg as AIConfig;
 
-  // Determine temperature: optional per-request override, else from database setting
-  const defaultTemperature = await getTemperature();
+  // Determine temperature: optional per-request override, else from batched config
   const parsedOverride = typeof bodyTemperature === 'string' ? parseFloat(bodyTemperature) : (typeof bodyTemperature === 'number' ? bodyTemperature : NaN);
-  const temperature = isNaN(parsedOverride) ? defaultTemperature : Math.max(0, Math.min(2, parsedOverride));
+  const temperature = isNaN(parsedOverride) ? cfgTemperature : Math.max(0, Math.min(2, parsedOverride));
 
       // Build the conversation context (messages before this one) - fetch full history explicitly
   const previousMessages = await prisma.chatMessage.findMany({
@@ -228,8 +228,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         ...formattedPreviousMessages
       ];
 
-      // Truncate messages if needed to stay under token limits (settings-driven)
-      const truncationLimit = await getTruncationLimit();
+      // Truncate messages if needed to stay under token limits (from batched AI config)
       const truncationResult = truncateMessagesIfNeeded(allMessages, truncationLimit);
 
       // Add truncation note to system message if truncation occurred
@@ -240,8 +239,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
       }
 
-      // Compute max_tokens first and include it before messages
-      const requestMaxTokens = await getMaxTokens();
+      // Use max_tokens from batched AI config
+      const requestMaxTokens = cfgMaxTokens;
 
       // Prepare API request with ordering: model, temperature, stream, max_tokens, messages
   const tokenField = tokenFieldFor(provider, model, tokenFieldOverride);
