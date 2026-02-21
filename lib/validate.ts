@@ -51,31 +51,31 @@ export const schemas = {
     content: z.string().trim().min(1).max(8000)
   }),
   updateSessionDescription: z.object({
-    description: z.string().trim().max(2000)
+    description: z.string().trim().max(200000)
   }),
   createPersona: z.object({
-    name: z.string().trim().min(1).max(100),
+    name: z.string().trim().min(1).max(200),
     profile: z.string().trim().min(1),
-    profileName: z.string().trim().max(100).optional().or(z.literal('').transform(() => undefined))
+    profileName: z.string().trim().max(200).optional().or(z.literal('').transform(() => undefined))
   }),
   updatePersona: z.object({
-    name: z.string().trim().min(1).max(100),
+    name: z.string().trim().min(1).max(200),
     profile: z.string().trim().min(1),
-    profileName: z.string().trim().max(100).nullable().optional()
+    profileName: z.string().trim().max(200).nullable().optional()
   }),
   createCharacterGroup: z.object({
-    name: z.string().trim().min(1).max(100),
+    name: z.string().trim().min(1).max(200),
     color: z.string().regex(/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/).optional()
   }),
   updateCharacterGroup: z.object({
-    name: z.string().trim().min(1).max(100).optional(),
+    name: z.string().trim().min(1).max(200).optional(),
     color: z.string().regex(/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/).optional(),
     isCollapsed: z.boolean().optional()
   }),
   createCharacter: z.object({
-    name: z.string().trim().min(1).max(100),
+    name: z.string().trim().min(1).max(200),
     // Accept missing or empty string profileName (treat empty as undefined)
-    profileName: z.string().trim().max(100).optional().or(z.literal('').transform(() => undefined)),
+    profileName: z.string().trim().max(200).optional().or(z.literal('').transform(() => undefined)),
     bio: z.string().max(CHARACTER_LIMITS.bio).optional(),
     scenario: z.string().max(CHARACTER_LIMITS.scenario).optional().default(''),
     personality: z.string().max(CHARACTER_LIMITS.personality).optional().default(''),
@@ -86,17 +86,17 @@ export const schemas = {
       .transform((v: number | null | undefined) => (v == null ? undefined : v))
   }),
   generateCharacter: z.object({
-    name: z.string().trim().min(1).max(100),
-    profileName: z.string().trim().max(100).optional().or(z.literal('').transform(() => undefined)),
+    name: z.string().trim().min(1).max(200),
+    profileName: z.string().trim().max(200).optional().or(z.literal('').transform(() => undefined)),
     description: z.string().trim().min(10).max(3000),
     // Sliders: only include keys that are not AUTO
     sliders: z.record(z.string(), z.number().min(0).max(100)).optional(),
     perspective: z.enum(['first','third']).optional().default('first')
   }),
   updateCharacter: z.object({
-    name: z.string().trim().min(1).max(100),
+    name: z.string().trim().min(1).max(200),
     // Accept empty string or null -> undefined for easier client handling
-    profileName: z.string().trim().max(100).optional().or(z.literal('').transform(() => undefined)).nullable()
+    profileName: z.string().trim().max(200).optional().or(z.literal('').transform(() => undefined)).nullable()
       .transform((v: string | null | undefined) => v === null || v === '' ? undefined : v),
     bio: z.string().max(CHARACTER_LIMITS.bio).optional().or(z.literal('').transform(() => undefined)).nullable()
       .transform((v: string | null | undefined) => v === null || v === '' ? undefined : v),
@@ -118,10 +118,10 @@ export const schemas = {
     action: z.literal('rollback_stopped_variant')
   }),
   notesUpdate: z.object({
-    notes: z.string().max(10000)
+    notes: z.string().max(1000000)
   }),
   summaryUpdate: z.object({
-    summary: z.string().max(20000)
+    summary: z.string().max(2000000)
   }),
   authSetup: z.object({
     password: z.string()
