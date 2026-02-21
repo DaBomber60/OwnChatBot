@@ -5,6 +5,19 @@ import useSWR from 'swr';
 import Head from 'next/head';
 import { fetcher } from '../../lib/fetcher';
 import { useClickOutside } from '../../hooks/useClickOutside';
+import { useNotes } from '../../hooks/chat/useNotes';
+import { useSummary } from '../../hooks/chat/useSummary';
+import { useChatScroll } from '../../hooks/chat/useChatScroll';
+import { ChatHeader } from '../../components/chat/ChatHeader';
+import { ChatInput } from '../../components/chat/ChatInput';
+import { SummaryModal } from '../../components/chat/SummaryModal';
+import { NotesOverlayModal, NotesSidecar } from '../../components/chat/NotesPanel';
+import { DeleteConfirmModal } from '../../components/chat/DeleteConfirmModal';
+import { ErrorModal } from '../../components/chat/ErrorModal';
+import { VariantTempPopover } from '../../components/chat/VariantTempPopover';
+import { readSSEStream, isSSEResponse, performStreamingRequest } from '../../lib/chat/streamSSE';
+import { fetchChatSettings } from '../../lib/chat/chatSettings';
+import { safeJson, sanitizeErrorMessage, extractUsefulError, extractErrorFromResponse } from '../../lib/chat/errorUtils';
 import type { ChatMessage, Message, MessageVersion, SessionData } from '../../types/models';
 
 const INITIAL_PAGE_SIZE = 20; // messages for initial load
@@ -56,15 +69,6 @@ export default function ChatSessionPage() {
   const [currentVariantIndex, setCurrentVariantIndex] = useState<Map<number, number>>(new Map());
   const [generatingVariant, setGeneratingVariant] = useState<number | null>(null);
   const [variantDisplayContent, setVariantDisplayContent] = useState<Map<number, string>>(new Map());
-  const [showSummaryModal, setShowSummaryModal] = useState(false);
-  const [summaryContent, setSummaryContent] = useState('');
-  const [savingSummary, setSavingSummary] = useState(false);
-  const [generatingSummary, setGeneratingSummary] = useState(false);
-  const [updatingSummary, setUpdatingSummary] = useState(false);
-  const [showNotesModal, setShowNotesModal] = useState(false);
-  const [notesContent, setNotesContent] = useState('');
-  const [originalNotesContent, setOriginalNotesContent] = useState('');
-  const [savingNotes, setSavingNotes] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [deleteMessageIndex, setDeleteMessageIndex] = useState<number | null>(null);
   // Variant temperature popover state
@@ -79,34 +83,20 @@ export default function ChatSessionPage() {
   const [isWideScreen, setIsWideScreen] = useState(false);
   const [isNarrowScreen, setIsNarrowScreen] = useState(false);
   const [isBurgerMenuOpen, setIsBurgerMenuOpen] = useState(false);
-  const [showScrollToLatest, setShowScrollToLatest] = useState(false); // show jump-to-bottom button
   const headerRef = useRef<HTMLElement>(null);
   const [headerHeight, setHeaderHeight] = useState(112); // Initial estimate: 80px header + 32px gap
   const streamingMessageRef = useRef<string>('');
   const containerRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const editTextareaRef = useRef<HTMLTextAreaElement>(null);
-  const lastScrollTime = useRef<number>(0);
-  const scrollTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const skipNextScroll = useRef<boolean>(false);
   const streamingAbortController = useRef<AbortController | null>(null);
   const variantAbortController = useRef<AbortController | null>(null);
-  const userPinnedBottomRef = useRef(true);
-  const suppressNextAutoScrollRef = useRef(false);
   const oldestMessageIdRef = useRef<number | null>(null); // cursor for loading older pages
   // Track last sent user input so we can restore it if streaming is aborted early
   const lastSentInputRef = useRef<string>('');
   const shouldRestoreInputRef = useRef<boolean>(false);
-  // Track whether we've performed the one-time initial bottom scroll (to avoid visible top->bottom animation)
-  const initialScrollDoneRef = useRef<boolean>(false);
-  // Smooth follow scrolling (ported from _bak)
-  const streamingFollowActiveRef = useRef<boolean>(false);
-  const streamingFollowRafRef = useRef<number | null>(null);
-  const isStreamingRef = useRef<boolean>(isStreaming);
-  const generatingVariantRef = useRef<number | null>(generatingVariant);
-  const forceNextSmoothRef = useRef<boolean>(false);
-  // Track previous scrollHeight to preserve visual bottom anchoring during streaming
-  const prevScrollHeightRef = useRef<number>(0);
+  // Track the last server-known message ID before sending, so we can roll back on abort
+  const preStreamLastMessageIdRef = useRef<number | null>(null);
   // Track originals edited while variants exist so we don't restore stale variantDisplayContent over updated main message
   const recentlyEditedOriginalRef = useRef<Set<number>>(new Set());
   // Ensure bump-to-latest runs on initial page load too (one-time per message)
@@ -115,32 +105,27 @@ export default function ChatSessionPage() {
   const initialVariantResolvedRef = useRef<Set<number>>(new Set());
   // Gate the initial anti-flicker hide to first hydration only
   const initialHydrationDoneRef = useRef<boolean>(false);
-  // Debug helpers for response logging and resilient JSON parsing
+
+  // --- Extracted hooks ---
+  const notes = useNotes(id);
+  const { showNotesModal, setShowNotesModal, notesContent, setNotesContent, originalNotesContent, setOriginalNotesContent, savingNotes, saveNotes, cancelNotesChanges, hasNotesChanges } = notes;
+
+  // mutateWithVariantPreservation is defined later — useSummary needs a stable callback.
+  // We use a ref to break the circular dependency.
+  const mutateWithVariantPreservationRef = useRef<() => Promise<void>>(async () => {});
+  const summary = useSummary(session, id, async () => mutateWithVariantPreservationRef.current());
+  const { showSummaryModal, setShowSummaryModal, summaryContent, setSummaryContent, savingSummary, generatingSummary, updatingSummary, saveSummary, generateSummary, updateSummary, canUpdateSummary } = summary;
+
+  const scroll = useChatScroll({ containerRef, messages, isStreaming, generatingVariant, editingMessageIndex });
+  const { scrollToBottom, startStreamingFollow, stopStreamingFollow, maybeStartStreamingFollow, handleScrollToLatestClick, showScrollToLatest, setShowScrollToLatest, userPinnedBottomRef, suppressNextAutoScrollRef, skipNextScroll, forceNextSmoothRef } = scroll;
+  // Debug helper for response logging
   const logMeta = (label: string, res: Response) => {
     try {
       console.log(label, {
-        ok: res.ok,
-        status: res.status,
-        statusText: res.statusText,
-        headers: {
-          'content-type': res.headers.get('content-type'),
-          'cache-control': res.headers.get('cache-control'),
-          'x-accel-buffering': res.headers.get('x-accel-buffering')
-        }
+        ok: res.ok, status: res.status, statusText: res.statusText,
+        headers: { 'content-type': res.headers.get('content-type') }
       });
     } catch {}
-  };
-  const safeJson = async (res: Response) => {
-    try {
-      return await res.json();
-    } catch (e) {
-      try {
-        const text = await res.clone().text();
-        return { __rawText: text } as any;
-      } catch {
-        return { __parseError: true } as any;
-      }
-    }
   };
 
   // Show warning if the last API request was heavily truncated (<=16 messages sent)
@@ -206,87 +191,12 @@ export default function ChatSessionPage() {
     }
   };
 
-  // Mask potentially sensitive tokens (e.g., API keys) in error messages
-  const sanitizeErrorMessage = (msg: string) => {
-    if (!msg) return '';
-    try {
-      // Mask values that look like: "api key: XXXXX"
-      return msg.replace(/(api\s*key\s*:\s*)(\S+)/gi, (_, p1, key) => {
-        const keep = 4;
-        const masked = key.length > keep ? key.replace(new RegExp(`.(?=.{${keep}}$)`, 'g'), '*') : '****';
-        return `${p1}${masked}`;
-      });
-    } catch {
-      return msg;
-    }
-  };
-
-  // Extract a human-meaningful message from raw SSE/text errors
-  const extractUsefulError = (raw: string) => {
-    if (!raw) return '';
-    let msg = raw.trim();
-    // Strip leading tag like [Stream]
-    msg = msg.replace(/^\[[^\]]+\]\s*/,'');
-    // Normalize common generic errors
-    if (/input\s*stream/i.test(msg)) {
-      return 'The AI stream was interrupted. Partial response was saved if available.';
-    }
-    // Prefer the part starting at "Authentication Fails"
-    const auth = msg.match(/Authentication Fails[\s\S]*$/i);
-    if (auth) return auth[0].trim();
-    // Otherwise, drop up to the last colon
-    const idx = msg.lastIndexOf(':');
-    if (idx !== -1 && idx + 1 < msg.length) {
-      return msg.slice(idx + 1).trim();
-    }
-    return msg;
-  };
-
-  useEffect(() => { isStreamingRef.current = isStreaming; }, [isStreaming]);
-  useEffect(() => { generatingVariantRef.current = generatingVariant; }, [generatingVariant]);
-
   // Reset initial variant gating when navigating to a different chat
   useEffect(() => {
     initialVariantBumpDoneRef.current.clear();
     initialVariantResolvedRef.current.clear();
     initialHydrationDoneRef.current = false;
   }, [id]);
-
-  const stopStreamingFollow = useCallback(() => {
-    streamingFollowActiveRef.current = false;
-    if (streamingFollowRafRef.current !== null) {
-      cancelAnimationFrame(streamingFollowRafRef.current);
-      streamingFollowRafRef.current = null;
-    }
-  }, []);
-
-  const startStreamingFollow = useCallback(() => {
-    if (streamingFollowActiveRef.current) return;
-    const step = () => {
-      if (!streamingFollowActiveRef.current) return;
-      const container = containerRef.current;
-      if (!container) { stopStreamingFollow(); return; }
-      if ((!isStreamingRef.current && generatingVariantRef.current === null) || !userPinnedBottomRef.current || editingMessageIndex !== null) {
-        stopStreamingFollow();
-        return;
-      }
-      const target = container.scrollHeight - container.clientHeight;
-  // Directly anchor to bottom (no easing) to avoid visual bounce where bottom shifts then snaps back
-  container.scrollTop = target;
-      streamingFollowRafRef.current = requestAnimationFrame(step);
-    };
-    streamingFollowActiveRef.current = true;
-    streamingFollowRafRef.current = requestAnimationFrame(step);
-  }, [editingMessageIndex, stopStreamingFollow]);
-
-  const maybeStartStreamingFollow = useCallback(() => {
-    if (editingMessageIndex !== null) return;
-    if (!userPinnedBottomRef.current) return;
-    if (!isStreamingRef.current && generatingVariantRef.current === null) return;
-    startStreamingFollow();
-  }, [editingMessageIndex, startStreamingFollow]);
-
-  // (scroll effect added after loadOlderMessages)
 
   // Fetch and prepend older messages using beforeId cursor
   const loadOlderMessages = useCallback(async () => {
@@ -393,23 +303,46 @@ export default function ChatSessionPage() {
       setIsStreaming(false);
   stopStreamingFollow();
       setLoading(false);
-      // If user aborted mid-stream and we flagged restoration, only restore if we received NO assistant content
+      // If user aborted mid-stream on a NEW message (not continue/retry),
+      // restore their input and remove the user message + partial assistant response.
       if (shouldRestoreInputRef.current && lastSentInputRef.current) {
-        // Determine if any assistant content was produced
-        let hasAssistantContent = false;
-        if (streamingMessageRef.current && streamingMessageRef.current.trim().length > 0) {
-          hasAssistantContent = true;
-        } else {
-          // Check last message in state (may have accumulated content already)
-            const last = messages[messages.length - 1];
-            if (last && last.role === 'assistant' && last.content && last.content.trim().length > 0) {
-              hasAssistantContent = true;
-            }
+        const savedInput = lastSentInputRef.current;
+        const lastKnownId = preStreamLastMessageIdRef.current;
+        // Always restore the user's message to the input box
+        setInput(savedInput);
+        // Remove the last user message + any partial assistant response from local state
+        setMessages(prev => {
+          const copy = [...prev];
+          if (copy.length > 0 && copy[copy.length - 1]?.role === 'assistant') copy.pop();
+          if (copy.length > 0 && copy[copy.length - 1]?.role === 'user') copy.pop();
+          return copy;
+        });
+        // Delete server-side messages that were created after our last known point.
+        // Delay to let the server's partial-save from req.on('close') complete first.
+        if (lastKnownId && id) {
+          setTimeout(async () => {
+            try {
+              // Fetch the session to find the actual server-side message IDs
+              const res = await fetch(`/api/sessions/${id}?limit=10`);
+              if (res.ok) {
+                const data = await res.json();
+                const serverMsgs = data.messages || [];
+                // Find the first message added after our last known good message
+                const firstNew = serverMsgs.find((m: any) => m.id > lastKnownId);
+                if (firstNew) {
+                  await fetch(`/api/messages/${firstNew.id}?truncate=1`, { method: 'DELETE' });
+                }
+              }
+              skipNextScroll.current = true;
+              await mutate();
+            } catch {}
+            preStreamLastMessageIdRef.current = null;
+          }, 600);
         }
-        if (!hasAssistantContent) {
-          setInput(prev => prev ? prev : lastSentInputRef.current);
-        }
-        // Clear flag either way to avoid repeated restores
+        // Skip the next message sync to avoid the server state overwriting our local rollback
+        setSkipNextMessageUpdate(true);
+        setJustFinishedStreaming(true);
+        streamingMessageRef.current = '';
         shouldRestoreInputRef.current = false;
       }
     }
@@ -533,326 +466,118 @@ export default function ChatSessionPage() {
   // Generate a new variant for a message
   const generateVariant = async (messageId: number, opts?: { temperature?: number }) => {
     if (generatingVariant || loading || isStreaming) return;
+
+    // Helper to revert a placeholder variant on error/abort
+    const revertVariantPlaceholder = (mid: number) => {
+      setMessageVariants(prev => {
+        const newMap = new Map(prev);
+        const existing = newMap.get(mid) || [];
+        const trimmed = existing.filter(v => v.id !== -1 ? true : false).length === existing.length
+          ? existing.slice(0, -1)
+          : existing.filter(v => v.id !== -1);
+        newMap.set(mid, trimmed);
+        const newCount = trimmed.length;
+        setCurrentVariantIndex(ci => { const m = new Map(ci); m.set(mid, newCount); return m; });
+        const orig = messages.find(m => m.messageId === mid);
+        const recent = newCount > 0 ? trimmed[newCount - 1] : undefined;
+        const fallback = recent?.content || orig?.content || '';
+        setVariantDisplayContent(vp => { const m = new Map(vp); if (fallback) m.set(mid, fallback); else m.delete(mid); return m; });
+        saveVariantSelection(mid, newCount);
+        return newMap;
+      });
+    };
+
+    // Helper to replace the placeholder with a real variant record
+    const replacePlaceholderWithReal = (variant: any) => {
+      setMessageVariants(prev => {
+        const newMap = new Map(prev);
+        const existing = newMap.get(messageId) || [];
+        const updated = [...existing];
+        updated[updated.length - 1] = variant;
+        newMap.set(messageId, updated);
+        return newMap;
+      });
+    };
     
     setGeneratingVariant(messageId);
     
     try {
-      // Get current settings for streaming
-      const settingsRes = await fetch('/api/settings');
-      const settings = await settingsRes.json();
-  const streamSetting = settings.stream === undefined ? true : settings.stream === 'true';
-      
       // Get current variants to calculate the new index
       const currentVariants = messageVariants.get(messageId) || [];
-      const newVariantIndex = currentVariants.length + 1; // +1 for the new variant we're about to add
+      const newVariantIndex = currentVariants.length + 1;
       
       // Create a placeholder variant immediately and switch to it
-      const placeholderVariant = {
-        id: -1, // Temporary ID
-        content: '',
-        version: newVariantIndex,
-        isActive: false,
-        messageId: messageId
-      };
-      
-      // Batch all state updates together for immediate UI response
-      // This ensures that no old content is shown when switching to the new variant
       flushSync(() => {
         setMessageVariants(prev => {
           const newMap = new Map(prev);
           const existing = newMap.get(messageId) || [];
-          newMap.set(messageId, [...existing, placeholderVariant]);
+          newMap.set(messageId, [...existing, { id: -1, content: '', version: newVariantIndex, isActive: false, messageId }]);
           return newMap;
         });
-        
-        setCurrentVariantIndex(prev => {
-          const newMap = new Map(prev);
-          newMap.set(messageId, newVariantIndex);
-          return newMap;
-        });
-        
-        // Save the new variant selection to localStorage
+        setCurrentVariantIndex(prev => { const m = new Map(prev); m.set(messageId, newVariantIndex); return m; });
         saveVariantSelection(messageId, newVariantIndex);
-        
-        setVariantDisplayContent(prev => {
-          const newMap = new Map(prev);
-          newMap.set(messageId, ''); // Immediately show blank content
-          return newMap;
-        });
+        setVariantDisplayContent(prev => { const m = new Map(prev); m.set(messageId, ''); return m; });
       });
       
-      // Scroll immediately after DOM update
       setTimeout(() => scrollToBottom(false), 5);
-      
-      // Now start generating the variant
-      let abortController: AbortController | undefined;
-      if (streamSetting) {
-        abortController = new AbortController();
-        variantAbortController.current = abortController;
-      }
-      
-      const response = await fetch(`/api/messages/${messageId}/variants`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ stream: streamSetting, ...(opts?.temperature != null ? { temperature: opts.temperature } : {}) }),
-        ...(streamSetting && abortController ? { signal: abortController.signal } : {})
-      });
-      // Immediate error handling for non-OK responses
-      if (!response.ok) {
-        const errData = await safeJson(response as any);
-        const raw = (errData?.__rawText || errData?.error?.message || errData?.error || response.statusText || 'Unknown error') as string;
-        setApiErrorMessage(sanitizeErrorMessage(extractUsefulError(String(raw))));
-        setShowErrorModal(true);
-        // Remove the placeholder and reset selection/index + restore display content
-        setMessageVariants(prev => {
-          const newMap = new Map(prev);
-          const existing = newMap.get(messageId) || [];
-          const trimmed = existing.slice(0, -1);
-          newMap.set(messageId, trimmed);
-          const newVariantCount = trimmed.length;
-          setCurrentVariantIndex(prevIndex => {
-            const indexMap = new Map(prevIndex);
-            indexMap.set(messageId, newVariantCount);
-            return indexMap;
-          });
-          const originalMessage = messages.find(m => m.messageId === messageId);
-          const recentVariant = newVariantCount > 0 ? trimmed[newVariantCount - 1] : undefined;
-          const content = recentVariant?.content || originalMessage?.content || '';
-          setVariantDisplayContent(vPrev => {
-            const map = new Map(vPrev);
-            if (content) map.set(messageId, content); else map.delete(messageId);
-            return map;
-          });
-          saveVariantSelection(messageId, newVariantCount);
-          return newMap;
-        });
-        variantAbortController.current = null;
-        stopStreamingFollow();
-        setGeneratingVariant(null);
-        return;
-      }
 
-      // Treat as streaming only if content-type is SSE
-      const vCT = response.headers.get('content-type') || '';
-      const vIsSSE = vCT.includes('text/event-stream');
-
-      if (streamSetting && response.body && vIsSSE) {
-        // Streaming response
-        let streamingContent = '';
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
-        let done = false;
-        
-        try {
-          while (!done) {
-            const { value, done: doneReading } = await reader.read();
-            if (doneReading) {
-              done = true;
-              break;
-            }
-            
-            const chunk = decoder.decode(value, { stream: true });
-            const lines = chunk.split(/\r?\n/).filter(l => l.startsWith('data: '));
-            
-            for (const line of lines) {
-              const payload = line.replace(/^data: /, '').trim();
-              
-              if (payload === '[DONE]') {
-                done = true;
-                break;
-              }
-              
-              try {
-                const parsed = JSON.parse(payload);
-                const content = parsed.content || '';
-                
-                if (content) {
-                  streamingContent += content;
-                  // Update display content in real-time
-                  setVariantDisplayContent(prev => {
-                    const newMap = new Map(prev);
-                    newMap.set(messageId, streamingContent);
-                    return newMap;
-                  });
-                  // Trigger smooth follow during streaming
-                  maybeStartStreamingFollow();
-                }
-              } catch {
-                // Skip malformed JSON
-              }
-            }
-          }
-          
-          // After streaming is complete, get the final variant data from the response
-          // We need to make another request to get the actual variant record
-          const finalResponse = await fetch(`/api/messages/${messageId}/variants/latest`);
-          if (!finalResponse.ok) {
-            const errData = await safeJson(finalResponse as any);
-            const raw = (errData?.__rawText || errData?.error?.message || errData?.error || finalResponse.statusText || 'Unknown error') as string;
-            setApiErrorMessage(sanitizeErrorMessage(extractUsefulError(String(raw))));
-            setShowErrorModal(true);
-            // Drop placeholder & revert selection/content similar to abort case
-            setMessageVariants(prev => {
-              const newMap = new Map(prev);
-              const existing = newMap.get(messageId) || [];
-              if (existing.length) {
-                const trimmed = existing.slice(0, -1);
-                newMap.set(messageId, trimmed);
-                const newVariantCount = trimmed.length;
-                setCurrentVariantIndex(ciPrev => {
-                  const map = new Map(ciPrev);
-                  map.set(messageId, newVariantCount);
-                  return map;
-                });
-                const originalMessage = messages.find(m => m.messageId === messageId);
-                const recentVariant = newVariantCount > 0 ? trimmed[newVariantCount - 1] : undefined;
-                const content = recentVariant?.content || originalMessage?.content || '';
-                setVariantDisplayContent(vPrev => {
-                  const map = new Map(vPrev);
-                  if (content) map.set(messageId, content); else map.delete(messageId);
-                  return map;
-                });
-                saveVariantSelection(messageId, newVariantCount);
-              }
-              return newMap;
-            });
-            setGeneratingVariant(null);
-            return;
-          }
-          const newVariant = await finalResponse.json();
-          
-          // Update state with the real variant, but preserve the streamed content
-          setMessageVariants(prev => {
-            const newMap = new Map(prev);
-            const existing = newMap.get(messageId) || [];
-            // Replace the placeholder with the real variant
-            const updated = [...existing];
-            updated[updated.length - 1] = newVariant;
-            newMap.set(messageId, updated);
-            return newMap;
-          });
-          
-          // Don't update variantDisplayContent here since it already has the streamed content
-          // This prevents any UI jumps after streaming completes
-          // After variant completes, surface truncation and max-tokens notices like main chat
+      const result = await performStreamingRequest({
+        url: `/api/messages/${messageId}/variants`,
+        body: { ...(opts?.temperature != null ? { temperature: opts.temperature } : {}) },
+        abortControllerRef: variantAbortController,
+        skipSettingsInBody: true,
+        onStreamChunk: (accumulated) => {
+          setVariantDisplayContent(prev => { const m = new Map(prev); m.set(messageId, accumulated); return m; });
+          maybeStartStreamingFollow();
+        },
+        onNonStreamResult: (data) => {
+          // Non-streaming: `data` is the variant record itself
+          replacePlaceholderWithReal(data);
+          setVariantDisplayContent(prev => { const m = new Map(prev); m.set(messageId, data.content); return m; });
+        },
+        onComplete: async () => {
           await maybeShowTruncationWarning();
           await maybeShowMaxTokensCutoff();
-          
-        } catch (err: any) {
-          if (err.name === 'AbortError') {
-            // User cancelled variant generation: drop placeholder & revert immediately
-            setMessageVariants(prev => {
-              const newMap = new Map(prev);
-              const existing = newMap.get(messageId) || [];
-              if (existing.length) {
-                const last = existing[existing.length - 1];
-                if (last && last.id === -1) {
-                // remove placeholder
-                const trimmed = existing.slice(0, -1);
-                newMap.set(messageId, trimmed);
-                // Update index & display content
-                const newVariantCount = trimmed.length;
-                setCurrentVariantIndex(ciPrev => {
-                  const map = new Map(ciPrev);
-                  map.set(messageId, newVariantCount);
-                  return map;
-                });
-                const originalMessage = messages.find(m => m.messageId === messageId);
-                const recentVariant = newVariantCount > 0 ? trimmed[newVariantCount - 1] : undefined;
-                const content = recentVariant?.content || originalMessage?.content || '';
-                setVariantDisplayContent(vPrev => {
-                  const map = new Map(vPrev);
-                  if (content) map.set(messageId, content); else map.delete(messageId);
-                  return map;
-                });
-                saveVariantSelection(messageId, newVariantCount);
-                }
-              }
-              return newMap;
-            });
-            // Ensure generating state cleared
-            setGeneratingVariant(null);
-            stopStreamingFollow();
-            return; // do not proceed further
-          } else {
-            // Other error - handle normally
-            throw err;
-          }
-        } finally {
-          variantAbortController.current = null;
+        },
+        onError: (msg) => {
+          setApiErrorMessage(msg);
+          setShowErrorModal(true);
+          revertVariantPlaceholder(messageId);
+        },
+        onAbort: () => {
+          revertVariantPlaceholder(messageId);
+          setGeneratingVariant(null);
           stopStreamingFollow();
-        }
-        
-      } else {
-        // Non-streaming response
-  const newVariant = await response.json();
-        
-        // Update state with new variant
-        setMessageVariants(prev => {
-          const newMap = new Map(prev);
-          const existing = newMap.get(messageId) || [];
-          // Replace the placeholder with the real variant
-          const updated = [...existing];
-          updated[updated.length - 1] = newVariant;
-          newMap.set(messageId, updated);
-          return newMap;
-        });
-        
-        // Update display content
-        setVariantDisplayContent(prev => {
-          const newMap = new Map(prev);
-          newMap.set(messageId, newVariant.content);
-          return newMap;
-        });
+        },
+      });
 
-  // After variant completes (non-stream), surface truncation and max-tokens notices
-  await maybeShowTruncationWarning();
-  await maybeShowMaxTokensCutoff();
+      if (result.wasAborted) return;
+
+      // For streaming: fetch the real variant record to replace the placeholder
+      if (result.wasStreaming) {
+        try {
+          const finalResponse = await fetch(`/api/messages/${messageId}/variants/latest`);
+          if (finalResponse.ok) {
+            const newVariant = await finalResponse.json();
+            replacePlaceholderWithReal(newVariant);
+          }
+        } catch {}
       }
+
+      stopStreamingFollow();
       
     } catch (error) {
       console.error('Failed to generate variant:', error);
       setApiErrorMessage(sanitizeErrorMessage(extractUsefulError((error as any)?.message || JSON.stringify(error))));
       setShowErrorModal(true);
-      
-      // Remove the placeholder variant on error, reset index, and restore display content
-      setMessageVariants(prev => {
-        const newMap = new Map(prev);
-        const existing = newMap.get(messageId) || [];
-        const trimmed = existing.slice(0, -1);
-        newMap.set(messageId, trimmed);
-        const newVariantCount = trimmed.length;
-        setCurrentVariantIndex(prevIndex => {
-          const indexMap = new Map(prevIndex);
-          indexMap.set(messageId, newVariantCount);
-          return indexMap;
-        });
-        const originalMessage = messages.find(m => m.messageId === messageId);
-        const recentVariant = newVariantCount > 0 ? trimmed[newVariantCount - 1] : undefined;
-        const content = recentVariant?.content || originalMessage?.content || '';
-        setVariantDisplayContent(vPrev => {
-          const map = new Map(vPrev);
-          if (content) map.set(messageId, content); else map.delete(messageId);
-          return map;
-        });
-        saveVariantSelection(messageId, newVariantCount);
-        return newMap;
-      });
+      revertVariantPlaceholder(messageId);
       
     } finally {
-      // Don't clear generating state yet - this prevents variant counter from showing wrong values
       variantAbortController.current = null;
-      
-      // Simple approach: just refresh the data without complex preservation
-      // The variant counter will remain hidden during this process
       setTimeout(async () => {
         skipNextScroll.current = true;
-        await mutate(); // Direct mutate instead of complex preservation logic
-        
-        // Clear generating state after refresh completes to show the counter again
-        setTimeout(() => {
-          setGeneratingVariant(null);
-        }, 100); // Longer delay to ensure all state is updated
+        await mutate();
+        setTimeout(() => setGeneratingVariant(null), 100);
       }, 100);
     }
   };
@@ -1417,13 +1142,6 @@ export default function ChatSessionPage() {
     loadDevMode();
   }, []);
 
-  // Initialize summary content when session data loads
-  useEffect(() => {
-    if (session?.summary) {
-      setSummaryContent(session.summary);
-    }
-  }, [session?.summary]);
-
   // Load session data when id changes
   useEffect(() => {
     // Skip this update if we're streaming, just finished streaming, or generating variants
@@ -1534,11 +1252,6 @@ export default function ChatSessionPage() {
     
     if (session?.summary) {
       setSummaryContent(session.summary);
-    }
-    
-    // Load notes when session loads
-    if (session?.id) {
-      loadNotes();
     }
   }, [session, editingMessageIndex, isStreaming, justFinishedStreaming, generatingVariant, skipNextMessageUpdate]);
 
@@ -1674,99 +1387,6 @@ export default function ChatSessionPage() {
   const newHeight = Math.max(80, Math.min(textarea.scrollHeight, 240));
   textarea.style.height = `${newHeight}px`;
   }, []);
-
-  // Summary functions
-  const saveSummary = async () => {
-    if (!id) return;
-    
-    setSavingSummary(true);
-    try {
-      const response = await fetch(`/api/sessions/${id}/summary`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ summary: summaryContent })
-      });
-      
-      if (!response.ok) {
-        throw new Error('Failed to save summary');
-      }
-      
-      // Update session data while preserving variants
-      await mutateWithVariantPreservation();
-      setShowSummaryModal(false);
-    } catch (error) {
-      console.error('Failed to save summary:', error);
-      alert('Failed to save summary. Please try again.');
-    } finally {
-      setSavingSummary(false);
-    }
-  };
-
-  const generateSummary = async () => {
-    if (!id) return;
-    
-    setGeneratingSummary(true);
-    try {
-      const response = await fetch(`/api/sessions/${id}/generate-summary`, {
-        method: 'POST'
-      });
-      
-      if (!response.ok) {
-        throw new Error('Failed to generate summary');
-      }
-      
-      const data = await response.json();
-      setSummaryContent(data.summary);
-      
-      // Update session data while preserving variants
-      await mutateWithVariantPreservation();
-    } catch (error) {
-      console.error('Failed to generate summary:', error);
-      alert('Failed to generate summary. Please try again.');
-    } finally {
-      setGeneratingSummary(false);
-    }
-  };
-
-  const updateSummary = async () => {
-    if (!id) return;
-    
-    setUpdatingSummary(true);
-    try {
-      const response = await fetch(`/api/sessions/${id}/update-summary`, {
-        method: 'POST'
-      });
-      
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'Failed to update summary');
-      }
-      
-      const data = await response.json();
-      setSummaryContent(data.summary);
-      
-      // Update session data while preserving variants
-      await mutateWithVariantPreservation();
-    } catch (error) {
-      console.error('Failed to update summary:', error);
-      alert(`Failed to update summary: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    } finally {
-      setUpdatingSummary(false);
-    }
-  };
-
-  // Check if update summary should be enabled
-  const canUpdateSummary = () => {
-    if (!session || !session.summary) return false;
-    
-    const lastSummaryId = session.lastSummary;
-    
-    if (!lastSummaryId) return false;
-    
-    // Check if there are new messages after lastSummary
-    const hasNewMessages = session.messages.some(msg => msg.id > lastSummaryId);
-    return hasNewMessages;
-  };
 
   // Commit any displayed variants before sending
   const commitVariantsBeforeSend = async () => {
@@ -2135,8 +1755,6 @@ export default function ChatSessionPage() {
         await commitDisplayedVariant(msg.id);
       }
     }
-    
-    // Clean up variants for all assistant messages after committing
     for (const msg of assistantMessages) {
       if (messageVariants.has(msg.id)) {
         await cleanupVariants(msg.id);
@@ -2144,215 +1762,74 @@ export default function ChatSessionPage() {
     }
     
     setLoading(true);
-
-    // Get settings from database
-    const settingsRes = await fetch('/api/settings');
-    const settings = await settingsRes.json();
-    
-  const streamSetting = settings.stream === undefined ? true : settings.stream === 'true';
-    const defaultPromptId = settings.defaultPromptId ? Number(settings.defaultPromptId) : undefined;
-  const tempSetting = settings.temperature ? parseFloat(settings.temperature) : 0.7;
-  const maxTokensSetting = settings.maxTokens ? Math.max(256, Math.min(8192, parseInt(settings.maxTokens))) : 4096;
-    
-    setIsStreaming(streamSetting);
-
-    let abortController: AbortController | undefined;
-    if (streamSetting) {
-      abortController = new AbortController();
-      streamingAbortController.current = abortController;
-    }
-    
-    // Generate new response using a continue prompt
-  const res = await fetch('/api/chat', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({ 
-        sessionId: Number(id), 
-        userMessage: '[SYSTEM NOTE: Ignore this message, reply as if you are extending the last message you sent as if your reply never ended - do not make an effort to send a message on behalf of the user unless the most recent message from you did include speaking on behalf of the user. Specifically do not start messages with `{{user}}: `, you should NEVER use that format in any message.]', // Special system prompt
-        stream: streamSetting, 
-        userPromptId: defaultPromptId,
-        temperature: tempSetting,
-        maxTokens: maxTokensSetting
-      }),
-      ...(streamSetting && abortController ? { signal: abortController.signal } : {})
-    });
-
-    // If the response is unauthorized or not ok in general and not streaming, surface error
-    if (!res.ok && (!streamSetting || !res.body)) {
-      const errData = await safeJson(res as any);
-  const raw = (errData?.__rawText || errData?.error?.message || errData?.error || res.statusText || 'Unknown error') as string;
-      setApiErrorMessage(sanitizeErrorMessage(extractUsefulError(String(raw))));
-      setShowErrorModal(true);
-      setLoading(false);
-      setIsStreaming(false);
-      return;
-    }
-
-    // If the response is unauthorized or not ok in general and not streaming, surface error
-    if (!res.ok && (!streamSetting || !res.body)) {
-      const errData = await safeJson(res as any);
-  const raw = (errData?.__rawText || errData?.error?.message || errData?.error || res.statusText || 'Unknown error') as string;
-      setApiErrorMessage(sanitizeErrorMessage(extractUsefulError(String(raw))));
-      setShowErrorModal(true);
-      setLoading(false);
-      setIsStreaming(false);
-      return;
-    }
-
-  const ct2 = res.headers.get('content-type') || '';
-  const isSSE2 = ct2.includes('text/event-stream');
-  if (streamSetting && res.body && isSSE2) {
-      // Streaming response - append to the last assistant message instead of creating a new one
-      streamingMessageRef.current = '';
-      
-      // Capture the original content before streaming starts
-      let originalContent = '';
-      setMessages(prev => {
-        const lastAssistantIndex = prev.findLastIndex(m => m.role === 'assistant');
-        if (lastAssistantIndex !== -1) {
-          const lastMessage = prev[lastAssistantIndex];
-          if (lastMessage) {
-            // Capture the original content
-            originalContent = lastMessage.content;
-            return prev;
-          }
-        }
-        // Fallback: add new message if no previous assistant message found
-        return [...prev, { role: 'assistant', content: '' }];
-      });
-      
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let done = false;
-      
-      try {
-        while (!done) {
-          const { value, done: doneReading } = await reader.read();
-          if (doneReading) {
-            done = true;
-            break;
-          }
-          
-          const chunk = decoder.decode(value, { stream: true });
-          const lines = chunk.split(/\r?\n/).filter(l => l.startsWith('data: '));
-          
-          for (const line of lines) {
-            const payload = line.replace(/^data: /, '').trim();
-            
-            if (payload === '[DONE]') {
-              done = true;
-              break;
-            }
-            
-            try {
-              const parsed = JSON.parse(payload);
-              const content = parsed.content || '';
-              
-              if (content) {
-                streamingMessageRef.current += content;
-                setMessages(prev => {
-                  const copy = [...prev];
-                  const lastAssistantIndex = copy.findLastIndex(m => m.role === 'assistant');
-                  if (lastAssistantIndex !== -1) {
-                    const lastMessage = copy[lastAssistantIndex];
-                    if (lastMessage) {
-                      // Use the captured original content and append the streaming content
-                      if (streamingMessageRef.current) {
-                        lastMessage.content = originalContent + '\n\n' + streamingMessageRef.current;
-                      } else {
-                        lastMessage.content = originalContent;
-                      }
-                    }
-                  }
-                  return copy;
-                });
-                maybeStartStreamingFollow();
-              }
-            } catch {
-              // Skip malformed JSON
-            }
-          }
-        }
-      } catch (err: any) {
-        if (err.name === 'AbortError') {
-          // Continue conversation was stopped by user
-          console.log('Continue conversation stopped by user');
-          setLoading(false);
-          setIsStreaming(false);
-          setJustFinishedStreaming(true);
-          streamingMessageRef.current = '';
-          stopStreamingFollow();
-          
-          // Exit early, skip database refresh to preserve the partial content in UI
-          return;
-        } else {
-          // Other error
-          console.error('Continue conversation streaming error:', err);
-          setLoading(false);
-          setIsStreaming(false);
-          // If we already streamed some content, suppress scary modal
-          if (streamingMessageRef.current && streamingMessageRef.current.length > 0) {
-            // Let the partial remain in UI; a later mutate will reconcile
-            console.warn('Stream ended early after partial content; skipping error modal');
-          } else {
-            setApiErrorMessage(sanitizeErrorMessage(extractUsefulError(err?.message || 'Streaming error')));
-            setShowErrorModal(true);
-          }
-        }
-      } finally {
-        streamingAbortController.current = null;
-        stopStreamingFollow();
+    setIsStreaming(true);
+    let originalContent = '';
+    setMessages(prev => {
+      const lastIdx = prev.findLastIndex(m => m.role === 'assistant');
+      if (lastIdx !== -1 && prev[lastIdx]) {
+        originalContent = prev[lastIdx]!.content;
+        return prev;
       }
-    } else {
-      // Non-streaming response - append to the last assistant message
-      try {
-        const data = await res.json();
-        if (data.choices && data.choices[0]?.message?.content) {
-          const continuationContent = data.choices[0].message.content;
+      return [...prev, { role: 'assistant', content: '' }];
+    });
+    streamingMessageRef.current = '';
+
+    const result = await performStreamingRequest({
+      url: '/api/chat',
+      body: {
+        sessionId: Number(id),
+        userMessage: '[SYSTEM NOTE: Ignore this message, reply as if you are extending the last message you sent as if your reply never ended - do not make an effort to send a message on behalf of the user unless the most recent message from you did include speaking on behalf of the user. Specifically do not start messages with `{{user}}: `, you should NEVER use that format in any message.]',
+      },
+      abortControllerRef: streamingAbortController,
+      onStreamChunk: (accumulated) => {
+        streamingMessageRef.current = accumulated;
+        setMessages(prev => {
+          const copy = [...prev];
+          const lastIdx = copy.findLastIndex(m => m.role === 'assistant');
+          if (lastIdx !== -1 && copy[lastIdx]) {
+            copy[lastIdx]!.content = accumulated ? originalContent + '\n\n' + accumulated : originalContent;
+          }
+          return copy;
+        });
+        maybeStartStreamingFollow();
+      },
+      onNonStreamResult: (data) => {
+        const content = data?.choices?.[0]?.message?.content;
+        if (content) {
           setMessages(prev => {
-            const lastAssistantIndex = prev.findLastIndex(m => m.role === 'assistant');
-            if (lastAssistantIndex !== -1) {
-              const lastMessage = prev[lastAssistantIndex];
-              if (lastMessage) {
-                const updatedMessages = [...prev];
-                updatedMessages[lastAssistantIndex] = {
-                  role: 'assistant',
-                  content: lastMessage.content + '\n\n' + continuationContent
-                };
-                return updatedMessages;
-              }
+            const lastIdx = prev.findLastIndex(m => m.role === 'assistant');
+            if (lastIdx !== -1 && prev[lastIdx]) {
+              const updated = [...prev];
+              updated[lastIdx] = { role: 'assistant', content: prev[lastIdx]!.content + '\n\n' + content };
+              return updated;
             }
-            // Fallback: add new message if no previous assistant message found
-            return [...prev, { role: 'assistant', content: continuationContent }];
+            return [...prev, { role: 'assistant', content }];
           });
-        } else if (data.error) {
-          console.error('API Error:', data.error);
+        } else if (data?.error) {
           setApiErrorMessage(sanitizeErrorMessage(extractUsefulError(String(data.error))));
           setShowErrorModal(true);
         }
-      } catch (error) {
-        console.error('Failed to parse response:', error);
-        setApiErrorMessage('Failed to get response from AI');
-        setShowErrorModal(true);
-      }
-    }
-    
+      },
+      onError: (msg) => { setApiErrorMessage(msg); setShowErrorModal(true); },
+      onAbort: () => {
+        setLoading(false);
+        setIsStreaming(false);
+        setJustFinishedStreaming(true);
+        streamingMessageRef.current = '';
+        stopStreamingFollow();
+      },
+    });
+
+    if (result.wasAborted) return; // onAbort already cleaned up
+
+    stopStreamingFollow();
     setLoading(false);
     setIsStreaming(false);
     setJustFinishedStreaming(true);
     setSkipNextMessageUpdate(true);
     streamingMessageRef.current = '';
     
-    // Final smooth scroll after streaming completes (but not during edit mode)
-    setTimeout(() => {
-      if (editingMessageIndex === null) {
-        scrollToBottom(false);
-      }
-    }, 100);
-    
-    // Reload database state
+    setTimeout(() => { if (editingMessageIndex === null) scrollToBottom(false); }, 100);
     setTimeout(async () => {
       skipNextScroll.current = true;
       await mutateWithVariantPreservation();
@@ -2484,6 +1961,8 @@ export default function ChatSessionPage() {
       });
     }, 20); // Slightly longer delay to ensure session useEffect completes
   };
+  // Wire up the ref so useSummary (called before this function is defined) can call it
+  mutateWithVariantPreservationRef.current = mutateWithVariantPreservation;
 
 
 
@@ -2501,6 +1980,9 @@ export default function ChatSessionPage() {
     // Only add the user message to the conversation if we're not retrying
     if (!retryMessage) {
       const userMsg: ChatMessage = { role: 'user', content: formattedInput };
+      // Capture the last server-known message ID before adding new messages
+      const lastKnown = messages.filter(m => m.messageId).pop();
+      preStreamLastMessageIdRef.current = lastKnown?.messageId ?? null;
       setMessages(prev => [...prev, userMsg]);
       setInput('');
   // Remember this input so we can restore if streaming gets aborted
@@ -2513,243 +1995,90 @@ export default function ChatSessionPage() {
     }
     
     setLoading(true);
-    const settingsRes = await fetch('/api/settings');
-    const settings = await settingsRes.json();
-  const streamSetting = settings.stream === undefined ? true : settings.stream === 'true';
-    const defaultPromptId = settings.defaultPromptId ? Number(settings.defaultPromptId) : undefined;
-  const tempSetting = settings.temperature ? parseFloat(settings.temperature) : 0.7;
-  const maxTokensSetting = settings.maxTokens ? Math.max(256, Math.min(8192, parseInt(settings.maxTokens))) : 4096;
-    setIsStreaming(streamSetting);
+    setIsStreaming(true);
+    streamingMessageRef.current = '';
+    setMessages(prev => [...prev, { role: 'assistant', content: '' }]);
 
-    let abortController: AbortController | undefined;
-    if (streamSetting) {
-      abortController = new AbortController();
-      streamingAbortController.current = abortController;
-    }
+    const showError = (msg: string) => { setApiErrorMessage(msg); setShowErrorModal(true); };
 
-    const res = await fetch('/api/chat', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
+    const result = await performStreamingRequest({
+      url: '/api/chat',
+      body: {
+        sessionId: Number(id),
+        userMessage: formattedInput,
+        retry: !!retryMessage,
       },
-      body: JSON.stringify({ 
-        sessionId: Number(id), 
-        userMessage: formattedInput, 
-        stream: streamSetting, 
-        userPromptId: defaultPromptId,
-        temperature: tempSetting,
-        maxTokens: maxTokensSetting,
-        retry: !!retryMessage // Pass retry flag when retrying
-      }),
-      ...(streamSetting && abortController ? { signal: abortController.signal } : {})
-    });
-    logMeta('[Send] Response meta', res as any);
-  // Early non-stream failure handling with helpful note
-    if (!res.ok) {
-      const ct = res.headers.get('content-type') || '';
-      const isSSE = ct.includes('text/event-stream');
-      if (!streamSetting || !res.body || !isSSE) {
-        const errData = await safeJson(res as any);
-        const raw = (errData?.__rawText || errData?.error?.message || errData?.error || res.statusText || 'Unknown error') as string;
+      abortControllerRef: streamingAbortController,
+      onStreamChunk: (accumulated) => {
+        streamingMessageRef.current = accumulated;
+        setMessages(prev => {
+          const copy = [...prev];
+          const last = copy[copy.length - 1];
+          if (last && last.role === 'assistant') last.content = accumulated;
+          return copy;
+        });
+        maybeStartStreamingFollow();
+      },
+      onNonStreamResult: (data) => {
+        const content = data?.choices?.[0]?.message?.content || data?.content;
+        if (content) {
+          setMessages(prev => {
+            const copy = [...prev];
+            const last = copy[copy.length - 1];
+            if (last && last.role === 'assistant') { last.content = content; return copy; }
+            return [...prev, { role: 'assistant', content }];
+          });
+        } else if (data?.error) {
+          showError(sanitizeErrorMessage(extractUsefulError(data.error?.message || JSON.stringify(data.error))));
+        }
+      },
+      onError: async (msg) => {
         const note = await buildRequestSizeNote();
-        const baseMsg = sanitizeErrorMessage(extractUsefulError(String(raw)));
-        setApiErrorMessage(note ? `${baseMsg}\n\n${note}` : baseMsg);
-        setShowErrorModal(true);
-        setLoading(false);
-        setIsStreaming(false);
-        return;
-      }
+        showError(note ? `${msg}\n\n${note}` : msg);
+      },
+      onAbort: () => { setLoading(false); setIsStreaming(false); },
+    });
+
+    if (result.wasAborted) { stopStreamingFollow(); return; }
+
+    // Zero-content safety check (stream finished but no content arrived)
+    if (result.wasStreaming && streamingMessageRef.current.length === 0) {
+      console.warn('[Send] Stream finished with zero assistant content. Will trigger a mutate to refresh.');
     }
 
-      // If success path: check truncation meta and decide whether to warn
-      try {
-        const sessionIdNum = Number(id);
-        if (sessionIdNum && !Number.isNaN(sessionIdNum)) {
-          const metaRes = await fetch(`/api/chat/request-log/meta/${sessionIdNum}`);
-          if (metaRes.ok) {
-            const meta = await metaRes.json();
-            const sentCount = Number(meta?.sentCount) || 0;
-            const baseCount = Number(meta?.baseCount) || 0;
-            const wasTruncated = !!meta?.wasTruncated;
-            if (wasTruncated && sentCount <= 16) {
-              const msg = `Context trimmed: sending ${sentCount} message${sentCount === 1 ? '' : 's'} (from ${baseCount}). Consider increasing Max Characters in Settings to preserve more history.`;
-              setApiErrorMessage(msg);
-              setShowErrorModal(true);
-            }
-          }
-        }
-      } catch {}
+    // Post-request: truncation & max-token warnings
+    await maybeShowTruncationWarning();
+    setTimeout(async () => {
+      const hitLimit = await checkMaxTokensHit();
+      if (hitLimit) {
+        const suffix = typeof result.settings.maxTokens === 'number' ? ` (${result.settings.maxTokens})` : '';
+        const note = `Response stopped early: reached Max Tokens${suffix}. Increase Max Tokens in Settings or use Continue to resume.`;
+        showError(note);
+      }
+    }, 1200);
 
-      // Also let the user know if the last response hit the Max Tokens limit (finish_reason = 'length').
-      // Delay a bit to allow server to persist final response frames/body.
-      setTimeout(async () => {
-        const hitLimit = await checkMaxTokensHit();
-        if (hitLimit) {
-          const suffix = typeof (maxTokensSetting as any) === 'number' ? ` (${maxTokensSetting})` : '';
-          const note = `Response stopped early: reached Max Tokens${suffix}. Increase Max Tokens in Settings or use Continue to resume.`;
-          // If a modal is already open, append; else open a new one.
-          if (showErrorModal && apiErrorMessage) {
-            setApiErrorMessage(prev => `${prev}\n\n${note}`);
-          } else {
-            setApiErrorMessage(note);
-            setShowErrorModal(true);
-          }
-        }
-      }, 1200);
-  const ct4 = res.headers.get('content-type') || '';
-  const isSSE4 = ct4.includes('text/event-stream');
-  if (streamSetting && res.body && isSSE4) {
-      // add empty assistant placeholder
-      streamingMessageRef.current = '';
-      setMessages(prev => [...prev, { role: 'assistant', content: '' }]);
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let done = false;
-      let chunkCount = 0;
-      let byteCount = 0;
-      
-      try {
-        while (!done) {
-          const { value, done: doneReading } = await reader.read();
-          if (doneReading) {
-            done = true;
-            break;
-          }
-          
-          const chunk = decoder.decode(value, { stream: true });
-          chunkCount++;
-          byteCount += value?.byteLength || 0;
-          const lines = chunk.split(/\r?\n/).filter(l => l.startsWith('data: '));
-          
-          for (const line of lines) {
-            const payload = line.replace(/^data: /, '').trim();
-            
-            if (payload === '[DONE]') {
-              done = true;
-              break;
-            }
-            
-            try {
-              const parsed = JSON.parse(payload);
-              const content = parsed.content || '';
-              
-              if (content) {
-                streamingMessageRef.current += content;
-                setMessages(prev => {
-                  const copy = [...prev];
-                  const lastMessage = copy[copy.length - 1];
-                  if (lastMessage && lastMessage.role === 'assistant') {
-                    lastMessage.content = streamingMessageRef.current;
-                  }
-                  return copy;
-                });
-    maybeStartStreamingFollow();
-              } else if (payload !== '') {
-                console.warn('[Send] Unexpected SSE payload (no content key):', payload.slice(0, 200));
-              }
-            } catch {
-              // Skip malformed JSON
-            }
-          }
-        }
-      } catch (err: any) {
-        if (err.name === 'AbortError') {
-          // Streaming was stopped by user
-          setLoading(false);
-          setIsStreaming(false);
-        } else {
-          // Other error: show modal only if nothing streamed yet
-          setLoading(false);
-          setIsStreaming(false);
-          if (streamingMessageRef.current && streamingMessageRef.current.length > 0) {
-            console.warn('Send stream ended early after partial content; no modal');
-          } else {
-            setApiErrorMessage(sanitizeErrorMessage(extractUsefulError(err?.message || 'Streaming error')));
-            setShowErrorModal(true);
-          }
-        }
-      } finally {
-        streamingAbortController.current = null;
-  console.log('[Send] Stream ended. chunks=', chunkCount, 'bytes=', byteCount, 'len=', streamingMessageRef.current.length);
-  if (streamingMessageRef.current.length === 0) {
-    console.warn('[Send] Stream finished with zero assistant content. Will trigger a mutate to refresh.');
-    // If stream ended with zero content and response was not ok, surface error
-    try {
-      if (!res.ok) {
-        const errData = await safeJson(res as any);
-  const raw = (errData?.__rawText || errData?.error?.message || errData?.error || res.statusText || 'Unknown error') as string;
-        setApiErrorMessage(sanitizeErrorMessage(extractUsefulError(String(raw))));
-        setShowErrorModal(true);
-      }
-    } catch {}
-  }
-  stopStreamingFollow();
-      }
-    } else {
-      // non-stream: parse the response and add assistant message
-      try {
-        const data = await safeJson(res as any);
-        console.log('[Send] Non-stream JSON received keys:', Object.keys(data || {}));
-        if (data.choices && data.choices[0]?.message?.content) {
-          const assistantMsg: ChatMessage = { 
-            role: 'assistant', 
-            content: data.choices[0].message.content 
-          };
-          setMessages(prev => [...prev, assistantMsg]);
-        } else if ((data as any).content) {
-          const assistantMsg: ChatMessage = { role: 'assistant', content: (data as any).content };
-          setMessages(prev => [...prev, assistantMsg]);
-        } else if ((data as any).error) {
-          const err = (data as any).error;
-          console.error('API Error:', err);
-          // Show error modal
-          setApiErrorMessage(sanitizeErrorMessage(extractUsefulError(err?.message || JSON.stringify(err))));
-          setShowErrorModal(true);
-        } else if ((data as any).__rawText) {
-          console.warn('[Send] Non-JSON response body:', (data as any).__rawText.slice(0, 200));
-        }
-      } catch (error) {
-        console.error('Failed to parse response:', error);
-        setApiErrorMessage('Failed to get response from AI');
-        setShowErrorModal(true);
-      }
-    }
+    stopStreamingFollow();
     setLoading(false);
     setIsStreaming(false);
     setJustFinishedStreaming(true);
     setSkipNextMessageUpdate(true);
     streamingMessageRef.current = '';
-  // Completed normally; no need to restore original input anymore
-  shouldRestoreInputRef.current = false;
+    shouldRestoreInputRef.current = false;
+    preStreamLastMessageIdRef.current = null;
     
-    // Final smooth scroll after streaming completes (but not during edit mode)
-    setTimeout(() => {
-      if (editingMessageIndex === null) {
-        scrollToBottom(false);
-      }
-    }, 100);
+    setTimeout(() => { if (editingMessageIndex === null) scrollToBottom(false); }, 100);
     
-    // For streaming: delay the database reload to avoid scroll stutter
-    // For non-streaming: immediate reload
-    // For retry: longer delay to avoid UI jump
-    if (streamSetting) {
+    // Delay database reload based on streaming/retry state
+    const mutateDelay = result.wasStreaming ? (retryMessage ? 1500 : 1000) : (retryMessage ? 500 : 0);
+    if (mutateDelay > 0) {
       setTimeout(async () => {
         skipNextScroll.current = true;
         await mutateWithVariantPreservation();
         setJustFinishedStreaming(false);
-      }, retryMessage ? 1500 : 1000); // Longer delay for retry to let UI settle
+      }, mutateDelay);
     } else {
-      // For non-streaming retry, also add a small delay
-      if (retryMessage) {
-        setTimeout(async () => {
-          skipNextScroll.current = true;
-          await mutateWithVariantPreservation();
-          setJustFinishedStreaming(false);
-        }, 500);
-      } else {
-        await mutateWithVariantPreservation();
-        setJustFinishedStreaming(false);
-      }
+      await mutateWithVariantPreservation();
+      setJustFinishedStreaming(false);
     }
   };
   // debug: download current messages to a text file
@@ -2830,164 +2159,6 @@ export default function ChatSessionPage() {
     }
   };
 
-  // Load notes for the current session
-  const loadNotes = async () => {
-    if (!id) return;
-    
-    try {
-      const response = await fetch(`/api/sessions/${id}/notes`);
-      if (response.ok) {
-        const data = await response.json();
-        const notes = data.notes || '';
-        setNotesContent(notes);
-        setOriginalNotesContent(notes);
-      } else if (response.status !== 404) {
-        // 404 is expected if no notes exist yet
-        console.error('Failed to load notes:', response.status);
-      }
-    } catch (error) {
-      console.error('Failed to load notes:', error);
-    }
-  };
-
-  // Save notes for the current session
-  const saveNotes = async () => {
-    if (!id) return;
-    
-    setSavingNotes(true);
-    try {
-      const response = await fetch(`/api/sessions/${id}/notes`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ notes: notesContent })
-      });
-      
-      if (!response.ok) {
-        throw new Error('Failed to save notes');
-      }
-      
-      // Update original content to current content after successful save
-      // Don't close the modal - let user continue editing
-      setOriginalNotesContent(notesContent);
-    } catch (error) {
-      console.error('Failed to save notes:', error);
-      alert('Failed to save notes. Please try again.');
-    } finally {
-      setSavingNotes(false);
-    }
-  };
-
-  // Cancel notes changes and revert to original content
-  const cancelNotesChanges = () => {
-    setNotesContent(originalNotesContent);
-  };
-
-  // Check if notes have been modified
-  const hasNotesChanges = () => {
-    return notesContent !== originalNotesContent;
-  };
-
-  // Smart scroll function that throttles during streaming
-  const scrollToBottom = useCallback((immediate = false) => {
-    if (!containerRef.current) return;
-    if (editingMessageIndex !== null) return;
-    if (!userPinnedBottomRef.current && !immediate) return; // respect manual upward scroll
-
-    const now = Date.now();
-    const timeSinceLastScroll = now - lastScrollTime.current;
-    if (scrollTimeoutRef.current) {
-      clearTimeout(scrollTimeoutRef.current);
-      scrollTimeoutRef.current = null;
-    }
-    const forceAuto = !initialScrollDoneRef.current;
-    const wantSmooth = !immediate && !isStreaming && (forceNextSmoothRef.current || !forceAuto);
-    if (immediate || !isStreaming || forceNextSmoothRef.current) {
-      containerRef.current.scrollTo({
-        top: containerRef.current.scrollHeight,
-        behavior: (immediate || forceAuto) ? 'auto' : (wantSmooth ? 'smooth' : 'auto')
-      });
-      if (forceNextSmoothRef.current) forceNextSmoothRef.current = false;
-      lastScrollTime.current = now;
-    } else if (timeSinceLastScroll > 100) {
-      containerRef.current.scrollTo({
-        top: containerRef.current.scrollHeight,
-        behavior: 'auto'
-      });
-      lastScrollTime.current = now;
-    } else {
-      scrollTimeoutRef.current = setTimeout(() => {
-        if (containerRef.current) {
-          containerRef.current.scrollTo({ top: containerRef.current.scrollHeight, behavior: 'auto' });
-          lastScrollTime.current = Date.now();
-        }
-        scrollTimeoutRef.current = null;
-      }, 100 - timeSinceLastScroll);
-    }
-  }, [isStreaming, editingMessageIndex]);
-
-  // Perform one-time initial scroll synchronously after messages first load (layout effect to avoid flicker)
-  useLayoutEffect(() => {
-    if (initialScrollDoneRef.current) return;
-    if (!containerRef.current) return;
-    if (messages.length === 0) return;
-    // Direct jump (no smooth) pre-paint
-    try {
-      containerRef.current.scrollTop = containerRef.current.scrollHeight;
-      initialScrollDoneRef.current = true;
-    } catch {}
-  }, [messages.length]);
-
-  // Maintain bottom anchoring by compensating for incremental height growth during streaming
-  useLayoutEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    const prev = prevScrollHeightRef.current;
-    const cur = el.scrollHeight;
-    if (
-      prev !== 0 &&
-      cur > prev &&
-      userPinnedBottomRef.current &&
-      (isStreamingRef.current || generatingVariantRef.current !== null) &&
-      editingMessageIndex === null
-    ) {
-      // Increase scrollTop by growth delta to keep bottom visually fixed
-      const growth = cur - prev;
-      const beforeDist = cur - growth - el.scrollTop - el.clientHeight;
-      if (beforeDist < 4) {
-        // Was at (or near) bottom before growth, so hard anchor
-        el.scrollTop = cur - el.clientHeight;
-      } else {
-        // Adjust proportionally (rare path if not exactly at bottom but still flagged pinned)
-        el.scrollTop = el.scrollTop + growth;
-      }
-    }
-    prevScrollHeightRef.current = cur;
-  }, [messages]);
-
-  // Explicit handler for the jump-to-latest button (mirrors _bak implementation intent)
-  const handleScrollToLatestClick = () => {
-    // Mark user as pinned again so future auto-scrolls resume
-    userPinnedBottomRef.current = true;
-    suppressNextAutoScrollRef.current = false;
-  forceNextSmoothRef.current = true;
-  scrollToBottom(false);
-  };
-  
-  // scroll to bottom whenever messages change
-  useEffect(() => {
-    if (skipNextScroll.current) {
-      skipNextScroll.current = false;
-      return;
-    }
-    
-    // Don't auto-scroll when editing a message to prevent the textarea from jumping around
-    if (editingMessageIndex !== null) {
-      return;
-    }
-    
-    scrollToBottom();
-  }, [messages, scrollToBottom, editingMessageIndex]);
-  
   if (error) return (
     <div className="container text-center">
       <div className="card">
@@ -3019,122 +2190,19 @@ export default function ChatSessionPage() {
         <link rel="icon" href="/favicon.ico" />
       </Head>
       
-      {/* Header */}
-      <header className="chat-header" ref={headerRef}>
-        <div className="chat-header-compact">
-          {/* Burger Menu Button */}
-          <button 
-            className="btn btn-secondary burger-menu-btn" 
-            onClick={() => setIsBurgerMenuOpen(prev => !prev)}
-            aria-label="Toggle nav menu"
-          >
-            {isBurgerMenuOpen ? '✖️' : '☰'}
-          </button>
-          
-          {/* Chat Title */}
-          <div className="chat-title-section">
-            <h1 className="chat-title mb-2">
-              <span className="persona-name">{session.persona.name}</span>
-              <span className="title-separator">&</span>
-              <span className="character-name">{session.character.name}</span>
-            </h1>
-          </div>
-          
-          {/* Invisible spacer to balance the burger button */}
-          <div className="burger-menu-spacer" aria-hidden="true"></div>
-        </div>
-        
-        {/* Burger Menu Content */}
-        {isBurgerMenuOpen && (
-          <div className="burger-menu-content">
-            <div className="burger-menu-section">
-              <div className="burger-menu-label">Navigation</div>
-              <div className="burger-menu-buttons">
-                <button 
-                  className="btn btn-secondary btn-menu-item" 
-                  onClick={() => {
-                    router.push('/chat');
-                    setIsBurgerMenuOpen(false);
-                  }}
-                >
-                  💬 Chats
-                </button>
-                
-                <button 
-                  className="btn btn-secondary btn-menu-item" 
-                  onClick={() => {
-                    router.push('/');
-                    setIsBurgerMenuOpen(false);
-                  }}
-                >
-                  🏠 Home
-                </button>
-              </div>
-            </div>
-            
-            <div className="burger-menu-section">
-              <div className="burger-menu-label">Actions</div>
-              <div className="burger-menu-buttons">
-                <button 
-                  className="btn btn-secondary btn-menu-item" 
-                  onClick={() => {
-                    setShowNotesModal(true);
-                    setOriginalNotesContent(notesContent);
-                    setIsBurgerMenuOpen(false);
-                  }}
-                >
-                  📝 Notes
-                </button>
-                
-                <button 
-                  className="btn btn-secondary btn-menu-item" 
-                  onClick={() => {
-                    setShowSummaryModal(true);
-                    setIsBurgerMenuOpen(false);
-                  }}
-                >
-                  📄 Summary
-                </button>
-              </div>
-            </div>
-            
-            {devMode && (
-              <div className="burger-menu-section">
-                <div className="burger-menu-label">Debug</div>
-                <div className="burger-menu-buttons">
-                  <button 
-                    className="btn btn-secondary btn-small btn-menu-item" 
-                    onClick={() => {
-                      handleDownloadLog();
-                      setIsBurgerMenuOpen(false);
-                    }}
-                  >
-                    📁 Log
-                  </button>
-                  <button 
-                    className="btn btn-secondary btn-small btn-menu-item" 
-                    onClick={() => {
-                      handleDownloadRequest();
-                      setIsBurgerMenuOpen(false);
-                    }}
-                  >
-                    🔧 Request
-                  </button>
-                  <button 
-                    className="btn btn-secondary btn-small btn-menu-item" 
-                    onClick={() => {
-                      handleDownloadResponse();
-                      setIsBurgerMenuOpen(false);
-                    }}
-                  >
-                    🧾 Response
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-      </header>
+      <ChatHeader
+        session={session}
+        isBurgerMenuOpen={isBurgerMenuOpen}
+        setIsBurgerMenuOpen={setIsBurgerMenuOpen}
+        devMode={devMode}
+        notesContent={notesContent}
+        headerRef={headerRef}
+        onOpenNotes={() => { setShowNotesModal(true); setOriginalNotesContent(notesContent); }}
+        onOpenSummary={() => setShowSummaryModal(true)}
+        onDownloadLog={handleDownloadLog}
+        onDownloadRequest={handleDownloadRequest}
+        onDownloadResponse={handleDownloadResponse}
+      />
 
       {/* Chat Messages */}
       <div 
@@ -3312,404 +2380,71 @@ export default function ChatSessionPage() {
             );
           })}
         </div>
-  {/* Chat Input (hidden on narrow screens while editing to maximize space) */}
-  {!(isNarrowScreen && editingMessageIndex !== null) && (
-  <div className="chat-input-container">
-          <div className="flex gap-3">
-            <textarea
-              ref={textareaRef}
-              className="form-textarea chat-input flex-1"
-              value={input}
-              onChange={e => { setInput(e.target.value); requestAnimationFrame(() => autoResizeTextarea()); }}
-              placeholder="Type your message..."
-              onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); } }}
-              disabled={loading}
-              style={{ minHeight: '80px' }}
-            />
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: '6px' }}>
-              <button
-                className="btn btn-secondary btn-small"
-                style={{
-                  width: '48px',
-                  padding: '4px 0',
-                  lineHeight: 1,
-                  fontWeight: 500,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: '2px',
-                  visibility: showScrollToLatest ? 'visible' : 'hidden',
-                  pointerEvents: showScrollToLatest ? 'auto' : 'none'
-                }}
-                onClick={showScrollToLatest ? handleScrollToLatestClick : undefined}
-                aria-label="Scroll to latest messages"
-                title="Scroll to latest"
-                disabled={!showScrollToLatest}
-              >
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                  <path d="M6 9l6 6 6-6" />
-                </svg>
-              </button>
-              {isStreaming || generatingVariant !== null ? (
-                <button className="btn btn-danger chat-send-button" onClick={stopStreaming} title="Stop">🟥</button>
-              ) : (
-                <button className="btn btn-primary chat-send-button" onClick={() => handleSend()} disabled={loading || !input.trim()}>
-                  {loading ? '⏳' : '📤'}
-                </button>
-              )}
-            </div>
-          </div>
-          <div className="text-xs text-muted composer-hint">Press Enter to send, Shift+Enter for new line</div>
-  </div>
-  )}
+  <ChatInput
+    input={input} setInput={setInput}
+    loading={loading} isStreaming={isStreaming} generatingVariant={generatingVariant}
+    isNarrowScreen={isNarrowScreen} editingMessageIndex={editingMessageIndex}
+    showScrollToLatest={showScrollToLatest} textareaRef={textareaRef}
+    autoResizeTextarea={autoResizeTextarea}
+    onSend={() => handleSend()} onStop={stopStreaming} onScrollToLatest={handleScrollToLatestClick}
+  />
       </div>
 
-      {/* Summary Modal */}
-      {showSummaryModal ? (
-        <div className="modal-overlay">
-          <div className="modal-content">
-            <div className="modal-header">
-              <h2 className="modal-title">Chat Summary</h2>
-            </div>
-            
-            <div className="modal-body">
-              <div className="form-group">
-                <label className="form-label">Summary Content</label>
-                <textarea
-                  className="form-textarea"
-                  value={summaryContent}
-                  onChange={(e) => setSummaryContent(e.target.value)}
-                  placeholder="Enter a summary of this chat session..."
-                  rows={8}
-                  style={{ minHeight: '200px' }}
-                />
-              </div>
-            </div>
-            
-            <div className="modal-footer">
-              <div className="flex gap-3 flex-wrap mb-3">
-                <button
-                  className="btn btn-secondary"
-                  onClick={generateSummary}
-                  disabled={generatingSummary}
-                  title={generatingSummary ? "Generating summary..." : "Generate AI summary of the conversation"}
-                >
-                  {generatingSummary ? '⏳ Generating...' : '🤖 Generate Summary'}
-                </button>
-                <button
-                  className={`btn btn-secondary ${!canUpdateSummary() ? 'btn-disabled-muted' : ''}`}
-                  onClick={updateSummary}
-                  disabled={updatingSummary || !canUpdateSummary()}
-                  title={
-                    !session?.summary
-                      ? "Generate a summary first before updating"
-                      : !session?.lastSummary 
-                        ? "No summary update point set. Use 'Generate Summary' first."
-                        : !canUpdateSummary() 
-                          ? "No new messages to update summary with" 
-                          : updatingSummary 
-                            ? "Updating summary..." 
-                            : "Update summary with new messages since last update"
-                  }
-                >
-                  {updatingSummary ? '⏳ Updating...' : '🔄 Update Summary'}
-                </button>
-              </div>
-              
-              <div className="flex gap-3 flex-wrap">
-                <button
-                  className="btn btn-secondary"
-                  onClick={() => setShowSummaryModal(false)}
-                >
-                  Cancel
-                </button>
-                <button
-                  className="btn btn-primary"
-                  onClick={saveSummary}
-                  disabled={savingSummary}
-                >
-                  {savingSummary ? 'Saving...' : 'Save Summary'}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      ) : null}
+      {showSummaryModal && (
+        <SummaryModal
+          summaryContent={summaryContent} setSummaryContent={setSummaryContent}
+          generateSummary={generateSummary} updateSummary={updateSummary} saveSummary={saveSummary}
+          canUpdateSummary={canUpdateSummary}
+          generatingSummary={generatingSummary} updatingSummary={updatingSummary} savingSummary={savingSummary}
+          session={session} onClose={() => setShowSummaryModal(false)}
+        />
+      )}
 
-      {/* Notes Modal - Overlay version for narrow screens */}
-      {showNotesModal && !isWideScreen ? (
-        <div className="modal-overlay notes-modal-overlay">
-          <div className={`modal-content notes-modal`}>
-            <div className="modal-header">
-              <h2 className="modal-title">Chat Notes</h2>
-            </div>
-            
-            <div className="modal-body">
-              <div className="form-group">
-                <label className="form-label">Personal Notes</label>
-                <textarea
-                  className="form-textarea"
-                  value={notesContent}
-                  onChange={(e) => setNotesContent(e.target.value)}
-                  placeholder="Write your personal notes here... These are private and never sent to the AI."
-                  rows={12}
-                  style={{ minHeight: '300px' }}
-                />
-                <div className="text-xs text-muted mt-1">
-                  💡 Use this space to keep track of important details, ideas, or context as you chat.
-                </div>
-              </div>
-            </div>
-            
-            <div className="modal-footer">
-              <div className="flex gap-3 flex-wrap mb-3">
-                {hasNotesChanges() ? (
-                  <>
-                    <button
-                      className="btn btn-secondary"
-                      onClick={cancelNotesChanges}
-                    >
-                      Cancel Changes
-                    </button>
-                    <button
-                      className="btn btn-primary"
-                      onClick={saveNotes}
-                      disabled={savingNotes}
-                    >
-                      {savingNotes ? 'Saving...' : 'Save Changes'}
-                    </button>
-                  </>
-                ) : (
-                  <>
-                    <button
-                      className="btn btn-primary"
-                      onClick={() => setShowNotesModal(false)}
-                    >
-                      Close
-                    </button>
-                    <button
-                      className="btn btn-secondary btn-disabled-muted"
-                      disabled
-                    >
-                      No Changes
-                    </button>
-                  </>
-                )}
-              </div>
-            </div>
-          </div>
-        </div>
-      ) : null}
+      {showNotesModal && (
+        <>
+          <NotesOverlayModal
+            notesContent={notesContent} setNotesContent={setNotesContent}
+            savingNotes={savingNotes} saveNotes={saveNotes}
+            cancelNotesChanges={cancelNotesChanges} hasNotesChanges={hasNotesChanges}
+            isWideScreen={isWideScreen} onClose={() => setShowNotesModal(false)}
+          />
+          <NotesSidecar
+            notesContent={notesContent} setNotesContent={setNotesContent}
+            savingNotes={savingNotes} saveNotes={saveNotes}
+            cancelNotesChanges={cancelNotesChanges} hasNotesChanges={hasNotesChanges}
+            isWideScreen={isWideScreen} onClose={() => setShowNotesModal(false)}
+          />
+        </>
+      )}
 
-      {/* Notes Modal - Sidecar version for wide screens */}
-      {showNotesModal && isWideScreen ? (
-        <div className="notes-modal-sidecar">
-          <div className="modal-header">
-            <h2 className="modal-title">Chat Notes</h2>
-          </div>
-          
-          <div className="modal-body">
-            <div className="form-group">
-              <label className="form-label">Personal Notes</label>
-              <textarea
-                className="form-textarea"
-                value={notesContent}
-                onChange={(e) => setNotesContent(e.target.value)}
-                placeholder="Write your personal notes here... These are private and never sent to the AI."
-              />
-              <div className="text-xs text-muted mt-1">
-                💡 Use this space to keep track of important details, ideas, or context as you chat.
-              </div>
-            </div>
-          </div>
-          
-          <div className="modal-footer">
-            <div className="flex gap-3 flex-wrap mb-3">
-              {hasNotesChanges() ? (
-                <>
-                  <button
-                    className="btn btn-secondary"
-                    onClick={cancelNotesChanges}
-                  >
-                    Cancel Changes
-                  </button>
-                  <button
-                    className="btn btn-primary"
-                    onClick={saveNotes}
-                    disabled={savingNotes}
-                  >
-                    {savingNotes ? 'Saving...' : 'Save Changes'}
-                  </button>
-                </>
-              ) : (
-                <>
-                  <button
-                    className="btn btn-primary"
-                    onClick={() => setShowNotesModal(false)}
-                  >
-                    Close
-                  </button>
-                  <button
-                    className="btn btn-secondary btn-disabled-muted"
-                    disabled
-                  >
-                    No Changes
-                  </button>
-                </>
-              )}
-            </div>
-          </div>
-        </div>
-      ) : null}
+      {showDeleteModal && deleteMessageIndex !== null && (
+        <DeleteConfirmModal
+          messages={messages}
+          deleteMessageIndex={deleteMessageIndex}
+          onConfirm={confirmDeleteMessage}
+          onCancel={cancelDeleteMessage}
+        />
+      )}
 
-      {/* Delete Confirmation Modal */}
-      {showDeleteModal && deleteMessageIndex !== null ? (
-        <div className="modal-overlay">
-          <div className="modal-content" style={{ maxWidth: '500px' }}>
-            <div className="modal-header">
-              <h2 className="modal-title">🗑️ Delete Message</h2>
-            </div>
-            
-            <div className="modal-body">
-              {(() => {
-                const messageCount = messages.length - deleteMessageIndex;
-                return (
-                  <div className="text-center">
-                    <p className="mb-4">
-                      {messageCount === 1 
-                        ? 'Are you sure you want to delete this message?' 
-                        : `Are you sure you want to delete this message and ${messageCount - 1} subsequent message(s)?`
-                      }
-                    </p>
-                    <div className="text-sm text-muted mb-4">
-                      <strong>⚠️ This action cannot be undone.</strong>
-                    </div>
-                    {messageCount > 1 && (
-                      <div className="warning-box">
-                        💡 Deleting this message will also remove all messages that come after it in the conversation.
-                      </div>
-                    )}
-                  </div>
-                );
-              })()}
-            </div>
-            
-            <div className="modal-footer">
-              <div className="flex gap-3 justify-center">
-                <button
-                  className="btn btn-secondary"
-                  onClick={cancelDeleteMessage}
-                >
-                  Cancel
-                </button>
-                <button
-                  className="btn btn-danger"
-                  onClick={confirmDeleteMessage}
-                >
-                  Delete {messages.length - deleteMessageIndex === 1 ? 'Message' : 'Messages'}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      ) : null}
+      {showErrorModal && (
+        <ErrorModal
+          apiErrorMessage={apiErrorMessage}
+          onDownloadRequest={handleDownloadRequest}
+          onDownloadResponse={handleDownloadResponse}
+          onClose={() => setShowErrorModal(false)}
+        />
+      )}
 
-      {/* API Error Modal */}
-      {showErrorModal ? (
-        <div className="modal-overlay">
-          <div className="modal-content" style={{ maxWidth: '560px' }}>
-            <div className="modal-header">
-              <h2 className="modal-title">⚠️ API Error</h2>
-            </div>
-
-            <div className="modal-body">
-              <p className="mb-4">The API encountered an error.</p>
-              <div className="card card-compact" style={{ background: 'var(--bg-tertiary)' }}>
-                <code style={{ whiteSpace: 'pre-wrap' }}>{apiErrorMessage}</code>
-              </div>
-            </div>
-
-            <div className="modal-footer">
-              <div className="flex gap-3 justify-center">
-                <button className="btn btn-secondary" onClick={handleDownloadRequest}>
-                  Download Last Request
-                </button>
-                <button className="btn btn-secondary" onClick={handleDownloadResponse}>
-                  Download Last Response
-                </button>
-                <button className="btn btn-primary" onClick={() => setShowErrorModal(false)}>
-                  Close
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      ) : null}
-
-      {/* Variant Temperature Popover (small floating modal) */}
-      {variantTempPopover && variantTempPopover.messageId ? (
-        <div
-          className="popover-overlay"
-          onClick={closeVariantTempPopover}
-          style={{
-            position: 'fixed',
-            inset: 0,
-            zIndex: 100,
-            background: 'transparent'
-          }}
-        >
-          <div
-            className="popover-content"
-            onClick={(e) => e.stopPropagation()}
-            style={{
-              position: 'fixed',
-              left: Math.max(12, Math.min(window.innerWidth - 300, variantTempPopover.x - 140)),
-              top: Math.max(12, variantTempPopover.y - 140),
-              width: 280,
-              padding: '14px 16px',
-              borderRadius: '12px',
-              background: 'rgba(20,20,28,0.9)',
-              backdropFilter: 'blur(10px)',
-              WebkitBackdropFilter: 'blur(10px)',
-              color: 'var(--text-primary, #fff)',
-              border: '1px solid rgba(255,255,255,0.08)',
-              boxShadow: '0 12px 32px rgba(0,0,0,0.45)'
-            }}
-          >
-            {/* Arrow pointer removed per request */}
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-              <div style={{ fontWeight: 650, letterSpacing: 0.2 }}>🧬 Variant temperature</div>
-              <span
-                style={{
-                  fontSize: 12,
-                  padding: '2px 8px',
-                  borderRadius: 999,
-                  background: 'rgba(255,255,255,0.08)',
-                  border: '1px solid rgba(255,255,255,0.12)'
-                }}
-              >{variantTempValue.toFixed(1)}</span>
-            </div>
-            <div style={{ fontSize: 12, opacity: 0.75, marginBottom: 10 }}>This applies to this variant only.</div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <span style={{ fontSize: 12, opacity: 0.8, width: 24, textAlign: 'right' }}>0.0</span>
-              <input
-                type="range"
-                min={0}
-                max={2}
-                step={0.1}
-                value={variantTempValue}
-                onChange={(e) => setVariantTempValue(parseFloat(e.target.value))}
-                style={{ flex: 1, height: 28, accentColor: 'var(--primary, #7c5cff)' as any }}
-              />
-              <span style={{ fontSize: 12, opacity: 0.8, width: 24 }}>2.0</span>
-            </div>
-            <div style={{ display: 'flex', gap: 8, marginTop: 14, justifyContent: 'flex-end' }}>
-              <button className="btn btn-secondary btn-small" onClick={closeVariantTempPopover}>Cancel</button>
-              <button className="btn btn-primary btn-small" onClick={sendVariantWithTemp}>Generate</button>
-            </div>
-          </div>
-        </div>
-      ) : null}
+      {variantTempPopover && variantTempPopover.messageId && (
+        <VariantTempPopover
+          x={variantTempPopover.x}
+          y={variantTempPopover.y}
+          tempValue={variantTempValue}
+          setTempValue={setVariantTempValue}
+          onGenerate={sendVariantWithTemp}
+          onClose={closeVariantTempPopover}
+        />
+      )}
     </div>
   );
 }
