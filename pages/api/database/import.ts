@@ -352,25 +352,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
-    // Process imports in batches to handle large datasets more efficiently
-    const BATCH_SIZE = 100; // Process records in batches of 100
-
-    // Helper function to process arrays in batches
-    const processBatch = async <T>(
-      items: T[], 
-      processor: (item: T) => Promise<void>
-    ) => {
-      for (let i = 0; i < items.length; i += BATCH_SIZE) {
-        const batch = items.slice(i, i + BATCH_SIZE);
-        await Promise.all(batch.map(processor));
-        
-        // Small delay to prevent overwhelming the database
-        if (i + BATCH_SIZE < items.length) {
-          await new Promise(resolve => setTimeout(resolve, 10));
-        }
-      }
-    };
-
     // Create lookup maps for better performance
     const personaLookup = new Map();
     const characterLookup = new Map();
@@ -393,86 +374,82 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         characterLookup.set(key, c);
       });
 
-      for (const session of importData.data.chatSessions) {
-        try {
-          // Find persona and character using lookup maps
-          const originalPersona = importData.data.personas?.find(p => p.id === session.personaId);
-          const originalCharacter = importData.data.characters?.find(c => c.id === session.characterId);
+      await prisma.$transaction(async (tx) => {
+        for (const session of importData.data.chatSessions) {
+          try {
+            // Find persona and character using lookup maps
+            const originalPersona = importData.data.personas?.find(p => p.id === session.personaId);
+            const originalCharacter = importData.data.characters?.find(c => c.id === session.characterId);
 
-          if (!originalPersona || !originalCharacter) {
-            results.errors.push(`ChatSession: Missing original persona or character data`);
-            continue;
-          }
+            if (!originalPersona || !originalCharacter) {
+              results.errors.push(`ChatSession: Missing original persona or character data`);
+              continue;
+            }
 
-          const personaKey = `${originalPersona.name}|${originalPersona.profileName || ''}`;
-          const characterKey = `${originalCharacter.name}|${originalCharacter.profileName || ''}`;
+            const personaKey = `${originalPersona.name}|${originalPersona.profileName || ''}`;
+            const characterKey = `${originalCharacter.name}|${originalCharacter.profileName || ''}`;
 
-          const persona = personaLookup.get(personaKey);
-          const character = characterLookup.get(characterKey);
+            const persona = personaLookup.get(personaKey);
+            const character = characterLookup.get(characterKey);
 
-          if (persona && character) {
-            const existing = await prisma.chatSession.findFirst({
-              where: {
-                personaId: persona.id,
-                characterId: character.id,
-                createdAt: new Date(session.createdAt)
-              }
-            });
-
-            if (!existing) {
-              const newSession = await prisma.chatSession.create({
-                data: {
+            if (persona && character) {
+              const existing = await tx.chatSession.findFirst({
+                where: {
                   personaId: persona.id,
                   characterId: character.id,
-                  lastApiRequest: session.lastApiRequest,
-                  summary: session.summary,
-                  description: session.description,
-                  lastSummary: session.lastSummary,
-                  notes: session.notes,
-                  createdAt: new Date(session.createdAt),
-                  updatedAt: new Date(session.updatedAt)
+                  createdAt: new Date(session.createdAt)
                 }
               });
-              
-              // Store session mapping for messages import
-              sessionLookup.set(session.id, newSession);
-              results.imported.chatSessions++;
+
+              if (!existing) {
+                const newSession = await tx.chatSession.create({
+                  data: {
+                    personaId: persona.id,
+                    characterId: character.id,
+                    lastApiRequest: session.lastApiRequest,
+                    summary: session.summary,
+                    description: session.description,
+                    lastSummary: session.lastSummary,
+                    notes: session.notes,
+                    createdAt: new Date(session.createdAt),
+                    updatedAt: new Date(session.updatedAt)
+                  }
+                });
+                
+                // Store session mapping for messages import
+                sessionLookup.set(session.id, newSession);
+                results.imported.chatSessions++;
+              } else {
+                sessionLookup.set(session.id, existing);
+                results.skipped.chatSessions++;
+              }
             } else {
-              sessionLookup.set(session.id, existing);
-              results.skipped.chatSessions++;
+              results.errors.push(`ChatSession: Missing persona (${originalPersona.name}) or character (${originalCharacter.name}) reference`);
             }
-          } else {
-            results.errors.push(`ChatSession: Missing persona (${originalPersona.name}) or character (${originalCharacter.name}) reference`);
+          } catch (error) {
+            results.errors.push(`ChatSession: ${error instanceof Error ? error.message : 'Unknown error'}`);
           }
-        } catch (error) {
-          results.errors.push(`ChatSession: ${error instanceof Error ? error.message : 'Unknown error'}`);
         }
-      }
+      }, { timeout: 60000 });
     }
+
+    // Small delay between major transaction batches
+    await new Promise(r => setTimeout(r, 50));
 
     // 7. Import ChatMessages (depends on ChatSessions)
     if (importData.data.chatMessages?.length) {
-      for (const message of importData.data.chatMessages) {
-        try {
-          const importedSession = sessionLookup.get(message.sessionId);
-          if (!importedSession) {
-            results.errors.push(`ChatMessage: Could not find imported session for message ${message.id}`);
-            continue;
-          }
-
-          // Check if message already exists (by content, role, and timestamp)
-          const existing = await prisma.chatMessage.findFirst({
-            where: {
-              sessionId: importedSession.id,
-              role: message.role,
-              content: message.content,
-              createdAt: new Date(message.createdAt)
+      await prisma.$transaction(async (tx) => {
+        for (const message of importData.data.chatMessages) {
+          try {
+            const importedSession = sessionLookup.get(message.sessionId);
+            if (!importedSession) {
+              results.errors.push(`ChatMessage: Could not find imported session for message ${message.id}`);
+              continue;
             }
-          });
 
-          if (!existing) {
-            const newMessage = await prisma.chatMessage.create({
-              data: {
+            // Check if message already exists (by content, role, and timestamp)
+            const existing = await tx.chatMessage.findFirst({
+              where: {
                 sessionId: importedSession.id,
                 role: message.role,
                 content: message.content,
@@ -480,56 +457,72 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               }
             });
 
-            // Store message mapping for versions import
-            messageLookup.set(message.id, newMessage);
-            results.imported.chatMessages++;
-          } else {
-            messageLookup.set(message.id, existing);
-            results.skipped.chatMessages++;
+            if (!existing) {
+              const newMessage = await tx.chatMessage.create({
+                data: {
+                  sessionId: importedSession.id,
+                  role: message.role,
+                  content: message.content,
+                  createdAt: new Date(message.createdAt)
+                }
+              });
+
+              // Store message mapping for versions import
+              messageLookup.set(message.id, newMessage);
+              results.imported.chatMessages++;
+            } else {
+              messageLookup.set(message.id, existing);
+              results.skipped.chatMessages++;
+            }
+          } catch (error) {
+            results.errors.push(`ChatMessage ${message.id}: ${error instanceof Error ? error.message : 'Unknown error'}`);
           }
-        } catch (error) {
-          results.errors.push(`ChatMessage ${message.id}: ${error instanceof Error ? error.message : 'Unknown error'}`);
         }
-      }
+      }, { timeout: 120000 });
     }
+
+    // Small delay between major transaction batches
+    await new Promise(r => setTimeout(r, 50));
 
     // 8. Import MessageVersions (depends on ChatMessages)
     if (importData.data.messageVersions?.length) {
-      for (const version of importData.data.messageVersions) {
-        try {
-          const importedMessage = messageLookup.get(version.messageId);
-          if (!importedMessage) {
-            results.errors.push(`MessageVersion: Could not find imported message for version ${version.id}`);
-            continue;
-          }
-
-          // Check if version already exists
-          const existing = await prisma.messageVersion.findFirst({
-            where: {
-              messageId: importedMessage.id,
-              version: version.version,
-              content: version.content
+      await prisma.$transaction(async (tx) => {
+        for (const version of importData.data.messageVersions) {
+          try {
+            const importedMessage = messageLookup.get(version.messageId);
+            if (!importedMessage) {
+              results.errors.push(`MessageVersion: Could not find imported message for version ${version.id}`);
+              continue;
             }
-          });
 
-          if (!existing) {
-            await prisma.messageVersion.create({
-              data: {
+            // Check if version already exists
+            const existing = await tx.messageVersion.findFirst({
+              where: {
                 messageId: importedMessage.id,
-                content: version.content,
                 version: version.version,
-                isActive: version.isActive,
-                createdAt: new Date(version.createdAt)
+                content: version.content
               }
             });
-            results.imported.messageVersions++;
-          } else {
-            results.skipped.messageVersions++;
+
+            if (!existing) {
+              await tx.messageVersion.create({
+                data: {
+                  messageId: importedMessage.id,
+                  content: version.content,
+                  version: version.version,
+                  isActive: version.isActive,
+                  createdAt: new Date(version.createdAt)
+                }
+              });
+              results.imported.messageVersions++;
+            } else {
+              results.skipped.messageVersions++;
+            }
+          } catch (error) {
+            results.errors.push(`MessageVersion ${version.id}: ${error instanceof Error ? error.message : 'Unknown error'}`);
           }
-        } catch (error) {
-          results.errors.push(`MessageVersion ${version.id}: ${error instanceof Error ? error.message : 'Unknown error'}`);
         }
-      }
+      }, { timeout: 120000 });
     }
 
     return res.status(200).json({

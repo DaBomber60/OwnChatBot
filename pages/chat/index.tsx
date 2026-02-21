@@ -1,9 +1,83 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import useSWR from 'swr';
 import { useRouter } from 'next/router';
 import Head from 'next/head';
 import { fetcher } from '../../lib/fetcher';
 import type { Persona, Character, CharacterGroup, Session, Message } from '../../types/models';
+
+// Pure function — defined outside the component so its reference is stable.
+function organizeCharactersForDisplay(
+  chars: Character[] | undefined,
+  groups: CharacterGroup[] | undefined
+): Array<{
+  isGroup: boolean;
+  isHeader: boolean;
+  group?: CharacterGroup;
+  character?: Character;
+  headerText?: string;
+}> {
+  if (!chars || !groups) return [];
+
+  const organizedCharacters: Array<{
+    isGroup: boolean;
+    isHeader: boolean;
+    group?: CharacterGroup;
+    character?: Character;
+    headerText?: string;
+  }> = [];
+
+  // Create a map of grouped characters
+  const grouped: { [key: number]: Character[] } = {};
+  const ungrouped: Character[] = [];
+
+  // Initialize group arrays
+  groups.forEach(group => {
+    grouped[group.id] = [];
+  });
+
+  // Sort characters into groups
+  chars.forEach(char => {
+    if (char.groupId && grouped[char.groupId]) {
+      const groupArray = grouped[char.groupId];
+      if (groupArray) {
+        groupArray.push(char);
+      }
+    } else {
+      ungrouped.push(char);
+    }
+  });
+
+  // Sort groups alphabetically by name
+  const sortedGroups = [...groups].sort((a, b) => a.name.localeCompare(b.name));
+
+  // Check if there are any groups with characters
+  const hasGroupedCharacters = sortedGroups.some(group => (grouped[group.id] || []).length > 0);
+
+  // Add grouped characters
+  sortedGroups.forEach(group => {
+    const groupCharacters = grouped[group.id] || [];
+    if (groupCharacters.length > 0) {
+      organizedCharacters.push({ isGroup: true, isHeader: true, group, headerText: group.name });
+      groupCharacters.sort((a, b) => (a.profileName || a.name).localeCompare(b.profileName || b.name));
+      groupCharacters.forEach(char => {
+        organizedCharacters.push({ isGroup: false, isHeader: false, character: char });
+      });
+    }
+  });
+
+  // Add "UNGROUPED:" header and ungrouped characters
+  if (ungrouped.length > 0) {
+    if (hasGroupedCharacters) {
+      organizedCharacters.push({ isGroup: false, isHeader: true, headerText: "UNGROUPED:" });
+    }
+    ungrouped.sort((a, b) => (a.profileName || a.name).localeCompare(b.profileName || b.name));
+    ungrouped.forEach(char => {
+      organizedCharacters.push({ isGroup: false, isHeader: false, character: char });
+    });
+  }
+
+  return organizedCharacters;
+}
 
 export default function ChatIndexPage() {
   const router = useRouter();
@@ -142,74 +216,10 @@ export default function ChatIndexPage() {
     };
   }, [openMenuId]);
 
-  // Function to organize characters by groups for display in dropdown
-  const organizeCharactersForDisplay = () => {
-    if (!chars || !groups) return [];
-    
-    const organizedCharacters: Array<{ 
-      isGroup: boolean; 
-      isHeader: boolean;
-      group?: CharacterGroup; 
-      character?: Character; 
-      headerText?: string;
-    }> = [];
-    
-    // Create a map of grouped characters
-    const grouped: { [key: number]: Character[] } = {};
-    const ungrouped: Character[] = [];
-    
-    // Initialize group arrays
-    groups.forEach(group => {
-      grouped[group.id] = [];
-    });
-    
-    // Sort characters into groups
-    chars.forEach(char => {
-      if (char.groupId && grouped[char.groupId]) {
-        const groupArray = grouped[char.groupId];
-        if (groupArray) {
-          groupArray.push(char);
-        }
-      } else {
-        ungrouped.push(char);
-      }
-    });
-
-    // Sort groups alphabetically by name
-    const sortedGroups = [...groups].sort((a, b) => a.name.localeCompare(b.name));
-
-    // Check if there are any groups with characters
-    const hasGroupedCharacters = sortedGroups.some(group => (grouped[group.id] || []).length > 0);
-
-    // Add grouped characters
-    sortedGroups.forEach(group => {
-      const groupCharacters = grouped[group.id] || [];
-      if (groupCharacters.length > 0) {
-        // Add group name as header
-        organizedCharacters.push({ isGroup: true, isHeader: true, group, headerText: group.name });
-        
-        // Sort characters within group by name and add them
-        groupCharacters.sort((a, b) => (a.profileName || a.name).localeCompare(b.profileName || b.name));
-        groupCharacters.forEach(char => {
-          organizedCharacters.push({ isGroup: false, isHeader: false, character: char });
-        });
-      }
-    });
-    
-    // Add "UNGROUPED:" header and ungrouped characters
-    // Only show "UNGROUPED:" header if there are also grouped characters
-    if (ungrouped.length > 0) {
-      if (hasGroupedCharacters) {
-        organizedCharacters.push({ isGroup: false, isHeader: true, headerText: "UNGROUPED:" });
-      }
-      ungrouped.sort((a, b) => (a.profileName || a.name).localeCompare(b.profileName || b.name));
-      ungrouped.forEach(char => {
-        organizedCharacters.push({ isGroup: false, isHeader: false, character: char });
-      });
-    }
-    
-    return organizedCharacters;
-  };
+  const organizedChars = useMemo(
+    () => organizeCharactersForDisplay(chars, groups),
+    [chars, groups]
+  );
 
   if (!personas || !chars || !groups) {
     return (
@@ -275,7 +285,7 @@ export default function ChatIndexPage() {
                 onChange={e => setSelectedCharacter(Number(e.target.value))}
               >
                 <option value={0}>Choose a character...</option>
-                {organizeCharactersForDisplay().map((item, index) => {
+                {organizedChars.map((item, index) => {
                   if (item.isHeader) {
                     return (
                       <option 

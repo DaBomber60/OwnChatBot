@@ -3,7 +3,7 @@ import prisma from '../../../lib/prisma';
 import JSZip from 'jszip';
 import { requireAuth } from '../../../lib/apiAuth';
 import { limiters, clientIp } from '../../../lib/rateLimit';
-import { tooManyRequests, methodNotAllowed } from '../../../lib/apiErrors';
+import { tooManyRequests, methodNotAllowed, serverError } from '../../../lib/apiErrors';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!(await requireAuth(req, res))) return;
@@ -29,8 +29,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       characterGroups,
       characters,
       chatSessions,
-      chatMessages,
-      messageVersions,
       userPrompts,
       settings
     ] = await Promise.all([
@@ -56,17 +54,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           }
         }
       }),
-      prisma.chatMessage.findMany({
-        orderBy: { id: 'asc' },
-        include: {
-          versions: {
-            orderBy: { version: 'asc' }
-          }
-        }
-      }),
-      prisma.messageVersion.findMany({
-        orderBy: { id: 'asc' }
-      }),
       prisma.userPrompt.findMany({
         orderBy: { id: 'asc' }
       }),
@@ -74,6 +61,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         orderBy: { key: 'asc' }
       })
     ]);
+
+    // Derive flat arrays from nested session data (avoids redundant DB queries)
+    const chatMessages = chatSessions.flatMap(s => s.messages);
+    const messageVersions = chatMessages.flatMap(m => m.versions);
 
     const exportData = {
       version: '1.0.0',
@@ -154,9 +145,6 @@ For support or questions, visit: https://github.com/DaBomber60/OwnChatBot
 
   } catch (error) {
     console.error('Database export error:', error);
-    return res.status(500).json({ 
-      error: 'Failed to export database',
-      details: error instanceof Error ? error.message : 'Unknown error'
-    });
+    return serverError(res, 'Failed to export database');
   }
 }
