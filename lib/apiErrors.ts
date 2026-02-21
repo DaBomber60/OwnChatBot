@@ -57,6 +57,10 @@ export function payloadTooLarge(res: NextApiResponse, message = 'Payload Too Lar
   return send(res, 413, code, message);
 }
 
+export function gone(res: NextApiResponse, message = 'Gone', code = 'GONE', extra?: Record<string, any>) {
+  return send(res, 410, code, message, extra);
+}
+
 // Convenience helpers
 export function apiKeyNotConfigured(res: NextApiResponse) {
   return unauthorized(res, 'API key not configured in settings', 'API_KEY_NOT_CONFIGURED');

@@ -2,7 +2,7 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import prisma from '../../../lib/prisma';
 import { requireAuth } from '../../../lib/apiAuth';
 import { schemas, validateBody } from '../../../lib/validate';
-import { validationError, methodNotAllowed } from '../../../lib/apiErrors';
+import { conflict, serverError, methodNotAllowed } from '../../../lib/apiErrors';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!(await requireAuth(req, res))) return;
@@ -20,7 +20,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       res.status(200).json(groups);
     } catch (error) {
       console.error('Error fetching character groups:', error);
-      res.status(500).json({ error: 'Failed to fetch character groups', code: 'GROUPS_FETCH_FAILED' });
+      return serverError(res, 'Failed to fetch character groups', 'GROUPS_FETCH_FAILED');
     }
   } else if (req.method === 'POST') {
     try {
@@ -52,9 +52,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     } catch (error: any) {
       console.error('Error creating character group:', error);
       if (error.code === 'P2002') {
-        res.status(400).json({ error: 'A group with this name already exists', code: 'GROUP_NAME_DUPLICATE' });
+        return conflict(res, 'A group with this name already exists', 'GROUP_NAME_DUPLICATE');
       } else {
-        res.status(500).json({ error: 'Failed to create character group', code: 'GROUP_CREATE_FAILED' });
+        return serverError(res, 'Failed to create character group', 'GROUP_CREATE_FAILED');
       }
     }
   } else {

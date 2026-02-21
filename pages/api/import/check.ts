@@ -1,5 +1,5 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { methodNotAllowed } from '../../../lib/apiErrors';
+import { serverError, methodNotAllowed } from '../../../lib/apiErrors';
 
 // Import latestImport from receive.ts (we'll need to share this state)
 // In a production environment, you'd use a proper database or Redis
@@ -55,6 +55,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     
   } catch (error) {
     console.error('Error checking import status:', error);
-    return res.status(500).json({ error: 'Failed to check import status' });
+    return serverError(res, 'Failed to check import status', 'IMPORT_CHECK_FAILED');
   }
 }

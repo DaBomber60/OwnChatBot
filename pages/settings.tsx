@@ -557,7 +557,7 @@ export default function SettingsPage() {
   };
 
   return (
-    <div className="container">
+    <>
       {toast && (
         <div className="toast-container">
           <div className={`toast ${toast.type === 'error' ? 'toast-error' : 'toast-success'}`}>
@@ -1186,6 +1186,6 @@ export default function SettingsPage() {
           <UserPromptsManager />
         </div>
       </div>
-    </div>
+    </>
   );
 }

@@ -2,14 +2,14 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import prisma from '../../../lib/prisma';
 import { requireAuth } from '../../../lib/apiAuth';
 import { schemas, validateBody, parseId } from '../../../lib/validate';
-import { badRequest, methodNotAllowed } from '../../../lib/apiErrors';
+import { badRequest, notFound, serverError, methodNotAllowed } from '../../../lib/apiErrors';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!(await requireAuth(req, res))) return;
   const sessionId = parseId(req.query.id);
   
   if (sessionId === null) {
-    return res.status(400).json({ error: 'Invalid session ID' });
+    return badRequest(res, 'Invalid session ID', 'INVALID_SESSION_ID');
   }
 
   if (req.method === 'GET') {
@@ -19,16 +19,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const limit = limitParam ? Math.min(Math.max(parseInt(limitParam, 10), 1), 500) : undefined; // cap at 500
     const beforeId = beforeIdParam ? parseInt(beforeIdParam, 10) : undefined;
 
-    // Always fetch session meta first
-    const sessionMeta = await prisma.chatSession.findUnique({
-      where: { id: sessionId },
-      include: { persona: true, character: true }
-    });
-    if (!sessionMeta) {
-      return res.status(404).json({ error: 'Session not found' });
-    }
-
-    // If no limit requested, preserve existing full fetch behavior
+    // If no limit requested, single full fetch (avoids double query)
     if (!limit) {
       const fullSession = await prisma.chatSession.findUnique({
         where: { id: sessionId },
@@ -41,7 +32,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           }
         }
       });
+      if (!fullSession) {
+        return notFound(res, 'Session not found', 'SESSION_NOT_FOUND');
+      }
       return res.status(200).json(fullSession);
+    }
+
+    // Paginated path: fetch session meta first
+    const sessionMeta = await prisma.chatSession.findUnique({
+      where: { id: sessionId },
+      include: { persona: true, character: true }
+    });
+    if (!sessionMeta) {
+      return notFound(res, 'Session not found', 'SESSION_NOT_FOUND');
     }
 
     // We paginate by createdAt (stable) using an optional beforeId cursor.
@@ -50,7 +53,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (beforeId) {
       const cursorMessage = await prisma.chatMessage.findUnique({ where: { id: beforeId }, select: { createdAt: true, sessionId: true } });
       if (!cursorMessage || cursorMessage.sessionId !== sessionId) {
-        return res.status(400).json({ error: 'Invalid beforeId cursor' });
+        return badRequest(res, 'Invalid beforeId cursor', 'INVALID_CURSOR');
       }
       cursorCreatedAt = cursorMessage.createdAt;
     }
@@ -88,7 +91,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const { messages } = req.body;
     
     if (!messages || !Array.isArray(messages)) {
-      return res.status(400).json({ error: 'Invalid messages data' });
+      return badRequest(res, 'Invalid messages data', 'INVALID_MESSAGES');
     }
 
     // Delete existing messages and recreate them with the new content
@@ -132,7 +135,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(200).json(updatedSession);
     } catch (error) {
       console.error('Error updating session description:', error);
-      return res.status(500).json({ error: 'Failed to update description' });
+      return serverError(res, 'Failed to update description', 'DESCRIPTION_UPDATE_FAILED');
     }
   }
 

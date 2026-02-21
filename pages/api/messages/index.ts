@@ -2,7 +2,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import prisma from '../../../lib/prisma';
 import { requireAuth } from '../../../lib/apiAuth';
 import { schemas, validateBody } from '../../../lib/validate';
-import { methodNotAllowed } from '../../../lib/apiErrors';
+import { badRequest, serverError, methodNotAllowed } from '../../../lib/apiErrors';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!(await requireAuth(req, res))) return;
@@ -16,7 +16,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const limitSetting = await prisma.setting.findUnique({ where: { key: 'limit_messageContent' } });
         const dynLimit = limitSetting ? parseInt(limitSetting.value) : undefined;
         if (dynLimit && content.length > dynLimit) {
-          return res.status(400).json({ error: `Message content exceeds dynamic limit of ${dynLimit} characters`, code: 'MESSAGE_CONTENT_TOO_LONG' });
+          return badRequest(res, `Message content exceeds dynamic limit of ${dynLimit} characters`, 'MESSAGE_CONTENT_TOO_LONG');
         }
       } catch {}
       const message = await prisma.chatMessage.create({
@@ -36,7 +36,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(201).json(message);
     } catch (error) {
       console.error('Error creating message:', error);
-      return res.status(500).json({ error: 'Failed to create message' });
+      return serverError(res, 'Failed to create message', 'MESSAGE_CREATE_FAILED');
     }
   }
 

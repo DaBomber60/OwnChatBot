@@ -1,7 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import prisma from '../../../../../lib/prisma';
 import { requireAuth } from '../../../../../lib/apiAuth';
-import { methodNotAllowed } from '../../../../../lib/apiErrors';
+import { badRequest, notFound, serverError, gone, methodNotAllowed } from '../../../../../lib/apiErrors';
 import { parseId } from '../../../../../lib/validate';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -9,7 +9,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const messageId = parseId(req.query.id);
 
   if (messageId === null) {
-    return res.status(400).json({ error: 'Invalid message ID' });
+    return badRequest(res, 'Invalid message ID', 'INVALID_MESSAGE_ID');
   }
 
   if (req.method === 'GET') {
@@ -35,21 +35,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
       
       if (!latestVariant) {
-        return res.status(404).json({ error: 'No variants found' });
+        return notFound(res, 'No variants found', 'NO_VARIANTS');
       }
       
       return res.status(200).json(latestVariant);
     } catch (error) {
       console.error('Error fetching latest variant:', error);
-      return res.status(500).json({ error: 'Failed to fetch latest variant' });
+      return serverError(res, 'Failed to fetch latest variant', 'VARIANT_FETCH_FAILED');
     }
   }
 
   if (req.method === 'DELETE') {
     // Disable DELETE for latest variant - stopped variants are not saved automatically
     console.log(`Rejecting DELETE request for latest variant of message ${messageId} - stopped variants are not saved to database`);
-    return res.status(410).json({ 
-      error: 'DELETE /latest is deprecated. Stopped variants are not saved to the database automatically.',
+    return gone(res, 'DELETE /latest is deprecated. Stopped variants are not saved to the database automatically.', 'VARIANT_DELETE_DEPRECATED', {
       solution: 'Listen for status messages from the streaming API instead of trying to delete variants.',
       statusMessages: ['variant_saved', 'variant_not_saved']
     });

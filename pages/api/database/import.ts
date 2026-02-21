@@ -7,7 +7,7 @@ import os from 'os';
 import JSZip from 'jszip';
 import { requireAuth } from '../../../lib/apiAuth';
 import { limiters, clientIp } from '../../../lib/rateLimit';
-import { tooManyRequests, methodNotAllowed } from '../../../lib/apiErrors';
+import { badRequest, serverError, tooManyRequests, methodNotAllowed } from '../../../lib/apiErrors';
 
 // Disable Next.js body parser for file uploads and increase size limits
 export const config = {
@@ -78,7 +78,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const uploadedFile = Array.isArray(files.file) ? files.file[0] : files.file;
     
     if (!uploadedFile) {
-      return res.status(400).json({ error: 'No file uploaded' });
+      return badRequest(res, 'No file uploaded', 'NO_FILE');
     }
 
     // Determine file type and process accordingly
@@ -87,8 +87,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const isJsonFile = fileName.toLowerCase().endsWith('.json');
 
     if (!isZipFile && !isJsonFile) {
-      return res.status(400).json({ 
-        error: 'Invalid file type',
+      return badRequest(res, 'Invalid file type', 'INVALID_FILE_TYPE', {
         details: 'Please upload a .zip or .json export file'
       });
     }
@@ -105,16 +104,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         // Look for database.json in the zip
         const databaseFile = loadedZip.file('database.json');
         if (!databaseFile) {
-          return res.status(400).json({ 
-            error: 'Invalid zip file format',
+          return badRequest(res, 'Invalid zip file format', 'INVALID_ZIP', {
             details: 'Zip file must contain database.json'
           });
         }
         
         fileContent = await databaseFile.async('text');
       } catch (zipError) {
-        return res.status(400).json({ 
-          error: 'Failed to read zip file',
+        return badRequest(res, 'Failed to read zip file', 'ZIP_READ_FAILED', {
           details: zipError instanceof Error ? zipError.message : 'Could not extract zip contents'
         });
       }
@@ -127,8 +124,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     try {
       importData = JSON.parse(fileContent);
     } catch (parseError) {
-      return res.status(400).json({ 
-        error: 'Invalid JSON file format',
+      return badRequest(res, 'Invalid JSON file format', 'INVALID_JSON', {
         details: parseError instanceof Error ? parseError.message : 'Could not parse JSON'
       });
     }
@@ -141,8 +137,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // Validate the import data structure
     if (!importData.data || !importData.version) {
-      return res.status(400).json({ 
-        error: 'Invalid export file format',
+      return badRequest(res, 'Invalid export file format', 'INVALID_FORMAT', {
         details: 'File must contain data and version fields'
       });
     }
@@ -538,9 +533,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   } catch (error) {
     console.error('Database import error:', error);
-    return res.status(500).json({
-      error: 'Failed to import database',
-      details: error instanceof Error ? error.message : 'Unknown error'
-    });
+    return serverError(res, 'Failed to import database', 'IMPORT_FAILED',
+      error instanceof Error ? error.message : 'Unknown error'
+    );
   }
 }

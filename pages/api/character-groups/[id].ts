@@ -2,7 +2,7 @@ import { NextApiRequest, NextApiResponse } from 'next';
 import prisma from '../../../lib/prisma';
 import { requireAuth } from '../../../lib/apiAuth';
 import { schemas, validateBody, parseId } from '../../../lib/validate';
-import { methodNotAllowed } from '../../../lib/apiErrors';
+import { badRequest, notFound, conflict, serverError, methodNotAllowed } from '../../../lib/apiErrors';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!(await requireAuth(req, res))) return;
@@ -10,7 +10,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const groupId = parseId(req.query.id);
 
   if (groupId === null) {
-    return res.status(400).json({ error: 'Invalid group ID', code: 'INVALID_GROUP_ID' });
+    return badRequest(res, 'Invalid group ID', 'INVALID_GROUP_ID');
   }
 
   if (req.method === 'GET') {
@@ -25,13 +25,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
 
       if (!group) {
-        return res.status(404).json({ error: 'Group not found', code: 'GROUP_NOT_FOUND' });
+        return notFound(res, 'Group not found', 'GROUP_NOT_FOUND');
       }
 
       res.status(200).json(group);
     } catch (error) {
       console.error('Error fetching character group:', error);
-      res.status(500).json({ error: 'Failed to fetch character group', code: 'GROUP_FETCH_FAILED' });
+      return serverError(res, 'Failed to fetch character group', 'GROUP_FETCH_FAILED');
     }
   } else if (req.method === 'PUT') {
     try {
@@ -57,11 +57,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     } catch (error: any) {
       console.error('Error updating character group:', error);
       if (error.code === 'P2002') {
-        res.status(400).json({ error: 'A group with this name already exists', code: 'GROUP_NAME_DUPLICATE' });
+        return conflict(res, 'A group with this name already exists', 'GROUP_NAME_DUPLICATE');
       } else if (error.code === 'P2025') {
-        res.status(404).json({ error: 'Group not found', code: 'GROUP_NOT_FOUND' });
+        return notFound(res, 'Group not found', 'GROUP_NOT_FOUND');
       } else {
-        res.status(500).json({ error: 'Failed to update character group', code: 'GROUP_UPDATE_FAILED' });
+        return serverError(res, 'Failed to update character group', 'GROUP_UPDATE_FAILED');
       }
     }
   } else if (req.method === 'DELETE') {
@@ -81,9 +81,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     } catch (error: any) {
       console.error('Error deleting character group:', error);
       if (error.code === 'P2025') {
-        res.status(404).json({ error: 'Group not found', code: 'GROUP_NOT_FOUND' });
+        return notFound(res, 'Group not found', 'GROUP_NOT_FOUND');
       } else {
-        res.status(500).json({ error: 'Failed to delete character group', code: 'GROUP_DELETE_FAILED' });
+        return serverError(res, 'Failed to delete character group', 'GROUP_DELETE_FAILED');
       }
     }
   } else {

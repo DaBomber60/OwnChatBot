@@ -1,7 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import prisma from '../../../../lib/prisma';
 import { requireAuth } from '../../../../lib/apiAuth';
-import { methodNotAllowed } from '../../../../lib/apiErrors';
+import { badRequest, notFound, serverError, methodNotAllowed } from '../../../../lib/apiErrors';
 import { parseId } from '../../../../lib/validate';
 
 // POST /api/sessions/:id/clone
@@ -16,7 +16,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const sessionId = parseId(req.query.id);
   if (sessionId === null) {
-    return res.status(400).json({ error: 'Invalid session ID' });
+    return badRequest(res, 'Invalid session ID', 'INVALID_SESSION_ID');
   }
 
   try {
@@ -31,7 +31,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
 
     if (!original) {
-      return res.status(404).json({ error: 'Session not found' });
+      return notFound(res, 'Session not found', 'SESSION_NOT_FOUND');
     }
 
     const newSession = await prisma.$transaction(async (tx) => {
@@ -79,6 +79,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(201).json({ id: newSession.id });
   } catch (error) {
     console.error('Clone session error:', error);
-    return res.status(500).json({ error: 'Failed to clone session' });
+    return serverError(res, 'Failed to clone session', 'CLONE_FAILED');
   }
 }

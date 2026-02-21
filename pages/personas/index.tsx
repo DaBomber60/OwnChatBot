@@ -1,10 +1,11 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import useSWR from 'swr';
 import { useRouter } from 'next/router';
 import Head from 'next/head';
 import { fetcher } from '../../lib/fetcher';
 import type { Persona } from '../../types/models';
 import { renderMultiline } from '../../components/RenderMultiline';
+import { useClickOutside } from '../../hooks/useClickOutside';
 
 // Utility to get preview text for persona cards
 function getPersonaPreview(persona: Persona): { text: string; label: string } | null {
@@ -29,34 +30,7 @@ export default function PersonasPage() {
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
   const [openMenuId, setOpenMenuId] = useState<number | null>(null);
   const router = useRouter();
-
-  // Add click outside and escape key functionality
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && openMenuId) {
-        setOpenMenuId(null);
-      }
-    };
-
-    const handleClickOutside = (event: MouseEvent) => {
-      if (openMenuId) {
-        const target = event.target as HTMLElement;
-        if (!target.closest('.menu-container')) {
-          setOpenMenuId(null);
-        }
-      }
-    };
-
-    if (openMenuId) {
-      document.addEventListener('keydown', handleKeyDown);
-      document.addEventListener('click', handleClickOutside);
-    }
-
-    return () => {
-      document.removeEventListener('keydown', handleKeyDown);
-      document.removeEventListener('click', handleClickOutside);
-    };
-  }, [openMenuId]);
+  useClickOutside(openMenuId !== null, () => setOpenMenuId(null));
 
   const toggleMenu = (personaId: number) => {
     setOpenMenuId(openMenuId === personaId ? null : personaId);
@@ -93,11 +67,11 @@ export default function PersonasPage() {
     mutate();
   };
 
-  if (error) return <div className="container text-center text-error">Error loading personas.</div>;
-  if (!personas) return <div className="container text-center">Loading...</div>;
+  if (error) return <div className="text-center text-error">Error loading personas.</div>;
+  if (!personas) return <div className="text-center">Loading...</div>;
 
   return (
-    <div className="container">
+    <>
       <Head>
         <title>Personas - Manage AI Conversation Styles</title>
         <meta name="description" content="Create and manage AI personas to define different conversation styles and personalities for your chats." />
@@ -450,6 +424,6 @@ export default function PersonasPage() {
           </button>
         </div>
       )}
-    </div>
+    </>
   );
 }

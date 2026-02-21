@@ -9,7 +9,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const sessionId = parseId(req.query.id);
 
   if (sessionId === null) {
-    return res.status(400).json({ error: 'Invalid session ID' });
+    return badRequest(res, 'Invalid session ID', 'INVALID_SESSION_ID');
   }
 
   try {
@@ -20,7 +20,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
 
       if (!session) {
-        return res.status(404).json({ error: 'Session not found' });
+        return notFound(res, 'Session not found', 'SESSION_NOT_FOUND');
       }
 
       return res.status(200).json({ notes: (session as any).notes || '' });
@@ -53,6 +53,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return methodNotAllowed(res, req.method);
   } catch (error) {
     console.error('Notes API error:', error);
-    return res.status(500).json({ error: 'Internal server error' });
+    return serverError(res, 'Internal server error', 'NOTES_ERROR');
   }
 }

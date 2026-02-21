@@ -9,7 +9,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const sessionId = parseId(req.query.id);
 
   if (sessionId === null) {
-    return res.status(400).json({ error: 'Invalid session ID' });
+    return badRequest(res, 'Invalid session ID', 'INVALID_SESSION_ID');
   }
 
   if (req.method === 'POST') {

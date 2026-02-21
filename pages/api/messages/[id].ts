@@ -1,7 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import prisma from '../../../lib/prisma';
 import { requireAuth } from '../../../lib/apiAuth';
-import { methodNotAllowed } from '../../../lib/apiErrors';
+import { badRequest, notFound, serverError, methodNotAllowed } from '../../../lib/apiErrors';
 import { parseId } from '../../../lib/validate';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -9,7 +9,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const messageId = parseId(req.query.id);
 
   if (messageId === null) {
-    return res.status(400).json({ error: 'Invalid message ID' });
+    return badRequest(res, 'Invalid message ID', 'INVALID_MESSAGE_ID');
   }
 
   if (req.method === 'PUT') {
@@ -18,7 +18,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const { content } = req.body;
       
       if (!content || typeof content !== 'string') {
-        return res.status(400).json({ error: 'Content is required' });
+        return badRequest(res, 'Content is required', 'CONTENT_REQUIRED');
       }
 
       const updatedMessage = await prisma.chatMessage.update({
@@ -35,7 +35,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(200).json(updatedMessage);
     } catch (error) {
       console.error('Error updating message:', error);
-      return res.status(500).json({ error: 'Failed to update message' });
+      return serverError(res, 'Failed to update message', 'MESSAGE_UPDATE_FAILED');
     }
   }
 
@@ -43,7 +43,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     try {
       // Find the message to get sessionId for updatedAt bump (and to scope truncation)
       const existing = await prisma.chatMessage.findUnique({ where: { id: messageId }, select: { sessionId: true, id: true } });
-      if (!existing) return res.status(404).json({ error: 'Message not found' });
+      if (!existing) return notFound(res, 'Message not found', 'MESSAGE_NOT_FOUND');
 
       const truncate = req.query.truncate === '1' || req.query.truncate === 'true';
 
@@ -65,7 +65,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(204).end();
     } catch (error) {
       console.error('Error deleting message:', error);
-      return res.status(500).json({ error: 'Failed to delete message' });
+      return serverError(res, 'Failed to delete message', 'MESSAGE_DELETE_FAILED');
     }
   }
 

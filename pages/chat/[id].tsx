@@ -4,6 +4,7 @@ import { useRouter } from 'next/router';
 import useSWR from 'swr';
 import Head from 'next/head';
 import { fetcher } from '../../lib/fetcher';
+import { useClickOutside } from '../../hooks/useClickOutside';
 import type { ChatMessage, Message, MessageVersion, SessionData } from '../../types/models';
 
 const INITIAL_PAGE_SIZE = 20; // messages for initial load
@@ -1643,77 +1644,32 @@ export default function ChatSessionPage() {
     }
   }, [session]);
 
-  // Close burger menu on outside click and handle escape key
+  // Close burger menu on outside click
+  useClickOutside(isBurgerMenuOpen, () => setIsBurgerMenuOpen(false), {
+    containerRef: headerRef,
+    eventType: 'mousedown',
+    escapeToClose: false,
+  });
+
+  // Consolidated Escape key handler for burger menu + all modals
   useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (isBurgerMenuOpen && headerRef.current && !headerRef.current.contains(event.target as Node)) {
-        setIsBurgerMenuOpen(false);
-      }
-    };
+    const anyOpen = isBurgerMenuOpen || showNotesModal || showSummaryModal || showDeleteModal || showErrorModal;
+    if (!anyOpen) return;
 
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        if (isBurgerMenuOpen) {
-          setIsBurgerMenuOpen(false);
-          return;
-        }
-        // Only close modals when they're in overlay mode (narrow screens)
-        // Don't close sidecar modals (wide screens) as they're less intrusive
-        if (showNotesModal && !isWideScreen) {
-          setShowNotesModal(false);
-        } else if (showSummaryModal) {
-          // Summary modal is always overlay, so always close on Escape
-          setShowSummaryModal(false);
-        }
-      }
+      if (event.key !== 'Escape') return;
+      // Priority: burger menu first
+      if (isBurgerMenuOpen) { setIsBurgerMenuOpen(false); return; }
+      // Only close notes overlay on narrow screens (sidecar stays open)
+      if (showNotesModal && !isWideScreen) { setShowNotesModal(false); return; }
+      if (showSummaryModal) { setShowSummaryModal(false); return; }
+      if (showErrorModal) { setShowErrorModal(false); return; }
+      if (showDeleteModal) { setShowDeleteModal(false); setDeleteMessageIndex(null); return; }
     };
 
-    if (isBurgerMenuOpen) {
-      document.addEventListener('mousedown', handleClickOutside);
-    }
-    
-    // Add event listener when any modal is open or burger menu is open
-  if (isBurgerMenuOpen || showNotesModal || showSummaryModal || showDeleteModal || showErrorModal) {
-      document.addEventListener('keydown', handleKeyDown);
-    }
-
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
-      document.removeEventListener('keydown', handleKeyDown);
-    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
   }, [isBurgerMenuOpen, showNotesModal, showSummaryModal, showDeleteModal, showErrorModal, isWideScreen]);
-
-  // Handle Escape key to close modals (only overlay modals, not sidecar)
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        // Only close modals when they're in overlay mode (narrow screens)
-        // Don't close sidecar modals (wide screens) as they're less intrusive
-        if (showNotesModal && !isWideScreen) {
-          setShowNotesModal(false);
-        } else if (showSummaryModal) {
-          // Summary modal is always overlay, so always close on Escape
-          setShowSummaryModal(false);
-        } else if (showErrorModal) {
-          setShowErrorModal(false);
-        } else if (showDeleteModal) {
-          // Delete modal is always overlay, so always close on Escape
-          setShowDeleteModal(false);
-          setDeleteMessageIndex(null);
-        }
-      }
-    };
-
-    // Add event listener when any modal is open
-  if (showNotesModal || showSummaryModal || showDeleteModal || showErrorModal) {
-      document.addEventListener('keydown', handleKeyDown);
-    }
-
-    // Cleanup
-    return () => {
-      document.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [showNotesModal, showSummaryModal, showDeleteModal, showErrorModal, isWideScreen]);
 
   // Auto-resize textarea function
   const autoResizeTextarea = useCallback(() => {

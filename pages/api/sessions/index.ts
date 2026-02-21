@@ -2,7 +2,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import prisma from '../../../lib/prisma';
 import { requireAuth } from '../../../lib/apiAuth';
 import { schemas, validateBody } from '../../../lib/validate';
-import { badRequest, methodNotAllowed } from '../../../lib/apiErrors';
+import { badRequest, serverError, methodNotAllowed } from '../../../lib/apiErrors';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!(await requireAuth(req, res))) return;
@@ -76,6 +76,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   } catch (error: unknown) {
     console.error('Sessions API error:', error);
     const errorMessage = error instanceof Error ? error.message : 'Internal Server Error';
-    res.status(500).json({ error: errorMessage });
+    return serverError(res, errorMessage, 'SESSIONS_ERROR');
   }
 }

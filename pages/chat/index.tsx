@@ -1,9 +1,10 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useMemo } from 'react';
 import useSWR from 'swr';
 import { useRouter } from 'next/router';
 import Head from 'next/head';
 import { fetcher } from '../../lib/fetcher';
 import type { Persona, Character, CharacterGroup, Session, Message } from '../../types/models';
+import { useClickOutside } from '../../hooks/useClickOutside';
 
 // Pure function — defined outside the component so its reference is stable.
 function organizeCharactersForDisplay(
@@ -188,33 +189,7 @@ export default function ChatIndexPage() {
     setOpenMenuId(null);
   };
 
-  // Click outside and keyboard handler
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && openMenuId) {
-        setOpenMenuId(null);
-      }
-    };
-
-    const handleClickOutside = (event: MouseEvent) => {
-      if (openMenuId) {
-        const target = event.target as HTMLElement;
-        if (!target.closest('.menu-container')) {
-          setOpenMenuId(null);
-        }
-      }
-    };
-
-    if (openMenuId) {
-      document.addEventListener('keydown', handleKeyDown);
-      document.addEventListener('click', handleClickOutside);
-    }
-
-    return () => {
-      document.removeEventListener('keydown', handleKeyDown);
-      document.removeEventListener('click', handleClickOutside);
-    };
-  }, [openMenuId]);
+  useClickOutside(openMenuId !== null, () => setOpenMenuId(null));
 
   const organizedChars = useMemo(
     () => organizeCharactersForDisplay(chars, groups),
@@ -223,7 +198,7 @@ export default function ChatIndexPage() {
 
   if (!personas || !chars || !groups) {
     return (
-      <div className="container text-center">
+      <div className="text-center">
         <div className="card">
           <div className="status-indicator">
             <div className="status-dot status-loading"></div>
@@ -235,7 +210,7 @@ export default function ChatIndexPage() {
   }
 
   return (
-    <div className="container">
+    <>
       <Head>
         <title>Chat - Start New Conversation</title>
         <meta name="description" content="Choose a character and persona to start a new chat conversation." />
@@ -756,6 +731,6 @@ export default function ChatIndexPage() {
           </div>
         </div>
       )}
-    </div>
+    </>
   );
 }

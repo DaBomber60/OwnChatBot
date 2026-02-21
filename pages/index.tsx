@@ -73,7 +73,6 @@ export default function Home() {
         <meta name="description" content="Chat with AI characters using different personas. Create immersive conversations with custom characters and personalities." />
       </Head>
 
-      <div className="container">
         {/* Inline first-time API key guidance (above Conversations card) */}
         {/* Header */}
         <header className="text-center mb-12">
@@ -270,7 +269,6 @@ export default function Home() {
             </div>
           </section>
         )}
-      </div>
     </>
   );
 }

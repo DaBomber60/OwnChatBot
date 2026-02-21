@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import useSWR from 'swr';
 import { useRouter } from 'next/router';
 import Head from 'next/head';
@@ -26,6 +26,7 @@ import { CSS } from '@dnd-kit/utilities';
 import { fetcher } from '../../lib/fetcher';
 import type { Character, CharacterGroup } from '../../types/models';
 import { renderMultiline } from '../../components/RenderMultiline';
+import { useClickOutside } from '../../hooks/useClickOutside';
 
 // Utility to get preview text for character cards
 function getCharacterPreview(character: Character): { text: string; label: string } | null {
@@ -781,34 +782,7 @@ export default function CharactersPage() {
     })
   );
   
-  // Cleanup effect for component unmount and route changes
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && openMenuId) {
-        setOpenMenuId(null);
-      }
-    };
-
-    const handleClickOutside = (event: MouseEvent) => {
-      if (openMenuId) {
-        const target = event.target as HTMLElement;
-        if (!target.closest('.menu-container')) {
-          setOpenMenuId(null);
-        }
-      }
-    };
-
-    if (openMenuId) {
-      document.addEventListener('keydown', handleKeyDown);
-      document.addEventListener('click', handleClickOutside);
-    }
-
-    // Cleanup on unmount
-    return () => {
-      document.removeEventListener('keydown', handleKeyDown);
-      document.removeEventListener('click', handleClickOutside);
-    };
-  }, [openMenuId]);
+  useClickOutside(openMenuId !== null, () => setOpenMenuId(null));
 
   const toggleMenu = (characterId: number) => {
     setOpenMenuId(openMenuId === characterId ? null : characterId);
@@ -1071,14 +1045,14 @@ export default function CharactersPage() {
   };
 
   // Handle loading state
-  if (!chars || !groups) return <div className="container text-center">Loading...</div>;
+  if (!chars || !groups) return <div className="text-center">Loading...</div>;
 
   // Validate data shapes (in case API returned an error object due to auth)
   const charsIsArray = Array.isArray(chars);
   const groupsIsArray = Array.isArray(groups);
   if (!charsIsArray || !groupsIsArray || error || groupsError) {
     return (
-      <div className="container text-center text-error">
+      <div className="text-center text-error">
         <p>Failed to load characters or groups.</p>
         {!charsIsArray && <p>Characters response was not a list (maybe not authenticated).</p>}
         {!groupsIsArray && <p>Groups response was not a list (maybe not authenticated).</p>}
@@ -1088,7 +1062,7 @@ export default function CharactersPage() {
   }
 
   return (
-    <div className="container">
+    <>
       <Head>
         <title>Characters - AI Character Builder</title>
         <meta name="description" content="Create and manage AI characters with detailed personalities, scenarios, and backstories for immersive conversations." />
@@ -1942,6 +1916,6 @@ export default function CharactersPage() {
         </div>
       )}
 
-    </div>
+    </>
   );
 }

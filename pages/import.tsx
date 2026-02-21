@@ -525,7 +525,7 @@ export default function ImportPage() {
 
   if (!personas || !chars || !groups) {
     return (
-      <div className="container text-center">
+      <div className="text-center">
         <div className="card">
           <div className="status-indicator">
             <div className="status-dot status-loading"></div>
@@ -539,7 +539,7 @@ export default function ImportPage() {
   // Queue processing removed
 
   return (
-    <div className="container">
+    <>
       <Head>
         <title>Import - OwnChatBot</title>
         <meta name="description" content="Import characters, personas, and chats from external tools" />
@@ -1075,6 +1075,6 @@ export default function ImportPage() {
           </>
         )}
       </div>
-    </div>
+    </>
   );
 }

@@ -1,6 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { limiters, clientIp } from '../../../lib/rateLimit';
-import { tooManyRequests, methodNotAllowed } from '../../../lib/apiErrors';
+import { unauthorized, serverError, badRequest, tooManyRequests, methodNotAllowed } from '../../../lib/apiErrors';
 import prisma from '../../../lib/prisma';
 import { getCachedImportToken } from '../../../lib/importToken';
 import { getPasswordVersion } from '../../../lib/passwordVersion';
@@ -278,20 +278,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     try {
       const authz = req.headers['authorization'] || req.headers['Authorization'] as string | undefined;
       if (!authz || typeof authz !== 'string') {
-  return res.status(401).json({ error: 'Missing Authorization header' });
+  return unauthorized(res, 'Missing Authorization header', 'MISSING_AUTH');
       }
       const m = authz.match(/^Bearer\s+([A-Za-z0-9_-]{20,})$/i);
       if (!m) {
-  return res.status(401).json({ error: 'Invalid Authorization header format' });
+  return unauthorized(res, 'Invalid Authorization header format', 'INVALID_AUTH_FORMAT');
       }
       const supplied = m[1]!;
       const version = await getPasswordVersion();
       const expected = await getCachedImportToken(version, FALLBACK_JWT_SECRET);
       if (supplied !== expected) {
-  return res.status(401).json({ error: 'Invalid bearer token' });
+  return unauthorized(res, 'Invalid bearer token', 'INVALID_BEARER');
       }
     } catch (e) {
-      return res.status(500).json({ error: 'Auth validation failed' });
+      return serverError(res, 'Auth validation failed', 'AUTH_VALIDATION_FAILED');
     }
     const ip = clientIp(req as any);
     const rl = limiters.importReceive(ip);
@@ -331,9 +331,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         logs: logs
       };
       
-      return res.status(400).json({
-        success: false,
-        error: 'Failed to parse import data',
+      return badRequest(res, 'Failed to parse import data', 'IMPORT_PARSE_FAILED', {
         details: errorObj.error?.message || errorObj.message || 'Unknown error',
         logs: logs
       });

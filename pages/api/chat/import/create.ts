@@ -1,7 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import prisma from '../../../../lib/prisma';
 import { requireAuth } from '../../../../lib/apiAuth';
-import { methodNotAllowed } from '../../../../lib/apiErrors';
+import { badRequest, conflict, serverError, methodNotAllowed } from '../../../../lib/apiErrors';
 
 interface ChatMessage {
   role: 'user' | 'assistant';
@@ -33,7 +33,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const { characterId, newCharacter, personaName, chatMessages }: CreateChatData = req.body;
 
     if (!personaName || !chatMessages || !Array.isArray(chatMessages)) {
-      return res.status(400).json({ error: 'Missing required data' });
+      return badRequest(res, 'Missing required data', 'MISSING_DATA');
     }
 
     let finalCharacterId: number | undefined = characterId;
@@ -49,7 +49,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
 
       if (existingChar) {
-        return res.status(400).json({ error: `Character "${newCharacter.name}" with profile "${newCharacter.profileName}" already exists` });
+        return conflict(res, `Character "${newCharacter.name}" with profile "${newCharacter.profileName}" already exists`, 'CHARACTER_DUPLICATE');
       }
 
       const createdCharacter = await prisma.character.create({
@@ -66,7 +66,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     if (!finalCharacterId) {
-      return res.status(400).json({ error: 'No character specified or created' });
+      return badRequest(res, 'No character specified or created', 'NO_CHARACTER');
     }
 
     // Find or create persona
@@ -116,6 +116,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   } catch (error) {
     console.error('Chat creation error:', error);
-    return res.status(500).json({ error: 'Failed to create chat' });
+    return serverError(res, 'Failed to create chat', 'CHAT_CREATE_FAILED');
   }
 }

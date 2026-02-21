@@ -1,7 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import prisma from '../../../lib/prisma';
 import { requireAuth } from '../../../lib/apiAuth';
-import { methodNotAllowed } from '../../../lib/apiErrors';
+import { badRequest, notFound, serverError, methodNotAllowed } from '../../../lib/apiErrors';
 import { parseId } from '../../../lib/validate';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -10,12 +10,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const promptId = parseId(req.query.id);
 
     if (promptId === null) {
-      return res.status(400).json({ error: 'Invalid prompt ID' });
+      return badRequest(res, 'Invalid prompt ID', 'INVALID_PROMPT_ID');
     }
 
     // Check if userPrompt model is available
     if (!('userPrompt' in prisma)) {
-      return res.status(400).json({ error: 'UserPrompt model not available.' });
+      return badRequest(res, 'UserPrompt model not available.', 'MODEL_UNAVAILABLE');
     }
 
     if (req.method === 'GET') {
@@ -24,7 +24,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
 
       if (!prompt) {
-        return res.status(404).json({ error: 'Prompt not found' });
+        return notFound(res, 'Prompt not found', 'PROMPT_NOT_FOUND');
       }
 
       return res.status(200).json(prompt);
@@ -34,7 +34,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const { title, body } = req.body;
 
       if (!title || !body) {
-        return res.status(400).json({ error: 'Missing title or body' });
+        return badRequest(res, 'Missing title or body', 'MISSING_FIELDS');
       }
 
       const updatedPrompt = await prisma.userPrompt.update({
@@ -62,11 +62,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // Handle Prisma errors
     if (error && typeof error === 'object' && 'code' in error) {
       if ((error as any).code === 'P2025') {
-        return res.status(404).json({ error: 'Prompt not found' });
+        return notFound(res, 'Prompt not found', 'PROMPT_NOT_FOUND');
       }
     }
 
     const errorMessage = error instanceof Error ? error.message : 'Internal Server Error';
-    return res.status(500).json({ error: errorMessage });
+    return serverError(res, errorMessage, 'USER_PROMPT_ERROR');
   }
 }
