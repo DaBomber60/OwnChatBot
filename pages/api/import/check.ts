@@ -1,5 +1,5 @@
-import type { NextApiRequest, NextApiResponse } from 'next';
-import { serverError, methodNotAllowed } from '../../../lib/apiErrors';
+import { serverError } from '../../../lib/apiErrors';
+import { withApiHandler } from '../../../lib/withApiHandler';
 
 // Import latestImport from receive.ts (we'll need to share this state)
 // In a production environment, you'd use a proper database or Redis
@@ -28,33 +28,30 @@ const setLatestImport = (value: any) => {
   (global as any).latestImport = value;
 };
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== 'GET') {
-    res.setHeader('Allow', ['GET']);
-    return methodNotAllowed(res, req.method);
-  }
-
-  try {
-    // Get the latest import data
-    const latestImport = getLatestImport();
-    
-    if (!latestImport) {
-      return res.status(200).json({ imported: false, logs: [] });
+export default withApiHandler({ auth: false }, {
+  GET: async (_req, res) => {
+    try {
+      // Get the latest import data
+      const latestImport = getLatestImport();
+      
+      if (!latestImport) {
+        return res.status(200).json({ imported: false, logs: [] });
+      }
+      
+      if (latestImport.imported && latestImport.data) {
+        // Return the import data and clean up
+        const importData = latestImport.data;
+        const logs = latestImport.logs || [];
+        setLatestImport(null); // Clear after retrieval
+        return res.status(200).json({ imported: true, data: importData, logs: logs });
+      }
+      
+      // Return any logs even if not yet imported (for error cases)
+      return res.status(200).json({ imported: false, logs: latestImport.logs || [] });
+      
+    } catch (error) {
+      console.error('Error checking import status:', error);
+      return serverError(res, 'Failed to check import status', 'IMPORT_CHECK_FAILED');
     }
-    
-    if (latestImport.imported && latestImport.data) {
-      // Return the import data and clean up
-      const importData = latestImport.data;
-      const logs = latestImport.logs || [];
-      setLatestImport(null); // Clear after retrieval
-      return res.status(200).json({ imported: true, data: importData, logs: logs });
-    }
-    
-    // Return any logs even if not yet imported (for error cases)
-    return res.status(200).json({ imported: false, logs: latestImport.logs || [] });
-    
-  } catch (error) {
-    console.error('Error checking import status:', error);
-    return serverError(res, 'Failed to check import status', 'IMPORT_CHECK_FAILED');
-  }
-}
+  },
+});

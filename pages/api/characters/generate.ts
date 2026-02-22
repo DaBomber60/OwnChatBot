@@ -1,24 +1,19 @@
-import type { NextApiRequest, NextApiResponse } from 'next';
-import { requireAuth } from '../../../lib/apiAuth';
-import { apiKeyNotConfigured, badRequest, methodNotAllowed, serverError } from '../../../lib/apiErrors';
+import { apiKeyNotConfigured, serverError } from '../../../lib/apiErrors';
 import { getAIConfig, tokenFieldFor, normalizeTemperature, getMaxTokens } from '../../../lib/aiProvider';
 import type { AIConfig } from '../../../lib/aiProvider';
 import { callUpstreamAI } from '../../../lib/upstreamAI';
 import prisma from '../../../lib/prisma';
 import { schemas, validateBody } from '../../../lib/validate';
 import { z } from 'zod';
+import { withApiHandler } from '../../../lib/withApiHandler';
 
 // This endpoint does NOT persist a character; it returns generated fields so the client can review/edit then save.
 // POST /api/characters/generate
 // Body: { name, profileName?, description, sliders?: { key: number } }
 // Returns: { scenario, personality, firstMessage, exampleDialogue, rawPrompt }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (!(await requireAuth(req, res))) return;
-  if (req.method !== 'POST') {
-    res.setHeader('Allow', ['POST']);
-    return methodNotAllowed(res, req.method);
-  }
+export default withApiHandler({}, {
+  POST: async (req, res) => {
 
   // Fetch dynamic limit (does NOT change default unless user configured it).
   let dynLimit = 3000; // default fallback (do not change globally)
@@ -132,8 +127,5 @@ Perspective: ${perspective.toUpperCase()} POV. ${perspectiveLine}
       rawPrompt: userPrompt,
       perspective
     });
-  } catch (err) {
-    console.error('Character generation error:', err);
-    return serverError(res, 'Failed to generate character', 'CHARACTER_GENERATE_FAILED');
-  }
-}
+  },
+});

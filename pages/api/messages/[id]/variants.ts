@@ -2,23 +2,16 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import prisma from '../../../../lib/prisma';
 import { buildSystemPrompt } from '../../../../lib/systemPrompt';
 import { truncateMessagesIfNeeded, injectTruncationNote } from '../../../../lib/messageUtils';
-import { requireAuth } from '../../../../lib/apiAuth';
-import { apiKeyNotConfigured, badRequest, conflict, methodNotAllowed, notFound, serverError, validationError, tooManyRequests } from '../../../../lib/apiErrors';
+import { apiKeyNotConfigured, badRequest, conflict, notFound, serverError, validationError, tooManyRequests } from '../../../../lib/apiErrors';
 import { limiters, clientIp } from '../../../../lib/rateLimit';
 import { enforceBodySize } from '../../../../lib/bodyLimit';
-import { schemas, validateBody, parseId } from '../../../../lib/validate';
+import { schemas, validateBody } from '../../../../lib/validate';
 import { getAIConfig, tokenFieldFor, normalizeTemperature } from '../../../../lib/aiProvider';
 import type { AIConfig } from '../../../../lib/aiProvider';
+import { withApiHandler } from '../../../../lib/withApiHandler';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (!(await requireAuth(req, res))) return;
-  const messageId = parseId(req.query.id);
-
-  if (messageId === null) {
-    return badRequest(res, 'Invalid message ID', 'INVALID_MESSAGE_ID');
-  }
-
-  if (req.method === 'GET') {
+export default withApiHandler({ parseId: true }, {
+  GET: async (req: NextApiRequest, res: NextApiResponse, { id: messageId }) => {
     // Check if this is a request for the latest variant
     if (req.url?.endsWith('/latest')) {
       try {
@@ -64,9 +57,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       console.error('Error fetching message variants:', error);
       return serverError(res, 'Failed to fetch message variants', 'VARIANT_FETCH_FAILED');
     }
-  }
+  },
 
-  if (req.method === 'POST') {
+  POST: async (req: NextApiRequest, res: NextApiResponse, { id: messageId }) => {
     // Rate limit variant generation per-IP
     const ip = clientIp(req as any);
     const rl = limiters.variantGenerate(ip);
@@ -563,9 +556,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       console.error(`[Variant] Error generating message variant:`, error);
       return serverError(res, 'Failed to generate message variant', 'VARIANT_GENERATION_FAILED');
     }
-  }
+  },
 
-  if (req.method === 'PUT') {
+  PUT: async (req: NextApiRequest, res: NextApiResponse, { id: messageId }) => {
     const body = validateBody(schemas.updateVariant, req, res);
     if (!body) return;
     const { variantId, content } = body as any;
@@ -640,9 +633,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       console.error('Error updating variant:', error);
       return serverError(res, 'Failed to update variant', 'VARIANT_UPDATE_FAILED');
     }
-  }
+  },
 
-  if (req.method === 'DELETE') {
+  DELETE: async (_req: NextApiRequest, res: NextApiResponse, { id: messageId }) => {
     // Delete all variants for a message (cleanup when user responds)
     try {
       const deletedVariants = await prisma.messageVersion.deleteMany({
@@ -669,9 +662,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       console.error('Error cleaning up variants:', error);
       return serverError(res, 'Failed to clean up variants', 'VARIANTS_CLEANUP_FAILED');
     }
-  }
+  },
 
-  if (req.method === 'PATCH') {
+  PATCH: async (req: NextApiRequest, res: NextApiResponse, { id: messageId }) => {
     const body = validateBody(schemas.rollbackVariant, req, res);
     if (!body) return; // Will send validation error if mismatch
     const { action } = body as any;
@@ -696,8 +689,5 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
     
   return badRequest(res, 'Invalid PATCH action', 'INVALID_PATCH_ACTION');
-  }
-
-  res.setHeader('Allow', ['GET', 'POST', 'PUT', 'PATCH', 'DELETE']);
-  return methodNotAllowed(res, req.method);
-}
+  },
+});

@@ -1,18 +1,10 @@
-import type { NextApiRequest, NextApiResponse } from 'next';
 import prisma from '../../../lib/prisma';
-import { requireAuth } from '../../../lib/apiAuth';
-import { badRequest, notFound, serverError, methodNotAllowed } from '../../../lib/apiErrors';
-import { parseId, schemas, validateBody } from '../../../lib/validate';
+import { notFound, serverError } from '../../../lib/apiErrors';
+import { schemas, validateBody } from '../../../lib/validate';
+import { withApiHandler } from '../../../lib/withApiHandler';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (!(await requireAuth(req, res))) return;
-  const messageId = parseId(req.query.id);
-
-  if (messageId === null) {
-    return badRequest(res, 'Invalid message ID', 'INVALID_MESSAGE_ID');
-  }
-
-  if (req.method === 'PUT') {
+export default withApiHandler({ parseId: true }, {
+  PUT: async (req, res, { id }) => {
     // Update a single message's content
     try {
       const body = validateBody<{ content: string }>(schemas.updateMessageContent, req, res);
@@ -20,7 +12,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const { content } = body;
 
       const updatedMessage = await prisma.chatMessage.update({
-        where: { id: messageId },
+        where: { id },
         data: { content: content.trim() }
       });
 
@@ -35,12 +27,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       console.error('Error updating message:', error);
       return serverError(res, 'Failed to update message', 'MESSAGE_UPDATE_FAILED');
     }
-  }
+  },
 
-  if (req.method === 'DELETE') {
+  DELETE: async (req, res, { id }) => {
     try {
       // Find the message to get sessionId for updatedAt bump (and to scope truncation)
-      const existing = await prisma.chatMessage.findUnique({ where: { id: messageId }, select: { sessionId: true, id: true } });
+      const existing = await prisma.chatMessage.findUnique({ where: { id }, select: { sessionId: true, id: true } });
       if (!existing) return notFound(res, 'Message not found', 'MESSAGE_NOT_FOUND');
 
       const truncate = req.query.truncate === '1' || req.query.truncate === 'true';
@@ -65,8 +57,5 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       console.error('Error deleting message:', error);
       return serverError(res, 'Failed to delete message', 'MESSAGE_DELETE_FAILED');
     }
-  }
-
-  res.setHeader('Allow', ['PUT', 'DELETE']);
-  return methodNotAllowed(res, req.method);
-}
+  },
+});

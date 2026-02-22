@@ -1,30 +1,14 @@
-import type { NextApiRequest, NextApiResponse } from 'next';
 import prisma from '../../../../lib/prisma';
-import { truncateMessagesIfNeeded } from '../../../../lib/messageUtils';
-import { badRequest, methodNotAllowed, notFound, serverError } from '../../../../lib/apiErrors';
-import { requireAuth } from '../../../../lib/apiAuth';
-import { parseId } from '../../../../lib/validate';
+import { notFound } from '../../../../lib/apiErrors';
 import { getTruncationLimit } from '../../../../lib/aiProvider';
 import { buildSystemPrompt } from '../../../../lib/systemPrompt';
+import { withApiHandler } from '../../../../lib/withApiHandler';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (!(await requireAuth(req, res))) return;
-
-  if (req.method !== 'GET') {
-    res.setHeader('Allow', ['GET']);
-    return methodNotAllowed(res, req.method);
-  }
-
-  const sessionId = parseId(req.query.id);
-
-  if (sessionId === null) {
-    return badRequest(res, 'Invalid session ID', 'INVALID_SESSION_ID');
-  }
-
-  try {
+export default withApiHandler({ parseId: true }, {
+  GET: async (req, res, { id }) => {
     // Load session details
     const session = await prisma.chatSession.findUnique({
-      where: { id: sessionId },
+      where: { id },
       include: { 
         persona: true, 
         character: true,
@@ -68,7 +52,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const limit = await getTruncationLimit();
     const warningThreshold = Math.floor(limit * 0.9); // 90% of limit
     
-  const isApproachingLimit = totalCharacters >= warningThreshold;
+    const isApproachingLimit = totalCharacters >= warningThreshold;
     const hasNoSummary = !session.summary || session.summary.trim() === '';
     const shouldBlock = isApproachingLimit && hasNoSummary;
 
@@ -82,9 +66,5 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       shouldBlock,
       messageCount: messages.length
     });
-
-  } catch (error) {
-    console.error('Check limit error:', error);
-    return serverError(res);
-  }
-}
+  },
+});

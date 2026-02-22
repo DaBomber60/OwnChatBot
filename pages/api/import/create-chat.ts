@@ -1,9 +1,9 @@
-import type { NextApiRequest, NextApiResponse } from 'next';
 import prisma from '../../../lib/prisma';
 import { limiters, clientIp } from '../../../lib/rateLimit';
-import { badRequest, notFound, serverError, methodNotAllowed, tooManyRequests } from '../../../lib/apiErrors';
+import { notFound, serverError, tooManyRequests } from '../../../lib/apiErrors';
 import { enforceBodySize } from '../../../lib/bodyLimit';
 import { schemas, validateBody } from '../../../lib/validate';
+import { withApiHandler } from '../../../lib/withApiHandler';
 
 interface ChatMessage {
   role: 'user' | 'assistant';
@@ -17,20 +17,15 @@ interface CreateChatData {
   summary?: string;
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== 'POST') {
-    res.setHeader('Allow', ['POST']);
-    return methodNotAllowed(res, req.method);
-  }
+export default withApiHandler({ auth: false }, {
+  POST: async (req, res) => {
+    const ip = clientIp(req as any);
+    const rl = limiters.importCreateChat(ip);
+    if (!rl.allowed) {
+      return tooManyRequests(res, 'Import chat creation rate limit exceeded', 'RATE_LIMITED', rl.retryAfterSeconds);
+    }
+    if (!enforceBodySize(req as any, res, 5 * 1024 * 1024)) return; // 5MB limit for bulk chat creation payload
 
-  const ip = clientIp(req as any);
-  const rl = limiters.importCreateChat(ip);
-  if (!rl.allowed) {
-    return tooManyRequests(res, 'Import chat creation rate limit exceeded', 'RATE_LIMITED', rl.retryAfterSeconds);
-  }
-  if (!enforceBodySize(req as any, res, 5 * 1024 * 1024)) return; // 5MB limit for bulk chat creation payload
-
-  try {
     const body = validateBody<{ personaId: number; characterId: number; chatMessages: { role: 'user' | 'assistant'; content: string }[]; summary?: string }>(schemas.importCreateChat, req, res);
     if (!body) return;
     const { personaId, characterId, chatMessages, summary } = body;
@@ -83,9 +78,5 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       sessionId: session.id,
       message: `Chat created successfully with ${chatMessages.length} messages`
     });
-
-  } catch (error) {
-    console.error('Chat creation error:', error);
-    return serverError(res, 'Failed to create chat', 'IMPORT_CHAT_CREATE_FAILED');
-  }
-}
+  },
+});

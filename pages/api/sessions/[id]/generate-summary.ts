@@ -1,38 +1,24 @@
-import type { NextApiRequest, NextApiResponse } from 'next';
 import prisma from '../../../../lib/prisma';
 import { truncateMessagesIfNeeded, injectTruncationNote } from '../../../../lib/messageUtils';
-import { requireAuth } from '../../../../lib/apiAuth';
-import { apiKeyNotConfigured, badRequest, methodNotAllowed, notFound, serverError } from '../../../../lib/apiErrors';
+import { apiKeyNotConfigured, notFound, serverError } from '../../../../lib/apiErrors';
 import { getAIConfig, tokenFieldFor, normalizeTemperature, type AIConfig } from '../../../../lib/aiProvider';
-import { parseId } from '../../../../lib/validate';
 import { buildSystemPrompt, replacePlaceholders } from '../../../../lib/systemPrompt';
 import { callUpstreamAI } from '../../../../lib/upstreamAI';
+import { withApiHandler } from '../../../../lib/withApiHandler';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (!(await requireAuth(req, res))) return;
-  if (req.method !== 'POST') {
-    res.setHeader('Allow', ['POST']);
-    return methodNotAllowed(res, req.method);
-  }
-
-  const sessionId = parseId(req.query.id);
-
-  if (sessionId === null) {
-    return badRequest(res, 'Invalid session ID', 'INVALID_SESSION_ID');
-  }
-
-  try {
+export default withApiHandler({ parseId: true }, {
+  POST: async (req, res, { id }) => {
     // Resolve AI config (api key, provider, model, URL)
     const aiCfg = await getAIConfig();
     if ('error' in aiCfg) {
       if (aiCfg.code === 'NO_API_KEY') return apiKeyNotConfigured(res);
       return serverError(res, aiCfg.error, aiCfg.code);
     }
-  const { apiKey, url: upstreamUrl, model, provider, enableTemperature, tokenFieldOverride, temperature, maxTokens: requestMaxTokens, truncationLimit, summaryPrompt } = aiCfg as AIConfig;
+    const { apiKey, url: upstreamUrl, model, provider, enableTemperature, tokenFieldOverride, temperature, maxTokens: requestMaxTokens, truncationLimit, summaryPrompt } = aiCfg as AIConfig;
 
     // Load session details
     const session = await prisma.chatSession.findUnique({
-      where: { id: sessionId },
+      where: { id },
       include: { 
         persona: true, 
         character: true,
@@ -74,8 +60,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     injectTruncationNote(truncationResult);
 
-  const tokenField = tokenFieldFor(provider, model, tokenFieldOverride);
-  const normTemp = normalizeTemperature(provider, model, temperature, enableTemperature);
+    const tokenField = tokenFieldFor(provider, model, tokenFieldOverride);
+    const normTemp = normalizeTemperature(provider, model, temperature, enableTemperature);
     const body: any = {
       model,
       ...(normTemp !== undefined ? { temperature: normTemp } : {}),
@@ -111,7 +97,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       : null;
 
     await prisma.chatSession.update({
-      where: { id: sessionId },
+      where: { id },
       data: { 
         summary: newSummary,
         lastSummary: mostRecentMessageId, // Store the ID of the most recent message when summary was generated
@@ -124,9 +110,5 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       generatedSummary: generatedSummary,
       lastSummary: mostRecentMessageId
     });
-
-  } catch (error) {
-    console.error('Summary generation error:', error);
-    return serverError(res);
-  }
-}
+  },
+});

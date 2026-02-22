@@ -1,18 +1,10 @@
-import type { NextApiRequest, NextApiResponse } from 'next';
 import prisma from '../../../lib/prisma';
-import { requireAuth } from '../../../lib/apiAuth';
-import { schemas, validateBody, parseId } from '../../../lib/validate';
-import { badRequest, notFound, serverError, methodNotAllowed } from '../../../lib/apiErrors';
+import { schemas, validateBody } from '../../../lib/validate';
+import { badRequest, notFound, serverError } from '../../../lib/apiErrors';
+import { withApiHandler } from '../../../lib/withApiHandler';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (!(await requireAuth(req, res))) return;
-  const sessionId = parseId(req.query.id);
-  
-  if (sessionId === null) {
-    return badRequest(res, 'Invalid session ID', 'INVALID_SESSION_ID');
-  }
-
-  if (req.method === 'GET') {
+export default withApiHandler({ parseId: true }, {
+  GET: async (req, res, { id }) => {
     // Optional pagination: latest messages bottom-up
     const limitParam = req.query.limit as string | undefined;
     const beforeIdParam = req.query.beforeId as string | undefined;
@@ -22,7 +14,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // If no limit requested, single full fetch (avoids double query)
     if (!limit) {
       const fullSession = await prisma.chatSession.findUnique({
-        where: { id: sessionId },
+        where: { id },
         include: {
           persona: true,
           character: true,
@@ -40,7 +32,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // Paginated path: fetch session meta first
     const sessionMeta = await prisma.chatSession.findUnique({
-      where: { id: sessionId },
+      where: { id },
       include: { persona: true, character: true }
     });
     if (!sessionMeta) {
@@ -52,7 +44,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     let cursorCreatedAt: Date | undefined = undefined;
     if (beforeId) {
       const cursorMessage = await prisma.chatMessage.findUnique({ where: { id: beforeId }, select: { createdAt: true, sessionId: true } });
-      if (!cursorMessage || cursorMessage.sessionId !== sessionId) {
+      if (!cursorMessage || cursorMessage.sessionId !== id) {
         return badRequest(res, 'Invalid beforeId cursor', 'INVALID_CURSOR');
       }
       cursorCreatedAt = cursorMessage.createdAt;
@@ -60,7 +52,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const pageMessagesDesc = await prisma.chatMessage.findMany({
       where: {
-        sessionId,
+        sessionId: id,
         ...(cursorCreatedAt ? { createdAt: { lt: cursorCreatedAt } } : {})
       },
       orderBy: { createdAt: 'desc' },
@@ -85,23 +77,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       messages: messagesAsc,
       hasMore
     });
-  }
+  },
 
-  if (req.method === 'PUT') {
+  PUT: async (req, res, { id }) => {
     const body = validateBody<{ messages: { role: string; content: string }[] }>(schemas.replaceSessionMessages, req, res);
     if (!body) return;
     const { messages } = body;
 
     // Delete existing messages and recreate them with the new content
     // This is a simple approach - in production you might want to be more granular
-    await prisma.chatMessage.deleteMany({ where: { sessionId } });
+    await prisma.chatMessage.deleteMany({ where: { sessionId: id } });
     
     // Recreate messages in order
     for (let i = 0; i < messages.length; i++) {
       const msg = messages[i]!;
       await prisma.chatMessage.create({
         data: {
-          sessionId: sessionId,
+          sessionId: id,
           role: msg.role,
           content: msg.content,
           createdAt: new Date(Date.now() + i) // Ensure proper ordering
@@ -111,20 +103,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // Update session's updatedAt timestamp
     await prisma.chatSession.update({
-      where: { id: sessionId },
+      where: { id },
       data: { updatedAt: new Date() }
     });
 
     return res.status(200).json({ success: true });
-  }
+  },
 
-  if (req.method === 'PATCH') {
+  PATCH: async (req, res, { id }) => {
     const body = validateBody(schemas.updateSessionDescription, req, res);
     if (!body) return;
     const { description } = body as any;
     try {
       const updatedSession = await prisma.chatSession.update({
-        where: { id: sessionId },
+        where: { id },
         data: { 
           description: description,
           updatedAt: new Date()
@@ -135,15 +127,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       console.error('Error updating session description:', error);
       return serverError(res, 'Failed to update description', 'DESCRIPTION_UPDATE_FAILED');
     }
-  }
+  },
 
-  if (req.method === 'DELETE') {
+  DELETE: async (req, res, { id }) => {
     // remove related messages first to satisfy FK constraints
-    await prisma.chatMessage.deleteMany({ where: { sessionId } });
-    await prisma.chatSession.delete({ where: { id: sessionId } });
+    await prisma.chatMessage.deleteMany({ where: { sessionId: id } });
+    await prisma.chatSession.delete({ where: { id } });
     return res.status(204).end();
-  }
-
-  res.setHeader('Allow', ['GET', 'PUT', 'PATCH', 'DELETE']);
-  return methodNotAllowed(res, req.method);
-}
+  },
+});

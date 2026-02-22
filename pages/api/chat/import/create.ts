@@ -1,8 +1,7 @@
-import type { NextApiRequest, NextApiResponse } from 'next';
 import prisma from '../../../../lib/prisma';
-import { requireAuth } from '../../../../lib/apiAuth';
-import { badRequest, conflict, serverError, methodNotAllowed } from '../../../../lib/apiErrors';
+import { badRequest, conflict, serverError } from '../../../../lib/apiErrors';
 import { schemas, validateBody } from '../../../../lib/validate';
+import { withApiHandler } from '../../../../lib/withApiHandler';
 
 interface ChatMessage {
   role: 'user' | 'assistant';
@@ -23,14 +22,8 @@ interface CreateChatData {
   chatMessages: ChatMessage[];
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (!(await requireAuth(req, res))) return;
-  if (req.method !== 'POST') {
-    res.setHeader('Allow', ['POST']);
-    return methodNotAllowed(res, req.method);
-  }
-
-  try {
+export default withApiHandler({}, {
+  POST: async (req, res) => {
     const body = validateBody<{ characterId?: number; newCharacter?: { name: string; profileName: string; personality: string; scenario: string; exampleDialogue: string; firstMessage: string }; personaName: string; chatMessages: { role: 'user' | 'assistant'; content: string }[] }>(schemas.chatImportCreate, req, res);
     if (!body) return;
     const { characterId, newCharacter, personaName, chatMessages } = body;
@@ -112,9 +105,5 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       sessionId: session.id,
       message: `Chat imported successfully with ${chatMessages.length} messages`
     });
-
-  } catch (error) {
-    console.error('Chat creation error:', error);
-    return serverError(res, 'Failed to create chat', 'CHAT_CREATE_FAILED');
-  }
-}
+  },
+});

@@ -1,21 +1,16 @@
-import type { NextApiRequest, NextApiResponse } from 'next';
 import prisma from '../../../lib/prisma';
-import { requireAuth } from '../../../lib/apiAuth';
-import { badRequest, methodNotAllowed, conflict, notFound, serverError } from '../../../lib/apiErrors';
-import { schemas, validateBody, parseId } from '../../../lib/validate';
+import { conflict, notFound, serverError } from '../../../lib/apiErrors';
+import { schemas, validateBody } from '../../../lib/validate';
+import { withApiHandler } from '../../../lib/withApiHandler';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (!(await requireAuth(req, res))) return;
-  const personaId = parseId(req.query.id);
-  if (personaId === null) return badRequest(res, 'Invalid persona ID', 'INVALID_PERSONA_ID');
-
-  if (req.method === 'PUT') {
+export default withApiHandler({ parseId: true }, {
+  PUT: async (req, res, { id }) => {
     const body = validateBody(schemas.updatePersona, req, res);
     if (!body) return;
     const { name, profile, profileName } = body as any;
     try {
       const updated = await prisma.persona.update({
-        where: { id: personaId },
+        where: { id },
         data: {
           name,
           profile,
@@ -32,13 +27,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
       return serverError(res, 'Failed to update persona', 'PERSONA_UPDATE_FAILED');
     }
-  }
+  },
 
-  if (req.method === 'DELETE') {
+  DELETE: async (_req, res, { id }) => {
     try {
-      await prisma.chatMessage.deleteMany({ where: { session: { personaId } } });
-      await prisma.chatSession.deleteMany({ where: { personaId } });
-      await prisma.persona.delete({ where: { id: personaId } });
+      await prisma.chatMessage.deleteMany({ where: { session: { personaId: id } } });
+      await prisma.chatSession.deleteMany({ where: { personaId: id } });
+      await prisma.persona.delete({ where: { id } });
       return res.status(204).end();
     } catch (error) {
       if (error && typeof error === 'object' && 'code' in error && (error as any).code === 'P2025') {
@@ -46,8 +41,5 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
       return serverError(res, 'Failed to delete persona', 'PERSONA_DELETE_FAILED');
     }
-  }
-
-  res.setHeader('Allow', ['PUT', 'DELETE']);
-  return methodNotAllowed(res, req.method);
-}
+  },
+});

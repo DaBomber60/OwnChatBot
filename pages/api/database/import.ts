@@ -1,13 +1,12 @@
-import type { NextApiRequest, NextApiResponse } from 'next';
 import prisma from '../../../lib/prisma';
 import { IncomingForm, Fields, Files } from 'formidable';
 import { promises as fs } from 'fs';
 import path from 'path';
 import os from 'os';
 import JSZip from 'jszip';
-import { requireAuth } from '../../../lib/apiAuth';
 import { limiters, clientIp } from '../../../lib/rateLimit';
-import { badRequest, serverError, tooManyRequests, methodNotAllowed } from '../../../lib/apiErrors';
+import { badRequest, serverError, tooManyRequests } from '../../../lib/apiErrors';
+import { withApiHandler } from '../../../lib/withApiHandler';
 
 // Disable Next.js body parser for file uploads and increase size limits
 export const config = {
@@ -35,20 +34,14 @@ interface ImportData {
   metadata?: any;
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (!(await requireAuth(req, res))) return;
-  if (req.method !== 'POST') {
-    res.setHeader('Allow', ['POST']);
-    return methodNotAllowed(res, req.method);
-  }
+export default withApiHandler({}, {
+  POST: async (req, res) => {
+    const ip = clientIp(req as any);
+    const rl = limiters.dbImport(ip);
+    if (!rl.allowed) {
+      return tooManyRequests(res, 'Database import rate limit exceeded', 'RATE_LIMITED', rl.retryAfterSeconds);
+    }
 
-  const ip = clientIp(req as any);
-  const rl = limiters.dbImport(ip);
-  if (!rl.allowed) {
-    return tooManyRequests(res, 'Database import rate limit exceeded', 'RATE_LIMITED', rl.retryAfterSeconds);
-  }
-
-  try {
     // Use a dedicated temp directory to avoid cross-device rename issues
     const uploadDir = await fs.mkdtemp(path.join(os.tmpdir(), 'hcb-import-'));
     
@@ -530,11 +523,5 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         totalErrors: results.errors.length
       }
     });
-
-  } catch (error) {
-    console.error('Database import error:', error);
-    return serverError(res, 'Failed to import database', 'IMPORT_FAILED',
-      error instanceof Error ? error.message : 'Unknown error'
-    );
-  }
-}
+  },
+});

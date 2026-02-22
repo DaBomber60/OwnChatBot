@@ -1,18 +1,10 @@
-import { NextApiRequest, NextApiResponse } from 'next';
 import prisma from '../../../lib/prisma';
-import { requireAuth } from '../../../lib/apiAuth';
-import { methodNotAllowed, notFound, serverError } from '../../../lib/apiErrors';
+import { notFound, serverError } from '../../../lib/apiErrors';
 import { schemas, validateBody } from '../../../lib/validate';
+import { withApiHandler } from '../../../lib/withApiHandler';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (!(await requireAuth(req, res))) return;
-
-  if (req.method !== 'PUT') {
-    res.setHeader('Allow', ['PUT']);
-    return methodNotAllowed(res, req.method);
-  }
-
-  try {
+export default withApiHandler({}, {
+  PUT: async (req, res) => {
     // Batch mode: update multiple characters' group and sort order at once
     if (req.body?.batch) {
       const body = validateBody<{ batch: { id: number; groupId?: number | null; sortOrder?: number }[] }>(schemas.moveCharactersBatch, req, res);
@@ -74,11 +66,5 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
 
     return res.status(200).json(updatedCharacter);
-  } catch (error: any) {
-    console.error('Error moving character:', error);
-    if (error.code === 'P2025') {
-      return notFound(res, 'Character not found', 'CHARACTER_NOT_FOUND');
-    }
-    return serverError(res, 'Failed to move character', 'CHARACTER_MOVE_FAILED');
-  }
-}
+  },
+});

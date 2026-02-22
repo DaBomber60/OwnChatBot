@@ -1,22 +1,16 @@
-import type { NextApiRequest, NextApiResponse } from 'next';
 import prisma from '../../../lib/prisma';
 import JSZip from 'jszip';
-import { requireAuth } from '../../../lib/apiAuth';
 import { limiters, clientIp } from '../../../lib/rateLimit';
-import { tooManyRequests, methodNotAllowed, serverError } from '../../../lib/apiErrors';
+import { tooManyRequests, serverError } from '../../../lib/apiErrors';
+import { withApiHandler } from '../../../lib/withApiHandler';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (!(await requireAuth(req, res))) return;
-  if (req.method !== 'GET') {
-    res.setHeader('Allow', ['GET']);
-    return methodNotAllowed(res, req.method);
-  }
-
-  const ip = clientIp(req as any);
-  const rl = limiters.dbExport(ip);
-  if (!rl.allowed) {
-    return tooManyRequests(res, 'Database export rate limit exceeded', 'RATE_LIMITED', rl.retryAfterSeconds);
-  }
+export default withApiHandler({}, {
+  GET: async (req, res) => {
+    const ip = clientIp(req as any);
+    const rl = limiters.dbExport(ip);
+    if (!rl.allowed) {
+      return tooManyRequests(res, 'Database export rate limit exceeded', 'RATE_LIMITED', rl.retryAfterSeconds);
+    }
 
   // Check if legacy JSON format is requested
   const format = req.query.format as string;
@@ -142,9 +136,5 @@ For support or questions, visit: https://github.com/DaBomber60/OwnChatBot
       
       return res.status(200).send(zipBuffer);
     }
-
-  } catch (error) {
-    console.error('Database export error:', error);
-    return serverError(res, 'Failed to export database');
-  }
-}
+  },
+});

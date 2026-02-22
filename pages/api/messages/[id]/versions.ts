@@ -1,9 +1,11 @@
 // Placeholder route file to satisfy Next.js type generation referencing this path.
 // Actual functionality handled by variants endpoint currently.
-import type { NextApiRequest, NextApiResponse } from 'next';
 import { notFound } from '../../../../lib/apiErrors';
+import { withApiHandler } from '../../../../lib/withApiHandler';
 
-export default function handler(_req: NextApiRequest, res: NextApiResponse) {
-	return notFound(res, 'Not implemented', 'NOT_IMPLEMENTED');
-}
+export default withApiHandler({ auth: false }, {
+  GET: async (_req, res) => {
+    return notFound(res, 'Not implemented', 'NOT_IMPLEMENTED');
+  },
+});
 

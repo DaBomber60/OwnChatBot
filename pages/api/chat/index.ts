@@ -2,21 +2,17 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import prisma from '../../../lib/prisma';
 import { buildSystemPrompt } from '../../../lib/systemPrompt';
 import { truncateMessagesIfNeeded, injectTruncationNote } from '../../../lib/messageUtils';
-import { requireAuth } from '../../../lib/apiAuth';
-import { apiKeyNotConfigured, badRequest, methodNotAllowed, notFound, serverError, tooManyRequests, payloadTooLarge } from '../../../lib/apiErrors';
+import { apiKeyNotConfigured, badRequest, notFound, serverError, tooManyRequests, payloadTooLarge } from '../../../lib/apiErrors';
 import { getAIConfig, tokenFieldFor, normalizeTemperature, DEFAULT_FALLBACK_URL, clampMaxTokens } from '../../../lib/aiProvider';
 import type { AIConfig } from '../../../lib/aiProvider';
 import { limiters, clientIp } from '../../../lib/rateLimit';
 import { enforceBodySize } from '../../../lib/bodyLimit';
+import { withApiHandler } from '../../../lib/withApiHandler';
 const CONTINUE_PREFIX = '[SYSTEM NOTE: Ignore this message';
 const isContinuationPlaceholder = (msg?: string) => !!msg && msg.startsWith(CONTINUE_PREFIX);
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (!(await requireAuth(req, res))) return;
-  if (req.method !== 'POST') {
-    res.setHeader('Allow', ['POST']);
-    return methodNotAllowed(res, req.method);
-  }
+export default withApiHandler({}, {
+  POST: async (req: NextApiRequest, res: NextApiResponse) => {
 
   // Get API key from database settings
   // Basic per-IP rate limiting (Item 10). Limits bursts of generation attempts.
@@ -686,4 +682,5 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     } catch {}
     res.end();
   }
-}
+  },
+});
