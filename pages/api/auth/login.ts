@@ -1,6 +1,6 @@
 import prisma from '../../../lib/prisma';
 import bcrypt from 'bcryptjs';
-import jwt from 'jsonwebtoken';
+import { signJwtHs256, TOKEN_LIFETIME } from '../../../lib/jwtCrypto';
 import { getJwtSecret } from '../../../lib/jwtSecret';
 import { badRequest, serverError, unauthorized, tooManyRequests } from '../../../lib/apiErrors';
 import { limiters, clientIp } from '../../../lib/rateLimit';
@@ -39,10 +39,9 @@ export default withApiHandler(
 
         const pwdVersion = await getPasswordVersion();
 
-        const token = jwt.sign(
+        const token = await signJwtHs256(
           { authenticated: true, v: pwdVersion },
           JWT_SECRET,
-          { expiresIn: '14d' }
         );
 
         // CSRF Mitigation Strategy (Section 4):
@@ -55,7 +54,7 @@ export default withApiHandler(
           // Use Lax to allow same-site navigations while still mitigating CSRF for cross-site POSTs
           'SameSite=Lax',
       // 14 days in seconds
-      'Max-Age=1209600'
+      `Max-Age=${TOKEN_LIFETIME}`
         ];
         // Secure only in production to allow local dev over http
         if (process.env.NODE_ENV === 'production') cookieParts.push('Secure');

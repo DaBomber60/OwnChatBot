@@ -5,6 +5,8 @@ import Head from 'next/head';
 import { fetcher } from '../../lib/fetcher';
 import type { Persona, Character, CharacterGroup, Session, Message } from '../../types/models';
 import { useClickOutside } from '../../hooks/useClickOutside';
+import { PageHeader } from '../../components/PageHeader';
+import { DropdownMenu, DropdownMenuItem, DropdownMenuDivider, ConfirmDeleteItem } from '../../components/DropdownMenu';
 
 // Pure function — defined outside the component so its reference is stable.
 function organizeCharactersForDisplay(
@@ -216,12 +218,7 @@ export default function ChatIndexPage() {
         <meta name="description" content="Choose a character and persona to start a new chat conversation." />
       </Head>
 
-      <div className="flex items-center justify-between mb-6">
-        <h1 className="text-3xl font-semibold mb-0">Start New Chat</h1>
-        <button className="btn btn-secondary" onClick={() => router.push('/')}>
-          🏠 Home
-        </button>
-      </div>
+      <PageHeader title="Start New Chat" />
 
       {/* New Chat Section */}
       <div className="card mb-8">
@@ -483,174 +480,41 @@ export default function ChatIndexPage() {
                                         </div>
                                       </div>
                                       
-                                      <div 
-                                        className="menu-container relative"
-                                        onClick={(e) => e.stopPropagation()}
-                                        style={{
-                                          height: openMenuId === s.id ? '2rem' : 'auto',
-                                          minHeight: openMenuId === s.id ? '2rem' : 'auto',
-                                          zIndex: openMenuId === s.id ? 999999 : 'auto'
-                                        }}
+                                      <DropdownMenu
+                                        entityId={s.id}
+                                        isOpen={openMenuId === s.id}
+                                        onToggle={() => setOpenMenuId(s.id)}
+                                        onClose={closeMenu}
+                                        triggerChar="⋮"
+                                        stopPropagation
+                                        triggerStyle={{ minWidth: '32px' }}
                                       >
-                                        {openMenuId !== s.id && (
-                                          <button
-                                            className="btn btn-secondary btn-small"
-                                            onClick={(e) => {
-                                              e.stopPropagation();
-                                              setOpenMenuId(s.id);
-                                            }}
-                                            aria-label="More options"
-                                            style={{ minWidth: '32px' }}
-                                          >
-                                            ⋮
-                                          </button>
-                                        )}
-                                        
-                                        {/* Dropdown Menu */}
-                                        {openMenuId === s.id && (
-                                          <div
-                                            className="absolute right-0 min-w-48 overflow-hidden"
-                                            style={{
-                                              top: '0',
-                                              backgroundColor: 'var(--bg-secondary)',
-                                              border: '1px solid var(--border-primary)',
-                                              borderRadius: 'var(--radius-lg)',
-                                              boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.3), 0 10px 10px -5px rgba(0, 0, 0, 0.2)',
-                                              zIndex: 999999
-                                            }}
-                                          >
-                                            <div>
-                                              <button
-                                                className="w-full text-left text-sm transition-colors duration-150 flex items-center gap-3"
-                                                style={{
-                                                  color: 'var(--text-primary)',
-                                                  backgroundColor: 'transparent',
-                                                  border: 'none',
-                                                  padding: '12px 20px'
-                                                }}
-                                                onMouseEnter={(e) => {
-                                                  e.currentTarget.style.backgroundColor = 'var(--bg-hover)';
-                                                }}
-                                                onMouseLeave={(e) => {
-                                                  e.currentTarget.style.backgroundColor = 'transparent';
-                                                }}
-                                                onClick={(e) => {
-                                                  e.stopPropagation();
-                                                  openDescriptionModal(s.id, s.description || '');
-                                                }}
-                                              >
-                                                <span className="text-base">📝</span>
-                                                <span className="font-medium">{s.description ? 'Edit' : 'Add'} Description</span>
-                                              </button>
-                                              
-                                              <button
-                                                className="w-full text-left text-sm transition-colors duration-150 flex items-center gap-3"
-                                                style={{
-                                                  color: 'var(--text-primary)',
-                                                  backgroundColor: 'transparent',
-                                                  border: 'none',
-                                                  padding: '12px 20px'
-                                                }}
-                                                onMouseEnter={(e) => {
-                                                  if (!e.currentTarget.disabled) {
-                                                    e.currentTarget.style.backgroundColor = 'var(--bg-hover)';
-                                                  }
-                                                }}
-                                                onMouseLeave={(e) => {
-                                                  e.currentTarget.style.backgroundColor = 'transparent';
-                                                }}
-                                                onClick={(e) => {
-                                                  e.stopPropagation();
-                                                  cloneSession(s.id);
-                                                }}
-                                                disabled={cloningSessionId === s.id}
-                                              >
-                                                <span className="text-base">{cloningSessionId === s.id ? '⏳' : '📋'}</span>
-                                                <span className="font-medium">Clone Chat</span>
-                                              </button>
-                                              
-                                              <div style={{ 
-                                                height: '1px', 
-                                                backgroundColor: 'var(--border-secondary)', 
-                                                margin: '8px 20px' 
-                                              }}></div>
-                                              
-                                              {confirmDeleteId === s.id ? (
-                                                <>
-                                                  <button
-                                                    className="w-full text-left text-sm transition-colors duration-150 flex items-center gap-3 font-medium"
-                                                    style={{
-                                                      color: 'var(--error)',
-                                                      backgroundColor: 'transparent',
-                                                      border: 'none',
-                                                      padding: '12px 20px'
-                                                    }}
-                                                    onMouseEnter={(e) => {
-                                                      e.currentTarget.style.backgroundColor = 'rgba(239, 68, 68, 0.1)';
-                                                    }}
-                                                    onMouseLeave={(e) => {
-                                                      e.currentTarget.style.backgroundColor = 'transparent';
-                                                    }}
-                                                    onClick={(e) => {
-                                                      e.stopPropagation();
-                                                      deleteSession(s.id);
-                                                    }}
-                                                  >
-                                                    <span className="text-base">✓</span>
-                                                    <span>Confirm Delete</span>
-                                                  </button>
-                                                  <button
-                                                    className="w-full text-left text-sm transition-colors duration-150 flex items-center gap-3"
-                                                    style={{
-                                                      color: 'var(--text-primary)',
-                                                      backgroundColor: 'transparent',
-                                                      border: 'none',
-                                                      padding: '12px 20px'
-                                                    }}
-                                                    onMouseEnter={(e) => {
-                                                      e.currentTarget.style.backgroundColor = 'var(--bg-hover)';
-                                                    }}
-                                                    onMouseLeave={(e) => {
-                                                      e.currentTarget.style.backgroundColor = 'transparent';
-                                                    }}
-                                                    onClick={(e) => {
-                                                      e.stopPropagation();
-                                                      setConfirmDeleteId(null);
-                                                      closeMenu();
-                                                    }}
-                                                  >
-                                                    <span className="text-base">✕</span>
-                                                    <span className="font-medium">Cancel</span>
-                                                  </button>
-                                                </>
-                                              ) : (
-                                                <button
-                                                  className="w-full text-left text-sm transition-colors duration-150 flex items-center gap-3"
-                                                  style={{
-                                                    color: 'var(--error)',
-                                                    backgroundColor: 'transparent',
-                                                    border: 'none',
-                                                    padding: '12px 20px'
-                                                  }}
-                                                  onMouseEnter={(e) => {
-                                                    e.currentTarget.style.backgroundColor = 'rgba(239, 68, 68, 0.1)';
-                                                  }}
-                                                  onMouseLeave={(e) => {
-                                                    e.currentTarget.style.backgroundColor = 'transparent';
-                                                  }}
-                                                  onClick={(e) => {
-                                                    e.stopPropagation();
-                                                    setConfirmDeleteId(s.id);
-                                                  }}
-                                                >
-                                                  <span className="text-base">🗑️</span>
-                                                  <span className="font-medium">Delete Chat</span>
-                                                </button>
-                                              )}
-                                            </div>
-                                          </div>
-                                        )}
-                                      </div>
+                                        <DropdownMenuItem
+                                          icon="📝"
+                                          label={`${s.description ? 'Edit' : 'Add'} Description`}
+                                          onClick={() => openDescriptionModal(s.id, s.description || '')}
+                                          stopPropagation
+                                        />
+                                        <DropdownMenuItem
+                                          icon={cloningSessionId === s.id ? '⏳' : '📋'}
+                                          label="Clone Chat"
+                                          onClick={() => cloneSession(s.id)}
+                                          disabled={cloningSessionId === s.id}
+                                          stopPropagation
+                                        />
+                                        <DropdownMenuDivider />
+                                        <ConfirmDeleteItem
+                                          label="Delete Chat"
+                                          isConfirming={confirmDeleteId === s.id}
+                                          onRequestDelete={() => setConfirmDeleteId(s.id)}
+                                          onConfirm={() => deleteSession(s.id)}
+                                          onCancel={() => {
+                                            setConfirmDeleteId(null);
+                                            closeMenu();
+                                          }}
+                                          stopPropagation
+                                        />
+                                      </DropdownMenu>
                                     </div>
                                   </div>
                                 ))}

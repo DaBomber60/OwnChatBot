@@ -2,37 +2,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import prisma from './prisma';
 import { getJwtSecret } from './jwtSecret';
 import { unauthorized, serverError } from './apiErrors';
-
-// Edge-safe base64url utilities for manual HS256 verification
-function b64urlToUint8Array(b64url: string): Uint8Array {
-  const pad = '='.repeat((4 - (b64url.length % 4)) % 4);
-  const b64 = (b64url.replace(/-/g, '+').replace(/_/g, '/')) + pad;
-  const binary = Buffer.from(b64, 'base64');
-  return new Uint8Array(binary);
-}
-function uint8ArrayToB64url(bytes: Uint8Array): string {
-  return Buffer.from(bytes).toString('base64').replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
-}
-async function verifyJwtHs256(token: string, secret: string): Promise<{ valid: boolean; payload?: any }>{
-  const parts = token.split('.');
-  if (parts.length !== 3) return { valid: false };
-  const [headerB64, payloadB64, sigB64] = parts as [string, string, string];
-  try {
-    const enc = new TextEncoder();
-    const keyData = enc.encode(secret);
-    const key = await crypto.subtle.importKey('raw', keyData, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
-    const data = enc.encode(`${headerB64}.${payloadB64}`);
-    const computed = new Uint8Array(await crypto.subtle.sign('HMAC', key, data));
-    const computedB64 = uint8ArrayToB64url(computed);
-    if (computedB64 !== sigB64) return { valid: false };
-    const json = Buffer.from(payloadB64.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8');
-    const payload = JSON.parse(json);
-    if (payload.exp && Date.now() / 1000 > payload.exp) return { valid: false };
-    return { valid: true, payload };
-  } catch {
-    return { valid: false };
-  }
-}
+import { verifyJwtHs256 } from './jwtCrypto';
 
 /**
  * Unified auth guard for API routes.

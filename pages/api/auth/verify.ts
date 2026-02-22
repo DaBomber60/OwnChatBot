@@ -1,8 +1,8 @@
-import jwt from 'jsonwebtoken';
 import { getJwtSecret } from '../../../lib/jwtSecret';
 import { serverError, unauthorized } from '../../../lib/apiErrors';
 import { getPasswordVersion } from '../../../lib/passwordVersion';
 import { withApiHandler } from '../../../lib/withApiHandler';
+import { verifyJwtHs256 } from '../../../lib/jwtCrypto';
 
 // Dynamic secret (env override or DB persisted)
 
@@ -22,11 +22,12 @@ export default withApiHandler(
       }
 
       try {
-        const decoded = jwt.verify(token, JWT_SECRET) as { authenticated?: boolean; v?: number };
-        if (!decoded.authenticated) {
-          console.warn('[auth/verify] Token decoded but missing authenticated flag. Decoded:', decoded);
+        const result = await verifyJwtHs256(token, JWT_SECRET);
+        if (!result.valid || !result.payload?.authenticated) {
+          console.warn('[auth/verify] Token invalid or missing authenticated flag.');
           return unauthorized(res, 'Invalid token', 'INVALID_TOKEN');
         }
+        const decoded = result.payload as { authenticated?: boolean; v?: number };
 
         const currentVersion = await getPasswordVersion();
         if (decoded.v !== currentVersion) {

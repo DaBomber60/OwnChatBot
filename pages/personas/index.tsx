@@ -1,11 +1,12 @@
 import { useState } from 'react';
 import useSWR from 'swr';
-import { useRouter } from 'next/router';
 import Head from 'next/head';
 import { fetcher } from '../../lib/fetcher';
 import type { Persona } from '../../types/models';
 import { renderMultiline } from '../../components/RenderMultiline';
 import { useClickOutside } from '../../hooks/useClickOutside';
+import { PageHeader } from '../../components/PageHeader';
+import { DropdownMenu, DropdownMenuItem, DropdownMenuDivider, ConfirmDeleteItem } from '../../components/DropdownMenu';
 
 // Utility to get preview text for persona cards
 function getPersonaPreview(persona: Persona): { text: string; label: string } | null {
@@ -29,7 +30,6 @@ export default function PersonasPage() {
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
   const [openMenuId, setOpenMenuId] = useState<number | null>(null);
-  const router = useRouter();
   useClickOutside(openMenuId !== null, () => setOpenMenuId(null));
 
   const toggleMenu = (personaId: number) => {
@@ -77,12 +77,7 @@ export default function PersonasPage() {
         <meta name="description" content="Create and manage AI personas to define different conversation styles and personalities for your chats." />
       </Head>
 
-      <div className="flex items-center justify-between mb-6">
-        <h1 className="text-3xl font-semibold mb-0">Personas</h1>
-        <button className="btn btn-secondary" onClick={() => router.push('/')}>
-          🏠 Home
-        </button>
-      </div>
+      <PageHeader title="Personas" />
 
       <div className="card mb-6">
         <div className="card-header">
@@ -183,165 +178,45 @@ export default function PersonasPage() {
                 })()}
               </div>
               <div className="flex gap-2" onClick={(e) => e.stopPropagation()}>
-                <div 
-                  className="menu-container relative"
-                  style={{
-                    height: openMenuId === p.id ? '2rem' : 'auto',
-                    minHeight: openMenuId === p.id ? '2rem' : 'auto',
-                    zIndex: openMenuId === p.id ? 999999 : 'auto'
-                  }}
+                <DropdownMenu
+                  entityId={p.id}
+                  isOpen={openMenuId === p.id}
+                  onToggle={() => toggleMenu(p.id)}
+                  onClose={closeMenu}
                 >
-                  {openMenuId !== p.id && (
-                    <button
-                      className="btn btn-secondary btn-small"
-                      onClick={() => toggleMenu(p.id)}
-                      title="More actions"
-                    >
-                      ⋯
-                    </button>
-                  )}
-                  
-                  {openMenuId === p.id && (
-                    <div 
-                      className="absolute right-0 min-w-48 overflow-hidden"
-                      style={{
-                        top: openMenuId === p.id ? '0' : 'calc(100% + 4px)',
-                        backgroundColor: 'var(--bg-secondary)',
-                        border: '1px solid var(--border-primary)',
-                        borderRadius: 'var(--radius-lg)',
-                        boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.3), 0 10px 10px -5px rgba(0, 0, 0, 0.2)',
-                        zIndex: 999999
-                      }}
-                    >
-                      <div>
-                        <button
-                          className="w-full text-left text-sm transition-colors duration-150 flex items-center gap-3"
-                          style={{
-                            color: 'var(--text-primary)',
-                            backgroundColor: 'transparent',
-                            border: 'none',
-                            padding: '12px 20px'
-                          }}
-                          onMouseEnter={(e) => {
-                            e.currentTarget.style.backgroundColor = 'var(--bg-hover)';
-                          }}
-                          onMouseLeave={(e) => {
-                            e.currentTarget.style.backgroundColor = 'transparent';
-                          }}
-                          onClick={() => {
-                            setEditingId(p.id);
-                            setEditName(p.name);
-                            setEditProfileName(p.profileName || '');
-                            setEditProfile(p.profile || '');
-                            closeMenu();
-                          }}
-                        >
-                          <span className="text-base">✏️</span>
-                          <span className="font-medium">Edit Persona</span>
-                        </button>
-                        
-                        <button
-                          className="w-full text-left text-sm transition-colors duration-150 flex items-center gap-3"
-                          style={{
-                            color: 'var(--text-primary)',
-                            backgroundColor: 'transparent',
-                            border: 'none',
-                            padding: '12px 20px'
-                          }}
-                          onMouseEnter={(e) => {
-                            e.currentTarget.style.backgroundColor = 'var(--bg-hover)';
-                          }}
-                          onMouseLeave={(e) => {
-                            e.currentTarget.style.backgroundColor = 'transparent';
-                          }}
-                          onClick={() => clonePersona(p)}
-                        >
-                          <span className="text-base">📋</span>
-                          <span className="font-medium">Clone Persona</span>
-                        </button>
-                        
-                        <div style={{ 
-                          height: '1px', 
-                          backgroundColor: 'var(--border-secondary)', 
-                          margin: '8px 20px' 
-                        }}></div>
-                        
-                        {confirmDeleteId === p.id ? (
-                          <>
-                            <button
-                              className="w-full text-left text-sm transition-colors duration-150 flex items-center gap-3 font-medium"
-                              style={{
-                                color: 'var(--error)',
-                                backgroundColor: 'transparent',
-                                border: 'none',
-                                padding: '12px 20px'
-                              }}
-                              onMouseEnter={(e) => {
-                                e.currentTarget.style.backgroundColor = 'rgba(239, 68, 68, 0.1)';
-                              }}
-                              onMouseLeave={(e) => {
-                                e.currentTarget.style.backgroundColor = 'transparent';
-                              }}
-                              onClick={async () => {
-                                await fetch(`/api/personas/${p.id}`, { method: 'DELETE' });
-                                setConfirmDeleteId(null);
-                                mutate();
-                                closeMenu();
-                              }}
-                            >
-                              <span className="text-base">✓</span>
-                              <span>Confirm Delete</span>
-                            </button>
-                            <button
-                              className="w-full text-left text-sm transition-colors duration-150 flex items-center gap-3"
-                              style={{
-                                color: 'var(--text-primary)',
-                                backgroundColor: 'transparent',
-                                border: 'none',
-                                padding: '12px 20px'
-                              }}
-                              onMouseEnter={(e) => {
-                                e.currentTarget.style.backgroundColor = 'var(--bg-hover)';
-                              }}
-                              onMouseLeave={(e) => {
-                                e.currentTarget.style.backgroundColor = 'transparent';
-                              }}
-                              onClick={() => {
-                                setConfirmDeleteId(null);
-                                closeMenu();
-                              }}
-                            >
-                              <span className="text-base">✕</span>
-                              <span className="font-medium">Cancel</span>
-                            </button>
-                          </>
-                        ) : (
-                          <button
-                            className="w-full text-left text-sm transition-colors duration-150 flex items-center gap-3 font-medium"
-                            style={{
-                              color: 'var(--error)',
-                              backgroundColor: 'transparent',
-                              border: 'none',
-                              padding: '12px 20px'
-                            }}
-                            onMouseEnter={(e) => {
-                              e.currentTarget.style.backgroundColor = 'rgba(239, 68, 68, 0.1)';
-                            }}
-                            onMouseLeave={(e) => {
-                              e.currentTarget.style.backgroundColor = 'transparent';
-                            }}
-                            onClick={() => {
-                              setConfirmDeleteId(p.id);
-                            }}
-                          >
-                            <span className="text-base">🗑️</span>
-                            <span>Delete Persona</span>
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  )}
-                </div>
+                  <DropdownMenuItem
+                    icon="✏️"
+                    label="Edit Persona"
+                    onClick={() => {
+                      setEditingId(p.id);
+                      setEditName(p.name);
+                      setEditProfileName(p.profileName || '');
+                      setEditProfile(p.profile || '');
+                      closeMenu();
+                    }}
+                  />
+                  <DropdownMenuItem
+                    icon="📋"
+                    label="Clone Persona"
+                    onClick={() => clonePersona(p)}
+                  />
+                  <DropdownMenuDivider />
+                  <ConfirmDeleteItem
+                    label="Delete Persona"
+                    isConfirming={confirmDeleteId === p.id}
+                    onRequestDelete={() => setConfirmDeleteId(p.id)}
+                    onConfirm={async () => {
+                      await fetch(`/api/personas/${p.id}`, { method: 'DELETE' });
+                      setConfirmDeleteId(null);
+                      mutate();
+                      closeMenu();
+                    }}
+                    onCancel={() => {
+                      setConfirmDeleteId(null);
+                      closeMenu();
+                    }}
+                  />
+                </DropdownMenu>
               </div>
             </div>
             
