@@ -29,8 +29,12 @@ COPY package.json package-lock.json* ./
 RUN node -e "const fs=require('fs');const p=require('./package.json');const raw=(process.env.NEXT_PUBLIC_APP_VERSION||'0.0.0').trim();const normalized=raw.startsWith('v')?raw.slice(1):raw;if(!/^\\d+\\.\\d+\\.\\d+(-[0-9A-Za-z.-]+)?$/.test(normalized)){console.error('Invalid APP_VERSION semver:',normalized,'from',raw);process.exit(1);}p.version=normalized;fs.writeFileSync('package.json',JSON.stringify(p,null,2));console.log('Updated package.json version to',normalized,'(raw:',raw,')');"
 COPY prisma ./prisma
 
+# TARGETARCH is auto-set by BuildKit (amd64, arm64, etc.) — used to isolate
+# npm cache mounts per platform so parallel multi-arch builds don't corrupt each other.
+ARG TARGETARCH
+
 # Install all dependencies (dev + prod) with cache mount; fall back if lockfile missing
-RUN --mount=type=cache,target=/root/.npm \
+RUN --mount=type=cache,target=/root/.npm,id=npm-${TARGETARCH} \
     if [ -f package-lock.json ]; then \
       echo "Using package-lock.json with npm ci" && npm ci; \
     else \
@@ -42,7 +46,7 @@ RUN --mount=type=cache,target=/root/.npm \
 COPY . .
 
 # Generate Prisma client, build Next.js (standalone), then prune dev deps in a single layer
-RUN --mount=type=cache,target=/root/.npm \
+RUN --mount=type=cache,target=/root/.npm,id=npm-${TARGETARCH} \
     npx prisma generate && \
     npm run build && \
     npm prune --omit=dev || true

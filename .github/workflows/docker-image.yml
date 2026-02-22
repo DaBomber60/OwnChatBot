@@ -60,9 +60,10 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             APP_VERSION=${{ steps.ver.outputs.APP_VERSION }}
-          # Use GitHub Actions cache backend only (fast, ephemeral). Scope keeps cache coherent across runs.
-          cache-from: type=gha,scope=ownchatbot
-          cache-to: type=gha,mode=min,scope=ownchatbot
+          # Use GitHub Actions cache backend (fast, ephemeral).
+          # Scope is tied to APP_VERSION so each release gets a fresh cache.
+          cache-from: type=gha,scope=ownchatbot-${{ steps.ver.outputs.APP_VERSION }}
+          cache-to: type=gha,mode=min,scope=ownchatbot-${{ steps.ver.outputs.APP_VERSION }}
           # Disable provenance/SBOM generation to shave a little time (reenable if you need supply-chain metadata)
           provenance: false
 
