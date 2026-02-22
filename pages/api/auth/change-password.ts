@@ -6,7 +6,7 @@ import { schemas, validateBody } from '../../../lib/validate';
 import { withApiHandler } from '../../../lib/withApiHandler';
 
 export default withApiHandler(
-  { auth: false },
+  { auth: true },
   {
     POST: async (req, res) => {
       const ip = clientIp(req as any);

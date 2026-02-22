@@ -99,7 +99,7 @@ if ! grep -q "JWT_SECRET=" .env || grep -q "JWT_SECRET=$" .env; then
                  head -c 64 /dev/urandom 2>/dev/null | base64 | tr -d '\n' | head -c 64 || \
                  node -e "console.log(require('crypto').randomBytes(32).toString('hex'))" 2>/dev/null || \
                  echo "$(date +%s)_$(whoami)_$(hostname)" | sha256sum | cut -d' ' -f1 2>/dev/null || \
-                 echo "fallback_secret_$(date +%s)_please_change_me")
+                 { echo "❌ FATAL: Could not generate a secure JWT_SECRET. Install openssl or node and retry."; exit 1; })
     
     # Update the .env file
     if grep -q "JWT_SECRET=" .env; then
@@ -166,7 +166,7 @@ fi
 if [ "${DO_PASSWORD_RESET:-0}" = 1 ]; then
     echo "🧹 Clearing stored password and incrementing version..."
     # Run within app container (assumes service name is 'app' in compose)
-    $DOCKER_COMPOSE exec -T app node -e "(async()=>{const {{ PrismaClient }} = require('.prisma/client'); const p=new PrismaClient(); try { await p.setting.updateMany({ where:{ key:'authPassword'}, data:{ value:''}}); const v= await p.setting.findUnique({ where:{ key:'authPasswordVersion'}}); if(v){ const next=(parseInt(v.value)||1)+1; await p.setting.update({ where:{ key:'authPasswordVersion'}, data:{ value:String(next)}});} console.log('Password cleared. New version set.'); } catch(e){ console.error('Password reset error', e); process.exit(1);} finally { await p.$disconnect(); } })();" || { echo "❌ Password reset failed"; exit 1; }
+    $DOCKER_COMPOSE exec -T app node -e "(async()=>{const { PrismaClient } = require('.prisma/client'); const p=new PrismaClient(); try { await p.setting.updateMany({ where:{ key:'authPassword'}, data:{ value:''}}); const v= await p.setting.findUnique({ where:{ key:'authPasswordVersion'}}); if(v){ const next=(parseInt(v.value)||1)+1; await p.setting.update({ where:{ key:'authPasswordVersion'}, data:{ value:String(next)}});} console.log('Password cleared. New version set.'); } catch(e){ console.error('Password reset error', e); process.exit(1);} finally { await p.$disconnect(); } })();" || { echo "❌ Password reset failed"; exit 1; }
     echo "✅ Password cleared. Next login will require setup or password change endpoint."
 fi
 

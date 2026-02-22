@@ -136,5 +136,9 @@ For support or questions, visit: https://github.com/DaBomber60/OwnChatBot
       
       return res.status(200).send(zipBuffer);
     }
+  } catch (error) {
+    console.error('Database export error:', error);
+    serverError(res);
+  }
   },
 });

@@ -127,5 +127,9 @@ Perspective: ${perspective.toUpperCase()} POV. ${perspectiveLine}
       rawPrompt: userPrompt,
       perspective
     });
+  } catch (error) {
+    console.error('Character generation error:', error);
+    serverError(res);
+  }
   },
 });

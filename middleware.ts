@@ -162,15 +162,30 @@ export async function middleware(req: NextRequest) {
   }
 }
 
+// Extract origin (scheme + host) from a URL string; returns empty string on failure.
+function originOf(url: string): string {
+  try {
+    const u = new URL(url);
+    return u.origin;
+  } catch {
+    return '';
+  }
+}
+
 // Security headers (Item 9 implementation)
 function attachSecurityHeaders(res: NextResponse, req: NextRequest) {
+  // Build connect-src: known providers + optional custom AI_BASE_URL from env
+  const knownProviders = 'https://api.deepseek.com https://api.openai.com https://openrouter.ai https://api.anthropic.com';
+  const extraOrigin = originOf(process.env.AI_BASE_URL || '');
+  const connectSrc = `connect-src 'self' ${knownProviders}${extraOrigin ? ' ' + extraOrigin : ''}`;
+
   const csp = [
     "default-src 'self'",
     "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data: blob:",
     "font-src 'self' data:",
-  "connect-src 'self' https://api.deepseek.com https://api.openai.com https://openrouter.ai https://api.anthropic.com",
+    connectSrc,
     "frame-ancestors 'none'",
     "base-uri 'self'",
     "form-action 'self'"

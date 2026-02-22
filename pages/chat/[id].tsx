@@ -18,6 +18,7 @@ import { VariantTempPopover } from '../../components/chat/VariantTempPopover';
 import { readSSEStream, isSSEResponse, performStreamingRequest } from '../../lib/chat/streamSSE';
 import { fetchChatSettings } from '../../lib/chat/chatSettings';
 import { safeJson, sanitizeErrorMessage, extractUsefulError, extractErrorFromResponse } from '../../lib/chat/errorUtils';
+import { sanitizeMessage } from '../../lib/messageFormat';
 import type { ChatMessage, Message, MessageVersion, SessionData } from '../../types/models';
 
 const INITIAL_PAGE_SIZE = 20; // messages for initial load
@@ -47,7 +48,8 @@ function formatMessage(content: string) {
     .replace(/\n/g, '</div><div>'); // Single breaks become new divs
   
   // Wrap the entire content in a div structure for better iOS compatibility
-  return `<div>${html}</div>`;
+  // Sanitize via DOMPurify to prevent XSS from user/AI-injected HTML
+  return sanitizeMessage(`<div>${html}</div>`);
 }
 
 export default function ChatSessionPage() {
