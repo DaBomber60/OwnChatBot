@@ -8,6 +8,7 @@ import type { AIConfig } from '../../../lib/aiProvider';
 import { limiters, clientIp } from '../../../lib/rateLimit';
 import { enforceBodySize } from '../../../lib/bodyLimit';
 import { withApiHandler } from '../../../lib/withApiHandler';
+import { persistApiRequest, persistJsonResponse, persistSseResponse } from '../../../lib/apiLog';
 const CONTINUE_PREFIX = '[SYSTEM NOTE: Ignore this message';
 const isContinuationPlaceholder = (msg?: string) => !!msg && msg.startsWith(CONTINUE_PREFIX);
 
@@ -156,21 +157,15 @@ export default withApiHandler({}, {
     messages: truncationResult.messages
   };
 
-  try {
-    // store the request payload in the database for download (with meta that doesn't go upstream)
-    const metaWrapped = {
-      ...body,
-      __meta: {
-        wasTruncated: !!truncationResult.wasTruncated,
-        sentCount: Array.isArray(truncationResult.messages) ? truncationResult.messages.length : 0,
-        baseCount: Array.isArray(baseMessages) ? baseMessages.length : 0,
-        truncationLimit
-      }
-    } as any;
-    await prisma.$executeRaw`UPDATE chat_sessions SET "lastApiRequest" = ${JSON.stringify(metaWrapped)} WHERE id = ${sessionIdToUse}`;
-  } catch (e) {
-    console.error('Failed to persist lastApiRequest', e);
-  }
+  await persistApiRequest(sessionIdToUse, {
+    ...body,
+    __meta: {
+      wasTruncated: !!truncationResult.wasTruncated,
+      sentCount: Array.isArray(truncationResult.messages) ? truncationResult.messages.length : 0,
+      baseCount: Array.isArray(baseMessages) ? baseMessages.length : 0,
+      truncationLimit
+    }
+  });
 
   // (Removed verbose full JSON debug logging per user request)
   const DEBUG_CAPTURE = process.env.DEBUG_CHAT_CAPTURE === 'true' || process.env.DEBUG_FULL_CHAT_LOG === 'true';
@@ -256,20 +251,7 @@ export default withApiHandler({}, {
       data = { __rawText: rawText };
     }
     // Persist last API response payload for download (store raw and parsed)
-    try {
-      const headersObj: Record<string, string> = {};
-      apiRes.headers.forEach((v, k) => { headersObj[k] = v; });
-      const toStore = {
-        mode: 'json',
-        upstreamStatus: apiRes.status,
-        headers: headersObj,
-        bodyText: rawText,
-        body: data && !data.__rawText ? data : undefined
-      };
-      await prisma.$executeRaw`UPDATE chat_sessions SET "lastApiResponse" = ${JSON.stringify(toStore)} WHERE id = ${sessionIdToUse}`;
-    } catch (e) {
-      console.error('Failed to persist lastApiResponse (non-stream)', e);
-    }
+    await persistJsonResponse(sessionIdToUse, apiRes, rawText, data && !data.__rawText ? data : undefined);
     // If upstream failed, return a structured error
   if (apiRes.status >= 400) {
       const errPayload = (data && !data.__rawText) ? data : { message: rawText };
@@ -320,20 +302,7 @@ export default withApiHandler({}, {
     let data: any;
     try { data = JSON.parse(rawText); } catch { data = { __rawText: rawText }; }
     // Persist last API response payload for download
-    try {
-      const headersObj: Record<string, string> = {};
-      apiRes.headers.forEach((v, k) => { headersObj[k] = v; });
-      const toStore = {
-        mode: 'json',
-        upstreamStatus: apiRes.status,
-        headers: headersObj,
-        bodyText: rawText,
-        body: data && !data.__rawText ? data : undefined
-      };
-      await prisma.$executeRaw`UPDATE chat_sessions SET "lastApiResponse" = ${JSON.stringify(toStore)} WHERE id = ${sessionIdToUse}`;
-    } catch (e) {
-      console.error('Failed to persist lastApiResponse (non-SSE in stream mode)', e);
-    }
+    await persistJsonResponse(sessionIdToUse, apiRes, rawText, data && !data.__rawText ? data : undefined);
     // If upstream failed, return structured error
   if (apiRes.status >= 400) {
       const errorMsg = (data as any)?.error?.message || (data as any)?.message || 'Upstream request failed';
@@ -556,21 +525,11 @@ export default withApiHandler({}, {
             // Throttle-persist a snapshot of streaming response for debugging/download
             if (Date.now() - lastPersistTs > 1500) {
               lastPersistTs = Date.now();
-              try {
-                const headersObj: Record<string, string> = {};
-                apiRes.headers.forEach((v, k) => { headersObj[k] = v; });
-                const snapshot = {
-                  mode: 'sse',
-                  upstreamStatus: apiRes.status,
-                  headers: headersObj,
-                  frames: responseFrames.slice(-100), // keep recent frames to bound size
-                  completed: false,
-                  assistantText
-                };
-                await prisma.$executeRaw`UPDATE chat_sessions SET "lastApiResponse" = ${JSON.stringify(snapshot)} WHERE id = ${sessionIdToUse}`;
-              } catch (e) {
-                // ignore persistence errors during stream to avoid disrupting user
-              }
+              await persistSseResponse(sessionIdToUse, apiRes, {
+                frames: responseFrames.slice(-100),
+                completed: false,
+                assistantText,
+              });
             }
             if (canWriteToResponse()) {
               try {
@@ -656,21 +615,11 @@ export default withApiHandler({}, {
   stopHeartbeat();
 
   // Persist last API response for SSE (frames and summary)
-  try {
-    const headersObj: Record<string, string> = {};
-    apiRes.headers.forEach((v, k) => { headersObj[k] = v; });
-    const toStore = {
-      mode: 'sse',
-      upstreamStatus: apiRes.status,
-      headers: headersObj,
-      frames: responseFrames,
-      completed: streamCompleted && !clientDisconnected,
-      assistantText
-    };
-    await prisma.$executeRaw`UPDATE chat_sessions SET "lastApiResponse" = ${JSON.stringify(toStore)} WHERE id = ${sessionIdToUse}`;
-  } catch (e) {
-    console.error('Failed to persist lastApiResponse (SSE)', e);
-  }
+  await persistSseResponse(sessionIdToUse, apiRes, {
+    frames: responseFrames,
+    completed: streamCompleted && !clientDisconnected,
+    assistantText,
+  });
 
   // Only end response if it's still writable
   if (canWriteToResponse()) {

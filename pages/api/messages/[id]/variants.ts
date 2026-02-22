@@ -9,6 +9,7 @@ import { schemas, validateBody } from '../../../../lib/validate';
 import { getAIConfig, tokenFieldFor, normalizeTemperature } from '../../../../lib/aiProvider';
 import type { AIConfig } from '../../../../lib/aiProvider';
 import { withApiHandler } from '../../../../lib/withApiHandler';
+import { persistApiRequest, persistJsonResponse, persistSseResponse } from '../../../../lib/apiLog';
 
 export default withApiHandler({ parseId: true }, {
   GET: async (req: NextApiRequest, res: NextApiResponse, { id: messageId }) => {
@@ -212,20 +213,15 @@ export default withApiHandler({ parseId: true }, {
       };
 
       // Store the variant request payload in the database for download (include __meta like main chat API)
-      try {
-        const metaWrapped = {
-          ...requestBody,
-          __meta: {
-            wasTruncated: !!truncationResult.wasTruncated,
-            sentCount: Array.isArray(truncationResult.messages) ? truncationResult.messages.length : 0,
-            baseCount: Array.isArray(allMessages) ? allMessages.length : 0,
-            truncationLimit
-          }
-        } as any;
-        await prisma.$executeRaw`UPDATE chat_sessions SET "lastApiRequest" = ${JSON.stringify(metaWrapped)} WHERE id = ${message.session.id}`;
-      } catch (e) {
-        console.error('Failed to persist lastApiRequest for variant', e);
-      }
+      await persistApiRequest(message.session.id, {
+        ...requestBody,
+        __meta: {
+          wasTruncated: !!truncationResult.wasTruncated,
+          sentCount: Array.isArray(truncationResult.messages) ? truncationResult.messages.length : 0,
+          baseCount: Array.isArray(allMessages) ? allMessages.length : 0,
+          truncationLimit
+        }
+      });
 
       // Call upstream API
       const response = await fetch(upstreamUrl, {
@@ -243,20 +239,7 @@ export default withApiHandler({ parseId: true }, {
         let data: any;
         try { data = JSON.parse(rawText); } catch { data = { __rawText: rawText }; }
         // Persist last API response payload for download (store raw and parsed)
-        try {
-          const headersObj: Record<string, string> = {};
-          response.headers.forEach((v, k) => { headersObj[k] = v; });
-          const toStore = {
-            mode: 'json',
-            upstreamStatus: response.status,
-            headers: headersObj,
-            bodyText: rawText,
-            body: data && !data.__rawText ? data : undefined
-          };
-          await prisma.$executeRaw`UPDATE chat_sessions SET "lastApiResponse" = ${JSON.stringify(toStore)} WHERE id = ${message.session.id}`;
-        } catch (e) {
-          console.error('[Variant] Failed to persist lastApiResponse (non-stream)', e);
-        }
+        await persistJsonResponse(message.session.id, response, rawText, data && !data.__rawText ? data : undefined);
         // If upstream failed, return structured error with original message
         if (response.status >= 400) {
           const errPayload = (data && !data.__rawText) ? data : { message: rawText };
@@ -317,20 +300,7 @@ export default withApiHandler({ parseId: true }, {
         const rawText = await response.text();
         let data: any; try { data = JSON.parse(rawText); } catch { data = { __rawText: rawText }; }
         // Persist last API response payload for download (non-SSE in stream mode)
-        try {
-          const headersObj: Record<string, string> = {};
-          response.headers.forEach((v, k) => { headersObj[k] = v; });
-          const toStore = {
-            mode: 'json',
-            upstreamStatus: response.status,
-            headers: headersObj,
-            bodyText: rawText,
-            body: data && !data.__rawText ? data : undefined
-          };
-          await prisma.$executeRaw`UPDATE chat_sessions SET "lastApiResponse" = ${JSON.stringify(toStore)} WHERE id = ${message.session.id}`;
-        } catch (e) {
-          console.error('[Variant] Failed to persist lastApiResponse (non-SSE in stream mode)', e);
-        }
+        await persistJsonResponse(message.session.id, response, rawText, data && !data.__rawText ? data : undefined);
         if (response.status >= 400) {
           const errorMsg = (data as any)?.error?.message || (data as any)?.message || 'Upstream request failed';
           console.warn(`[Variant][stream-mode] Upstream failed (non-SSE): ${response.status} ${errorMsg}`);
@@ -467,21 +437,11 @@ export default withApiHandler({ parseId: true }, {
       }
       
       // Persist final SSE response payload for download
-      try {
-        const headersObj: Record<string, string> = {};
-        response.headers.forEach((v, k) => { headersObj[k] = v; });
-        const toStore = {
-          mode: 'sse',
-          upstreamStatus: response.status,
-          headers: headersObj,
-          frames: responseFrames,
-          completed: streamCompletedNaturally && !clientDisconnected,
-          assistantText
-        };
-        await prisma.$executeRaw`UPDATE chat_sessions SET "lastApiResponse" = ${JSON.stringify(toStore)} WHERE id = ${message.session.id}`;
-      } catch (e) {
-        console.error('[Variant] Failed to persist lastApiResponse (SSE)', e);
-      }
+      await persistSseResponse(message.session.id, response, {
+        frames: responseFrames,
+        completed: streamCompletedNaturally && !clientDisconnected,
+        assistantText,
+      });
 
       // Handle variant saving/cleanup based on how the stream ended
       // Check one final time for client disconnection before making any decisions

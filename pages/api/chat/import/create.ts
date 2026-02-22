@@ -1,26 +1,8 @@
 import prisma from '../../../../lib/prisma';
-import { badRequest, conflict, serverError } from '../../../../lib/apiErrors';
+import { badRequest, conflict } from '../../../../lib/apiErrors';
 import { schemas, validateBody } from '../../../../lib/validate';
 import { withApiHandler } from '../../../../lib/withApiHandler';
-
-interface ChatMessage {
-  role: 'user' | 'assistant';
-  content: string;
-}
-
-interface CreateChatData {
-  characterId?: number;
-  newCharacter?: {
-    name: string;
-    profileName: string;
-    personality: string;
-    scenario: string;
-    exampleDialogue: string;
-    firstMessage: string;
-  };
-  personaName: string;
-  chatMessages: ChatMessage[];
-}
+import { createImportedChat } from '../../../../lib/importChat';
 
 export default withApiHandler({}, {
   POST: async (req, res) => {
@@ -32,29 +14,14 @@ export default withApiHandler({}, {
 
     // Create new character if needed
     if (!characterId && newCharacter) {
-      // Check if character with same name+profile combination already exists
       const existingChar = await prisma.character.findFirst({
-        where: {
-          name: newCharacter.name,
-          profileName: newCharacter.profileName
-        }
+        where: { name: newCharacter.name, profileName: newCharacter.profileName },
       });
-
       if (existingChar) {
         return conflict(res, `Character "${newCharacter.name}" with profile "${newCharacter.profileName}" already exists`, 'CHARACTER_DUPLICATE');
       }
-
-      const createdCharacter = await prisma.character.create({
-        data: {
-          name: newCharacter.name,
-          profileName: newCharacter.profileName,
-          personality: newCharacter.personality,
-          scenario: newCharacter.scenario,
-          exampleDialogue: newCharacter.exampleDialogue,
-          firstMessage: newCharacter.firstMessage
-        }
-      });
-      finalCharacterId = createdCharacter.id;
+      const created = await prisma.character.create({ data: newCharacter });
+      finalCharacterId = created.id;
     }
 
     if (!finalCharacterId) {
@@ -62,48 +29,23 @@ export default withApiHandler({}, {
     }
 
     // Find or create persona
-    let persona = await prisma.persona.findFirst({
-      where: { name: personaName }
-    });
-
+    let persona = await prisma.persona.findFirst({ where: { name: personaName } });
     if (!persona) {
       persona = await prisma.persona.create({
-        data: {
-          name: personaName,
-          profile: `Imported persona: ${personaName}`
-        }
+        data: { name: personaName, profile: `Imported persona: ${personaName}` },
       });
     }
 
-    // Create chat session
-    const session = await prisma.chatSession.create({
-      data: {
-        personaId: persona.id,
-        characterId: finalCharacterId
-      }
-    });
-
-    // Create chat messages
-    for (const message of chatMessages) {
-      await prisma.chatMessage.create({
-        data: {
-          sessionId: session.id,
-          role: message.role,
-          content: message.content
-        }
-      });
-    }
-
-    // Update session timestamp
-    await prisma.chatSession.update({
-      where: { id: session.id },
-      data: { updatedAt: new Date() }
+    const result = await createImportedChat({
+      personaId: persona.id,
+      characterId: finalCharacterId,
+      messages: chatMessages,
     });
 
     return res.status(200).json({
       success: true,
-      sessionId: session.id,
-      message: `Chat imported successfully with ${chatMessages.length} messages`
+      sessionId: result.sessionId,
+      message: `Chat imported successfully with ${result.messageCount} messages`,
     });
   },
 });
