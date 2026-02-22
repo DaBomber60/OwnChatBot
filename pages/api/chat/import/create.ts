@@ -2,6 +2,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import prisma from '../../../../lib/prisma';
 import { requireAuth } from '../../../../lib/apiAuth';
 import { badRequest, conflict, serverError, methodNotAllowed } from '../../../../lib/apiErrors';
+import { schemas, validateBody } from '../../../../lib/validate';
 
 interface ChatMessage {
   role: 'user' | 'assistant';
@@ -30,11 +31,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    const { characterId, newCharacter, personaName, chatMessages }: CreateChatData = req.body;
-
-    if (!personaName || !chatMessages || !Array.isArray(chatMessages)) {
-      return badRequest(res, 'Missing required data', 'MISSING_DATA');
-    }
+    const body = validateBody<{ characterId?: number; newCharacter?: { name: string; profileName: string; personality: string; scenario: string; exampleDialogue: string; firstMessage: string }; personaName: string; chatMessages: { role: 'user' | 'assistant'; content: string }[] }>(schemas.chatImportCreate, req, res);
+    if (!body) return;
+    const { characterId, newCharacter, personaName, chatMessages } = body;
 
     let finalCharacterId: number | undefined = characterId;
 

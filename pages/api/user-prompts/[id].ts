@@ -2,7 +2,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import prisma from '../../../lib/prisma';
 import { requireAuth } from '../../../lib/apiAuth';
 import { badRequest, notFound, serverError, methodNotAllowed } from '../../../lib/apiErrors';
-import { parseId } from '../../../lib/validate';
+import { parseId, schemas, validateBody } from '../../../lib/validate';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!(await requireAuth(req, res))) return;
@@ -31,15 +31,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     if (req.method === 'PUT') {
-      const { title, body } = req.body;
-
-      if (!title || !body) {
-        return badRequest(res, 'Missing title or body', 'MISSING_FIELDS');
-      }
+      const body = validateBody<{ title: string; body: string }>(schemas.updateUserPrompt, req, res);
+      if (!body) return;
+      const { title, body: promptBody } = body;
 
       const updatedPrompt = await prisma.userPrompt.update({
         where: { id: promptId },
-        data: { title, body }
+        data: { title, body: promptBody }
       });
 
       return res.status(200).json(updatedPrompt);

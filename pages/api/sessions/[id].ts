@@ -88,11 +88,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   if (req.method === 'PUT') {
-    const { messages } = req.body;
-    
-    if (!messages || !Array.isArray(messages)) {
-      return badRequest(res, 'Invalid messages data', 'INVALID_MESSAGES');
-    }
+    const body = validateBody<{ messages: { role: string; content: string }[] }>(schemas.replaceSessionMessages, req, res);
+    if (!body) return;
+    const { messages } = body;
 
     // Delete existing messages and recreate them with the new content
     // This is a simple approach - in production you might want to be more granular
@@ -100,12 +98,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     
     // Recreate messages in order
     for (let i = 0; i < messages.length; i++) {
-      const message = messages[i];
+      const msg = messages[i]!;
       await prisma.chatMessage.create({
         data: {
           sessionId: sessionId,
-          role: message.role,
-          content: message.content,
+          role: msg.role,
+          content: msg.content,
           createdAt: new Date(Date.now() + i) // Ensure proper ordering
         }
       });

@@ -136,7 +136,59 @@ export const schemas = {
       .max(200, 'Password must be at most 200 characters')
   .refine((v: string) => /[0-9]/.test(v), 'Password must contain at least one number')
   .refine((v: string) => /[^A-Za-z0-9]/.test(v), 'Password must contain at least one special character')
-  })
+  }),
+
+  // M10: Schemas for previously manually-validated routes
+  updateMessageContent: z.object({
+    content: z.string().trim().min(1, 'Content is required'),
+  }),
+  replaceSessionMessages: z.object({
+    messages: z.array(z.object({
+      role: z.enum(['user', 'assistant']),
+      content: z.string(),
+    })).min(1, 'At least one message is required'),
+  }),
+  updateUserPrompt: z.object({
+    title: z.string().trim().min(1).max(200),
+    body: z.string().trim().min(1),
+  }),
+  moveCharactersBatch: z.object({
+    batch: z.array(z.object({
+      id: z.number().int().positive(),
+      groupId: z.number().int().positive().nullable().optional(),
+      sortOrder: z.number().int().min(0).optional(),
+    })).min(1),
+  }),
+  moveCharacterSingle: z.object({
+    characterId: z.number().int().positive(),
+    groupId: z.number().int().positive().nullable().optional(),
+    newSortOrder: z.number().int().min(0).optional(),
+  }),
+  importCreateChat: z.object({
+    personaId: z.number().int().positive(),
+    characterId: z.number().int().positive(),
+    chatMessages: z.array(z.object({
+      role: z.enum(['user', 'assistant']),
+      content: z.string(),
+    })).min(1),
+    summary: z.string().optional(),
+  }),
+  chatImportCreate: z.object({
+    characterId: z.number().int().positive().optional(),
+    newCharacter: z.object({
+      name: z.string().trim().min(1).max(200),
+      profileName: z.string().trim().max(200),
+      personality: z.string(),
+      scenario: z.string(),
+      exampleDialogue: z.string(),
+      firstMessage: z.string(),
+    }).optional(),
+    personaName: z.string().trim().min(1).max(200),
+    chatMessages: z.array(z.object({
+      role: z.enum(['user', 'assistant']),
+      content: z.string(),
+    })).min(1),
+  }),
 };
 
 /**

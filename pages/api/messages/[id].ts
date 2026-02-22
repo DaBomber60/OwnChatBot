@@ -2,7 +2,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import prisma from '../../../lib/prisma';
 import { requireAuth } from '../../../lib/apiAuth';
 import { badRequest, notFound, serverError, methodNotAllowed } from '../../../lib/apiErrors';
-import { parseId } from '../../../lib/validate';
+import { parseId, schemas, validateBody } from '../../../lib/validate';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!(await requireAuth(req, res))) return;
@@ -15,11 +15,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (req.method === 'PUT') {
     // Update a single message's content
     try {
-      const { content } = req.body;
-      
-      if (!content || typeof content !== 'string') {
-        return badRequest(res, 'Content is required', 'CONTENT_REQUIRED');
-      }
+      const body = validateBody<{ content: string }>(schemas.updateMessageContent, req, res);
+      if (!body) return;
+      const { content } = body;
 
       const updatedMessage = await prisma.chatMessage.update({
         where: { id: messageId },

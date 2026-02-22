@@ -3,6 +3,7 @@ import prisma from '../../../lib/prisma';
 import { limiters, clientIp } from '../../../lib/rateLimit';
 import { badRequest, notFound, serverError, methodNotAllowed, tooManyRequests } from '../../../lib/apiErrors';
 import { enforceBodySize } from '../../../lib/bodyLimit';
+import { schemas, validateBody } from '../../../lib/validate';
 
 interface ChatMessage {
   role: 'user' | 'assistant';
@@ -30,11 +31,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!enforceBodySize(req as any, res, 5 * 1024 * 1024)) return; // 5MB limit for bulk chat creation payload
 
   try {
-    const { personaId, characterId, chatMessages, summary }: CreateChatData = req.body;
-
-    if (!personaId || !characterId || !chatMessages || !Array.isArray(chatMessages)) {
-      return badRequest(res, 'Missing required data: personaId, characterId, and chatMessages are required', 'MISSING_IMPORT_CHAT_DATA');
-    }
+    const body = validateBody<{ personaId: number; characterId: number; chatMessages: { role: 'user' | 'assistant'; content: string }[]; summary?: string }>(schemas.importCreateChat, req, res);
+    if (!body) return;
+    const { personaId, characterId, chatMessages, summary } = body;
 
     // Verify persona and character exist
     const persona = await prisma.persona.findUnique({

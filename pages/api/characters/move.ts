@@ -1,7 +1,8 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import prisma from '../../../lib/prisma';
 import { requireAuth } from '../../../lib/apiAuth';
-import { badRequest, methodNotAllowed, notFound, serverError } from '../../../lib/apiErrors';
+import { methodNotAllowed, notFound, serverError } from '../../../lib/apiErrors';
+import { schemas, validateBody } from '../../../lib/validate';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (!(await requireAuth(req, res))) return;
@@ -13,18 +14,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   try {
     // Batch mode: update multiple characters' group and sort order at once
-    const { batch } = req.body;
-    if (Array.isArray(batch)) {
-      // Validate batch entries
-      for (const entry of batch) {
-        if (!entry.id || typeof entry.id !== 'number') {
-          return badRequest(res, 'Each batch entry must have a valid numeric id', 'INVALID_BATCH_ENTRY');
-        }
-      }
+    if (req.body?.batch) {
+      const body = validateBody<{ batch: { id: number; groupId?: number | null; sortOrder?: number }[] }>(schemas.moveCharactersBatch, req, res);
+      if (!body) return;
 
-      // Run all updates in a transaction for atomicity
       await prisma.$transaction(
-        batch.map((entry: { id: number; groupId: number | null; sortOrder: number }) =>
+        body.batch.map((entry) =>
           prisma.character.update({
             where: { id: entry.id },
             data: {
@@ -35,15 +30,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         )
       );
 
-      return res.status(200).json({ success: true, updated: batch.length });
+      return res.status(200).json({ success: true, updated: body.batch.length });
     }
 
     // Single character mode (legacy)
-    const { characterId, groupId, newSortOrder } = req.body;
-
-    if (!characterId || typeof characterId !== 'number') {
-      return badRequest(res, 'Valid character ID is required', 'CHARACTER_ID_REQUIRED');
-    }
+    const body = validateBody<{ characterId: number; groupId?: number | null; newSortOrder?: number }>(schemas.moveCharacterSingle, req, res);
+    if (!body) return;
+    const { characterId, groupId, newSortOrder } = body;
 
     const character = await prisma.character.findUnique({ where: { id: characterId } });
 
