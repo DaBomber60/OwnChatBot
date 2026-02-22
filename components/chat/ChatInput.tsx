@@ -37,21 +37,9 @@ export function ChatInput({
           disabled={loading}
           style={{ minHeight: '80px' }}
         />
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: '6px' }}>
+        <div className="chat-input-buttons">
           <button
-            className="btn btn-secondary btn-small"
-            style={{
-              width: '48px',
-              padding: '4px 0',
-              lineHeight: 1,
-              fontWeight: 500,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: '2px',
-              visibility: showScrollToLatest ? 'visible' : 'hidden',
-              pointerEvents: showScrollToLatest ? 'auto' : 'none',
-            }}
+            className={`btn btn-secondary btn-small chat-scroll-btn${!showScrollToLatest ? ' chat-scroll-btn--hidden' : ''}`}
             onClick={showScrollToLatest ? onScrollToLatest : undefined}
             aria-label="Scroll to latest messages"
             title="Scroll to latest"

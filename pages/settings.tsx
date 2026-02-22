@@ -5,6 +5,7 @@ import useSWR from 'swr';
 import { useRouter } from 'next/router';
 import { logout } from '../lib/auth';
 import Head from 'next/head';
+import type { AIProvider } from '../types/models';
 
 // --- Settings reducer (single state object replaces 24 individual useState calls) ---
 
@@ -12,7 +13,7 @@ interface SettingsState {
   // API / Provider
   apiKey: string;
   keysByProvider: Record<string, string>;
-  aiProvider: 'deepseek' | 'openai' | 'openrouter' | 'custom';
+  aiProvider: AIProvider;
   apiBaseUrl: string;
   modelName: string;
   enableTemperatureOverride: boolean;

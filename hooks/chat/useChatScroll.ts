@@ -64,8 +64,10 @@ export function useChatScroll({
   // Mirror state into refs so rAF closures see current values
   const isStreamingRef = useRef(isStreaming);
   const generatingVariantRef = useRef(generatingVariant);
+  const editingMessageIndexRef = useRef(editingMessageIndex);
   useEffect(() => { isStreamingRef.current = isStreaming; }, [isStreaming]);
   useEffect(() => { generatingVariantRef.current = generatingVariant; }, [generatingVariant]);
+  useEffect(() => { editingMessageIndexRef.current = editingMessageIndex; }, [editingMessageIndex]);
 
   // --- Streaming follow (rAF loop) ---
 
@@ -86,7 +88,7 @@ export function useChatScroll({
       if (
         (!isStreamingRef.current && generatingVariantRef.current === null) ||
         !userPinnedBottomRef.current ||
-        editingMessageIndex !== null
+        editingMessageIndexRef.current !== null
       ) {
         stopStreamingFollow();
         return;
@@ -97,7 +99,7 @@ export function useChatScroll({
     };
     streamingFollowActiveRef.current = true;
     streamingFollowRafRef.current = requestAnimationFrame(step);
-  }, [containerRef, editingMessageIndex, stopStreamingFollow]);
+  }, [containerRef, stopStreamingFollow]);
 
   const maybeStartStreamingFollow = useCallback(() => {
     if (editingMessageIndex !== null) return;

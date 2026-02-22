@@ -9,7 +9,8 @@
 // NOTE: The existing schema is flexible (z.record) so no migration needed.
 import prisma from './prisma';
 
-export type AIProvider = 'deepseek' | 'openai' | 'openrouter' | 'anthropic' | 'custom';
+import type { AIProvider } from '../types/models';
+export type { AIProvider };
 
 export interface AIConfig {
   apiKey: string;

@@ -25,24 +25,7 @@ export function DropdownMenuItem({
   const isDanger = variant === 'danger';
   return (
     <button
-      className={`w-full text-left text-sm transition-colors duration-150 flex items-center gap-3${isDanger ? ' font-medium' : ''}`}
-      style={{
-        color: isDanger ? 'var(--error)' : 'var(--text-primary)',
-        backgroundColor: 'transparent',
-        border: 'none',
-        padding: '12px 20px',
-        ...(disabled ? { opacity: 0.5, cursor: 'default' } : {}),
-      }}
-      onMouseEnter={(e) => {
-        if (!disabled) {
-          e.currentTarget.style.backgroundColor = isDanger
-            ? 'rgba(239, 68, 68, 0.1)'
-            : 'var(--bg-hover)';
-        }
-      }}
-      onMouseLeave={(e) => {
-        e.currentTarget.style.backgroundColor = 'transparent';
-      }}
+      className={`dropdown-menu-item w-full text-left text-sm transition-colors duration-150 flex items-center gap-3${isDanger ? ' dropdown-menu-item--danger font-medium' : ''}${disabled ? ' dropdown-menu-item--disabled' : ''}`}
       onClick={(e) => {
         if (stopPropagation) e.stopPropagation();
         if (!disabled) onClick();
@@ -60,15 +43,7 @@ export function DropdownMenuItem({
 // ---------------------------------------------------------------------------
 
 export function DropdownMenuDivider() {
-  return (
-    <div
-      style={{
-        height: '1px',
-        backgroundColor: 'var(--border-secondary)',
-        margin: '8px 20px',
-      }}
-    />
-  );
+  return <div className="dropdown-menu-divider" />;
 }
 
 // ---------------------------------------------------------------------------
@@ -153,13 +128,8 @@ export function DropdownMenu({
 }: DropdownMenuProps) {
   return (
     <div
-      className="menu-container relative"
+      className={`menu-container relative${isOpen ? ' dropdown-menu-trigger-wrap--open' : ''}`}
       onClick={stopPropagation ? (e) => e.stopPropagation() : undefined}
-      style={{
-        height: isOpen ? '2rem' : 'auto',
-        minHeight: isOpen ? '2rem' : 'auto',
-        zIndex: isOpen ? 999999 : 'auto',
-      }}
     >
       {!isOpen && (
         <button
@@ -177,16 +147,7 @@ export function DropdownMenu({
 
       {isOpen && (
         <div
-          className="absolute right-0 min-w-48 overflow-hidden"
-          style={{
-            top: '0',
-            backgroundColor: 'var(--bg-secondary)',
-            border: '1px solid var(--border-primary)',
-            borderRadius: 'var(--radius-lg)',
-            boxShadow:
-              '0 20px 25px -5px rgba(0, 0, 0, 0.3), 0 10px 10px -5px rgba(0, 0, 0, 0.2)',
-            zIndex: 999999,
-          }}
+          className="dropdown-menu-panel absolute right-0 min-w-48 overflow-hidden"
         >
           <div>{children}</div>
         </div>

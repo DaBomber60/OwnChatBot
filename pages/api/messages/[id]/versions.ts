@@ -3,7 +3,7 @@
 import { notFound } from '../../../../lib/apiErrors';
 import { withApiHandler } from '../../../../lib/withApiHandler';
 
-export default withApiHandler({ auth: false }, {
+export default withApiHandler({ auth: true }, {
   GET: async (_req, res) => {
     return notFound(res, 'Not implemented', 'NOT_IMPLEMENTED');
   },

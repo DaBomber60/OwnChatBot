@@ -1,11 +1,12 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { limiters, clientIp } from '../../../lib/rateLimit';
-import { unauthorized, serverError, badRequest, tooManyRequests, methodNotAllowed } from '../../../lib/apiErrors';
+import { unauthorized, serverError, badRequest, tooManyRequests } from '../../../lib/apiErrors';
 import { schemas, validateBody } from '../../../lib/validate';
 import prisma from '../../../lib/prisma';
 import { getCachedImportToken } from '../../../lib/importToken';
 import { getPasswordVersion } from '../../../lib/passwordVersion';
 import { FALLBACK_JWT_SECRET } from '../../../lib/jwtSecret';
+import { withApiHandler } from '../../../lib/withApiHandler';
 
 // In-memory storage for the latest import (simple single-session approach)
 // Using global to share state between API endpoints
@@ -248,52 +249,65 @@ export function parseChatData(requestData: any) {
 }
 
 
-
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  // Security Hardening (Item 9): Remove blanket wildcard CORS. This endpoint is intended for same-origin use.
-  // If future external tool posting is required, implement explicit origin allowlist & possibly auth token.
-  // We still answer preflight gracefully but do not emit Access-Control-Allow-Origin unless policy added.
+// ---------------------------------------------------------------------------
+// CORS helper — attaches origin-allowlist headers for external tool imports
+// ---------------------------------------------------------------------------
+function attachImportCors(req: NextApiRequest, res: NextApiResponse) {
   res.setHeader('Vary', 'Origin');
   const origin = req.headers.origin as string | undefined;
-  // Allowlist: environment variable IMPORT_ALLOWED_ORIGINS (comma-separated) OR default to janitorai.com only
   const allowedOrigins = (process.env.IMPORT_ALLOWED_ORIGINS || 'https://janitorai.com')
     .split(',')
     .map(o => o.trim())
     .filter(Boolean);
-  const isAllowedOrigin = !!origin && allowedOrigins.includes(origin);
-  if (isAllowedOrigin) {
+  if (origin && allowedOrigins.includes(origin)) {
     res.setHeader('Access-Control-Allow-Origin', origin);
     res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'authorization, content-type');
     res.setHeader('Access-Control-Max-Age', '600');
   }
-  
-  // Handle preflight OPTIONS request
-  if (req.method === 'OPTIONS') {
+}
+
+// ---------------------------------------------------------------------------
+// Bearer token auth for import endpoint (not cookie-based)
+// ---------------------------------------------------------------------------
+async function requireBearerAuth(req: NextApiRequest, res: NextApiResponse): Promise<boolean> {
+  try {
+    const authz = req.headers['authorization'] || req.headers['Authorization'] as string | undefined;
+    if (!authz || typeof authz !== 'string') {
+      unauthorized(res, 'Missing Authorization header', 'MISSING_AUTH');
+      return false;
+    }
+    const m = authz.match(/^Bearer\s+([A-Za-z0-9_-]{20,})$/i);
+    if (!m) {
+      unauthorized(res, 'Invalid Authorization header format', 'INVALID_AUTH_FORMAT');
+      return false;
+    }
+    const supplied = m[1]!;
+    const version = await getPasswordVersion();
+    const expected = await getCachedImportToken(version, FALLBACK_JWT_SECRET);
+    if (supplied !== expected) {
+      unauthorized(res, 'Invalid bearer token', 'INVALID_BEARER');
+      return false;
+    }
+    return true;
+  } catch (e) {
+    serverError(res, 'Auth validation failed', 'AUTH_VALIDATION_FAILED');
+    return false;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Route handler via withApiHandler (auth: false — uses Bearer instead of cookie)
+// ---------------------------------------------------------------------------
+const apiHandler = withApiHandler({ auth: false }, {
+  OPTIONS: async (req, res) => {
     res.setHeader('Allow', 'POST, OPTIONS');
     return res.status(204).end();
-  }
-  
-  if (req.method === 'POST') {
-    // Validate Bearer token (middleware exempted cookie here)
-    try {
-      const authz = req.headers['authorization'] || req.headers['Authorization'] as string | undefined;
-      if (!authz || typeof authz !== 'string') {
-  return unauthorized(res, 'Missing Authorization header', 'MISSING_AUTH');
-      }
-      const m = authz.match(/^Bearer\s+([A-Za-z0-9_-]{20,})$/i);
-      if (!m) {
-  return unauthorized(res, 'Invalid Authorization header format', 'INVALID_AUTH_FORMAT');
-      }
-      const supplied = m[1]!;
-      const version = await getPasswordVersion();
-      const expected = await getCachedImportToken(version, FALLBACK_JWT_SECRET);
-      if (supplied !== expected) {
-  return unauthorized(res, 'Invalid bearer token', 'INVALID_BEARER');
-      }
-    } catch (e) {
-      return serverError(res, 'Auth validation failed', 'AUTH_VALIDATION_FAILED');
-    }
+  },
+
+  POST: async (req, res) => {
+    if (!(await requireBearerAuth(req, res))) return;
+
     const ip = clientIp(req as any);
     const rl = limiters.importReceive(ip);
     if (!rl.allowed) {
@@ -301,48 +315,45 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
     try {
       console.log('[Import] Received POST data at /import/receive:', JSON.stringify(req.body, null, 2));
-      
-      // Validate the import payload structure
+
       const validated = validateBody(schemas.importReceive, req, res);
       if (!validated) return;
 
-      // Parse the import data from the validated request
       const parseResult = parseChatData(validated);
-      
-      // Store in memory for the client to pick up
+
       (global as any).latestImport = {
         data: parseResult.data,
         imported: true,
         timestamp: Date.now(),
         logs: parseResult.logs
       };
-      
+
       console.log('[Import] Successfully parsed and stored import data');
-      
-      // Return a simple success response
+
       return res.status(200).json({
         success: true,
         message: 'Import data received and parsed successfully'
       });
-      
     } catch (errorObj: any) {
       console.error('[Import] Error processing import data:', errorObj);
-      
-      // Store error logs for the client to see
+
       const logs = errorObj.logs || [`Error: ${errorObj.error?.message || errorObj.message || 'Unknown error'}`];
       (global as any).latestImport = {
         imported: false,
         timestamp: Date.now(),
         logs: logs
       };
-      
+
       return badRequest(res, 'Failed to parse import data', 'IMPORT_PARSE_FAILED', {
         details: errorObj.error?.message || errorObj.message || 'Unknown error',
         logs: logs
       });
     }
-  }
-  
-  res.setHeader('Allow', ['POST', 'OPTIONS']);
-  return methodNotAllowed(res, req.method);
+  },
+});
+
+// Wrap with CORS headers before dispatching to withApiHandler
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  attachImportCors(req, res);
+  return apiHandler(req, res);
 }

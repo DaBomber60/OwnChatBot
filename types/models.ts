@@ -1,10 +1,12 @@
 /** Centralized model types shared across pages and components. */
 
+export type AIProvider = 'deepseek' | 'openai' | 'openrouter' | 'anthropic' | 'custom';
+
 export interface Persona {
   id: number;
   name: string;
   profileName?: string;
-  profile?: string;
+  profile: string;
   createdAt?: string;
   updatedAt?: string;
 }
@@ -25,10 +27,10 @@ export interface Character {
   name: string;
   profileName?: string;
   bio?: string;
-  scenario?: string;
-  personality?: string;
-  firstMessage?: string;
-  exampleDialogue?: string;
+  scenario: string;
+  personality: string;
+  firstMessage: string;
+  exampleDialogue: string;
   groupId?: number | null;
   sortOrder?: number;
   group?: CharacterGroup | null;
