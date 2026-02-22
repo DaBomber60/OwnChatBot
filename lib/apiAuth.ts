@@ -1,8 +1,8 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
-import prisma from './prisma';
 import { getJwtSecret } from './jwtSecret';
 import { unauthorized, serverError } from './apiErrors';
 import { verifyJwtHs256 } from './jwtCrypto';
+import { getPasswordVersion } from './passwordVersion';
 
 /**
  * Unified auth guard for API routes.
@@ -41,8 +41,7 @@ export async function requireAuth(req: NextApiRequest, res: NextApiResponse): Pr
     }
     const decoded = result.payload as { v?: number };
     // Fetch current password version (defaults to 1 if not set) and compare
-    const versionSetting = await prisma.setting.findUnique({ where: { key: 'authPasswordVersion' } });
-    const currentVersion = versionSetting ? parseInt(versionSetting.value, 10) || 1 : 1;
+    const currentVersion = await getPasswordVersion();
     if (decoded.v !== currentVersion) {
       unauthorized(res, 'Session expired', 'TOKEN_VERSION_MISMATCH');
       return false;

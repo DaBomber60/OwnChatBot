@@ -1,6 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { limiters, clientIp } from '../../../lib/rateLimit';
 import { unauthorized, serverError, badRequest, tooManyRequests, methodNotAllowed } from '../../../lib/apiErrors';
+import { schemas, validateBody } from '../../../lib/validate';
 import prisma from '../../../lib/prisma';
 import { getCachedImportToken } from '../../../lib/importToken';
 import { getPasswordVersion } from '../../../lib/passwordVersion';
@@ -301,8 +302,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     try {
       console.log('[Import] Received POST data at /import/receive:', JSON.stringify(req.body, null, 2));
       
-      // Parse the import data from the request
-      const parseResult = parseChatData(req.body);
+      // Validate the import payload structure
+      const validated = validateBody(schemas.importReceive, req, res);
+      if (!validated) return;
+
+      // Parse the import data from the validated request
+      const parseResult = parseChatData(validated);
       
       // Store in memory for the client to pick up
       (global as any).latestImport = {

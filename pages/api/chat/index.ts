@@ -7,6 +7,7 @@ import { getAIConfig, tokenFieldFor, normalizeTemperature, DEFAULT_FALLBACK_URL,
 import type { AIConfig } from '../../../lib/aiProvider';
 import { limiters, clientIp } from '../../../lib/rateLimit';
 import { enforceBodySize } from '../../../lib/bodyLimit';
+import { schemas, validateBody } from '../../../lib/validate';
 import { withApiHandler } from '../../../lib/withApiHandler';
 import { persistApiRequest, persistJsonResponse, persistSseResponse } from '../../../lib/apiLog';
 const CONTINUE_PREFIX = '[SYSTEM NOTE: Ignore this message';
@@ -31,18 +32,20 @@ export default withApiHandler({}, {
     return serverError(res, aiCfg.error, aiCfg.code);
   }
   const { apiKey, url: upstreamUrl, model, provider, enableTemperature, tokenFieldOverride, temperature: cfgTemperature, maxTokens: cfgMaxTokens, truncationLimit } = aiCfg as AIConfig;
-  // accept sessionId for existing chats, otherwise personaId and characterId to create new session
+  // Validate request body via Zod schema
+  const parsed = validateBody(schemas.chatGenerate, req, res);
+  if (!parsed) return;
   const {
     sessionId,
     personaId,
     characterId,
     temperature = 1,
     stream = true,
-  maxTokens,
+    maxTokens,
     userMessage,
     userPromptId,
     retry = false
-  } = req.body;
+  } = parsed as any;
 
   // determine session
   let sessionIdToUse = sessionId;

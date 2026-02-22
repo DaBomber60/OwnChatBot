@@ -165,9 +165,9 @@ export async function getTruncationLimit(): Promise<number> {
   return DEFAULT_TRUNCATION_LIMIT;
 }
 
-const DEFAULT_MAX_TOKENS = 4096;
-const MAX_TOKENS_MIN = 256;
-const MAX_TOKENS_MAX = 8192;
+export const DEFAULT_MAX_TOKENS = 4096;
+export const MAX_TOKENS_MIN = 256;
+export const MAX_TOKENS_MAX = 8192;
 
 /** Clamp a max-tokens value to [min, 8192]. */
 export function clampMaxTokens(n: number, min = MAX_TOKENS_MIN): number {
@@ -192,7 +192,7 @@ export async function getMaxTokens(opts?: { defaultValue?: number; min?: number 
   return def;
 }
 
-const DEFAULT_TEMPERATURE = 0.7;
+export const DEFAULT_TEMPERATURE = 0.7;
 
 /** Read the temperature setting from DB. Default: 0.7. */
 export async function getTemperature(): Promise<number> {

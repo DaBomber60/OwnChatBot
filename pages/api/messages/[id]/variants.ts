@@ -72,7 +72,9 @@ export default withApiHandler({ parseId: true }, {
   console.log(`[Variant] Starting variant generation for message ${messageId}`);
     
     try {
-      const { stream = false, temperature: bodyTemperature } = req.body as any;
+      const validated = validateBody(schemas.variantGenerate, req, res);
+      if (!validated) return;
+      const { stream = false, temperature: bodyTemperature } = validated as any;
       
       const message = await prisma.chatMessage.findUnique({
         where: { id: messageId },

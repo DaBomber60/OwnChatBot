@@ -189,6 +189,33 @@ export const schemas = {
       content: z.string(),
     })).min(1),
   }),
+
+  // P1: Chat generation endpoint
+  chatGenerate: z.object({
+    sessionId: z.number().int().positive().optional(),
+    personaId: z.number().int().positive().optional(),
+    characterId: z.number().int().positive().optional(),
+    temperature: z.number().min(0).max(2).optional().default(1),
+    stream: z.boolean().optional().default(true),
+    maxTokens: z.union([z.number().int().positive(), z.string().regex(/^\d+$/)]).optional(),
+    userMessage: z.string().max(100000).optional(),
+    userPromptId: z.number().int().positive().optional(),
+    retry: z.boolean().optional().default(false),
+  }),
+
+  // P1: Variant generation endpoint
+  variantGenerate: z.object({
+    stream: z.boolean().optional().default(false),
+    temperature: z.number().min(0).max(2).optional(),
+  }),
+
+  // P1: Import receive endpoint (external tool → app)
+  importReceive: z.object({
+    messages: z.array(z.object({
+      role: z.string().min(1),
+      content: z.string(),
+    })).min(1),
+  }),
 };
 
 /**

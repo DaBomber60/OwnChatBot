@@ -1,3 +1,5 @@
+import { DEFAULT_TEMPERATURE, DEFAULT_MAX_TOKENS, MAX_TOKENS_MIN, MAX_TOKENS_MAX } from '../aiProvider';
+
 /** Parsed chat settings from the /api/settings endpoint. */
 export interface ChatSettings {
   stream: boolean;
@@ -13,7 +15,7 @@ export async function fetchChatSettings(): Promise<ChatSettings> {
   return {
     stream: s.stream === undefined ? true : s.stream === 'true',
     defaultPromptId: s.defaultPromptId ? Number(s.defaultPromptId) : undefined,
-    temperature: s.temperature ? parseFloat(s.temperature) : 0.7,
-    maxTokens: s.maxTokens ? Math.max(256, Math.min(8192, parseInt(s.maxTokens))) : 4096,
+    temperature: s.temperature ? parseFloat(s.temperature) : DEFAULT_TEMPERATURE,
+    maxTokens: s.maxTokens ? Math.max(MAX_TOKENS_MIN, Math.min(MAX_TOKENS_MAX, parseInt(s.maxTokens))) : DEFAULT_MAX_TOKENS,
   };
 }

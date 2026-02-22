@@ -1,4 +1,5 @@
 import React from 'react';
+import { Modal } from '../Modal';
 
 interface SummaryModalProps {
   summaryContent: string;
@@ -21,27 +22,12 @@ export function SummaryModal({
   session, onClose,
 }: SummaryModalProps) {
   return (
-    <div className="modal-overlay">
-      <div className="modal-content">
-        <div className="modal-header">
-          <h2 className="modal-title">Chat Summary</h2>
-        </div>
-
-        <div className="modal-body">
-          <div className="form-group">
-            <label className="form-label">Summary Content</label>
-            <textarea
-              className="form-textarea"
-              value={summaryContent}
-              onChange={(e) => setSummaryContent(e.target.value)}
-              placeholder="Enter a summary of this chat session..."
-              rows={8}
-              style={{ minHeight: '200px' }}
-            />
-          </div>
-        </div>
-
-        <div className="modal-footer">
+    <Modal
+      open
+      onClose={onClose}
+      title="Chat Summary"
+      footer={
+        <>
           <div className="flex gap-3 flex-wrap mb-3">
             <button
               className="btn btn-secondary"
@@ -77,8 +63,20 @@ export function SummaryModal({
               {savingSummary ? 'Saving...' : 'Save Summary'}
             </button>
           </div>
-        </div>
+        </>
+      }
+    >
+      <div className="form-group">
+        <label className="form-label">Summary Content</label>
+        <textarea
+          className="form-textarea"
+          value={summaryContent}
+          onChange={(e) => setSummaryContent(e.target.value)}
+          placeholder="Enter a summary of this chat session..."
+          rows={8}
+          style={{ minHeight: '200px' }}
+        />
       </div>
-    </div>
+    </Modal>
   );
 }

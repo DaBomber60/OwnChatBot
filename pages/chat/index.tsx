@@ -7,6 +7,7 @@ import type { Persona, Character, CharacterGroup, Session, Message } from '../..
 import { useClickOutside } from '../../hooks/useClickOutside';
 import { PageHeader } from '../../components/PageHeader';
 import { DropdownMenu, DropdownMenuItem, DropdownMenuDivider, ConfirmDeleteItem } from '../../components/DropdownMenu';
+import { Modal } from '../../components/Modal';
 
 // Pure function — defined outside the component so its reference is stable.
 function organizeCharactersForDisplay(
@@ -540,60 +541,53 @@ export default function ChatIndexPage() {
 
       {/* Description Modal */}
       {showDescriptionModal && (
-        <div className="modal-overlay" onClick={(e) => e.target === e.currentTarget && closeDescriptionModal()}>
-          <div className="modal-content">
-            <div className="modal-header">
-              <h2 className="text-2xl font-semibold text-primary mb-0">
-                {descriptionText.trim() ? 'Edit Description' : 'Add Description'}
-              </h2>
+        <Modal
+          open
+          onClose={closeDescriptionModal}
+          title={descriptionText.trim() ? 'Edit Description' : 'Add Description'}
+          footer={
+            <div className="flex gap-3">
+              <button 
+                className="btn btn-secondary" 
+                onClick={closeDescriptionModal}
+                disabled={savingDescription}
+              >
+                Cancel
+              </button>
+              <button 
+                className="btn btn-primary" 
+                onClick={saveDescription}
+                disabled={savingDescription}
+              >
+                {savingDescription ? 'Saving...' : 'Save Description'}
+              </button>
             </div>
-            
-            <div className="modal-body">
-              <div className="form-group mb-0">
-                <label className="form-label mt-2">Chat Description</label>
-                <textarea
-                  className="form-input"
-                  rows={4}
-                  value={descriptionText}
-                  onChange={e => setDescriptionText(e.target.value)}
-                  placeholder="Enter a description for this chat conversation..."
-                  maxLength={500}
-                />
-                <p className="text-xs text-muted mt-1">
-                  {descriptionText.length}/500 characters
-                </p>
-              </div>
-              
-              <div className="bg-info rounded-lg p-3 text-sm">
-                <p className="mb-2">
-                  💡 <strong>Tip:</strong> Descriptions help you quickly identify and organize your conversations.
-                </p>
-                <p className="mb-4">
-                  They will be displayed instead of the auto-generated summary in the chat list.
-                </p>
-              </div>
-            </div>
-            
-            <div className="modal-footer">
-              <div className="flex gap-3">
-                <button 
-                  className="btn btn-secondary" 
-                  onClick={closeDescriptionModal}
-                  disabled={savingDescription}
-                >
-                  Cancel
-                </button>
-                <button 
-                  className="btn btn-primary" 
-                  onClick={saveDescription}
-                  disabled={savingDescription}
-                >
-                  {savingDescription ? 'Saving...' : 'Save Description'}
-                </button>
-              </div>
-            </div>
+          }
+        >
+          <div className="form-group mb-0">
+            <label className="form-label mt-2">Chat Description</label>
+            <textarea
+              className="form-input"
+              rows={4}
+              value={descriptionText}
+              onChange={e => setDescriptionText(e.target.value)}
+              placeholder="Enter a description for this chat conversation..."
+              maxLength={500}
+            />
+            <p className="text-xs text-muted mt-1">
+              {descriptionText.length}/500 characters
+            </p>
           </div>
-        </div>
+          
+          <div className="bg-info rounded-lg p-3 text-sm">
+            <p className="mb-2">
+              💡 <strong>Tip:</strong> Descriptions help you quickly identify and organize your conversations.
+            </p>
+            <p className="mb-4">
+              They will be displayed instead of the auto-generated summary in the chat list.
+            </p>
+          </div>
+        </Modal>
       )}
     </>
   );
