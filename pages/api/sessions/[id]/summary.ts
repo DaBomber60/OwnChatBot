@@ -1,19 +1,10 @@
-import type { NextApiRequest, NextApiResponse } from 'next';
 import prisma from '../../../../lib/prisma';
-import { requireAuth } from '../../../../lib/apiAuth';
 import { schemas, validateBody } from '../../../../lib/validate';
-import { badRequest, serverError, notFound } from '../../../../lib/apiErrors';
+import { badRequest, serverError } from '../../../../lib/apiErrors';
+import { withApiHandler } from '../../../../lib/withApiHandler';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (!(await requireAuth(req, res))) return;
-  const { id } = req.query;
-  const sessionId = parseInt(id as string);
-
-  if (isNaN(sessionId)) {
-    return res.status(400).json({ error: 'Invalid session ID' });
-  }
-
-  if (req.method === 'POST') {
+export default withApiHandler({ parseId: true }, {
+  POST: async (req, res, { id }) => {
     const body = validateBody(schemas.summaryUpdate, req, res);
     if (!body) return;
     const { summary } = body as any;
@@ -27,7 +18,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     } catch {}
     try {
       const updatedSession = await prisma.chatSession.update({
-        where: { id: sessionId },
+        where: { id },
         data: { summary, updatedAt: new Date() }
       });
       return res.status(200).json(updatedSession);
@@ -35,8 +26,5 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       console.error('Failed to update session summary:', error);
       return serverError(res, 'Failed to save summary', 'SUMMARY_UPDATE_FAILED');
     }
-  }
-
-  res.setHeader('Allow', ['POST']);
-  res.status(405).end(`Method ${req.method} Not Allowed`);
-}
+  },
+});

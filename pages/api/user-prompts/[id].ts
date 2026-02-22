@@ -1,71 +1,84 @@
-import type { NextApiRequest, NextApiResponse } from 'next';
 import prisma from '../../../lib/prisma';
-import { requireAuth } from '../../../lib/apiAuth';
+import { badRequest, notFound, serverError } from '../../../lib/apiErrors';
+import { schemas, validateBody } from '../../../lib/validate';
+import { withApiHandler } from '../../../lib/withApiHandler';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (!(await requireAuth(req, res))) return;
-  try {
-    const { id } = req.query;
-    const promptId = parseInt(id as string, 10);
+export default withApiHandler({ parseId: true }, {
+  GET: async (_req, res, { id }) => {
+    try {
+      if (!('userPrompt' in prisma)) {
+        return badRequest(res, 'UserPrompt model not available.', 'MODEL_UNAVAILABLE');
+      }
 
-    if (isNaN(promptId)) {
-      return res.status(400).json({ error: 'Invalid prompt ID' });
-    }
-
-    // Check if userPrompt model is available
-    if (!('userPrompt' in prisma)) {
-      return res.status(400).json({ error: 'UserPrompt model not available.' });
-    }
-
-    if (req.method === 'GET') {
       const prompt = await prisma.userPrompt.findUnique({
-        where: { id: promptId }
+        where: { id }
       });
 
       if (!prompt) {
-        return res.status(404).json({ error: 'Prompt not found' });
+        return notFound(res, 'Prompt not found', 'PROMPT_NOT_FOUND');
       }
 
       return res.status(200).json(prompt);
+    } catch (error: unknown) {
+      console.error('User-prompts [id] API error:', error);
+      if (error && typeof error === 'object' && 'code' in error) {
+        if ((error as any).code === 'P2025') {
+          return notFound(res, 'Prompt not found', 'PROMPT_NOT_FOUND');
+        }
+      }
+      const errorMessage = error instanceof Error ? error.message : 'Internal Server Error';
+      return serverError(res, errorMessage, 'USER_PROMPT_ERROR');
     }
+  },
 
-    if (req.method === 'PUT') {
-      const { title, body } = req.body;
-
-      if (!title || !body) {
-        return res.status(400).json({ error: 'Missing title or body' });
+  PUT: async (req, res, { id }) => {
+    try {
+      if (!('userPrompt' in prisma)) {
+        return badRequest(res, 'UserPrompt model not available.', 'MODEL_UNAVAILABLE');
       }
 
+      const body = validateBody<{ title: string; body: string }>(schemas.updateUserPrompt, req, res);
+      if (!body) return;
+      const { title, body: promptBody } = body;
+
       const updatedPrompt = await prisma.userPrompt.update({
-        where: { id: promptId },
-        data: { title, body }
+        where: { id },
+        data: { title, body: promptBody }
       });
 
       return res.status(200).json(updatedPrompt);
+    } catch (error: unknown) {
+      console.error('User-prompts [id] API error:', error);
+      if (error && typeof error === 'object' && 'code' in error) {
+        if ((error as any).code === 'P2025') {
+          return notFound(res, 'Prompt not found', 'PROMPT_NOT_FOUND');
+        }
+      }
+      const errorMessage = error instanceof Error ? error.message : 'Internal Server Error';
+      return serverError(res, errorMessage, 'USER_PROMPT_ERROR');
     }
+  },
 
-    if (req.method === 'DELETE') {
+  DELETE: async (_req, res, { id }) => {
+    try {
+      if (!('userPrompt' in prisma)) {
+        return badRequest(res, 'UserPrompt model not available.', 'MODEL_UNAVAILABLE');
+      }
+
       await prisma.userPrompt.delete({
-        where: { id: promptId }
+        where: { id }
       });
 
-      return res.status(200).json({ message: 'Prompt deleted successfully' });
-    }
-
-    res.setHeader('Allow', ['GET', 'PUT', 'DELETE']);
-    return res.status(405).end(`Method ${req.method} Not Allowed`);
-
-  } catch (error: unknown) {
-    console.error('User-prompts [id] API error:', error);
-    
-    // Handle Prisma errors
-    if (error && typeof error === 'object' && 'code' in error) {
-      if ((error as any).code === 'P2025') {
-        return res.status(404).json({ error: 'Prompt not found' });
+      return res.status(204).end();
+    } catch (error: unknown) {
+      console.error('User-prompts [id] API error:', error);
+      if (error && typeof error === 'object' && 'code' in error) {
+        if ((error as any).code === 'P2025') {
+          return notFound(res, 'Prompt not found', 'PROMPT_NOT_FOUND');
+        }
       }
+      const errorMessage = error instanceof Error ? error.message : 'Internal Server Error';
+      return serverError(res, errorMessage, 'USER_PROMPT_ERROR');
     }
-
-    const errorMessage = error instanceof Error ? error.message : 'Internal Server Error';
-    return res.status(500).json({ error: errorMessage });
-  }
-}
+  },
+});

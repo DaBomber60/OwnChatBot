@@ -4,8 +4,12 @@ const { version: packageVersion } = require('./package.json');
 const nextConfig = {
   reactStrictMode: true,
   output: 'standalone',
+  devIndicators: false,
   experimental: {
     optimizePackageImports: ['@prisma/client'],
+    // Allow large request bodies through middleware (default is 10MB).
+    // Required for database import (ZIP uploads up to 500MB).
+    middlewareClientMaxBodySize: '500mb',
   },
   serverRuntimeConfig: {
     apiTimeout: 15 * 60 * 1000,

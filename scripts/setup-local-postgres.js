@@ -195,4 +195,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { main, checkEnvFile, checkDocker, startPostgreSQL, runMigrations };
+module.exports = { main, checkEnvFile, checkDocker, startPostgreSQL, applySchema };

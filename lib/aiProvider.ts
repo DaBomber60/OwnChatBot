@@ -9,7 +9,8 @@
 // NOTE: The existing schema is flexible (z.record) so no migration needed.
 import prisma from './prisma';
 
-export type AIProvider = 'deepseek' | 'openai' | 'openrouter' | 'anthropic' | 'custom';
+import type { AIProvider } from '../types/models';
+export type { AIProvider };
 
 export interface AIConfig {
   apiKey: string;
@@ -18,7 +19,14 @@ export interface AIConfig {
   model: string;          // Model name sent upstream
   tokenFieldOverride?: string; // User override for max token field name
   enableTemperature?: boolean; // User toggle for including temperature param
+  // Batched settings — fetched in the same query to avoid extra DB round-trips
+  temperature: number;        // Default 0.7
+  maxTokens: number;          // Default 4096, clamped [256, 8192]
+  truncationLimit: number;    // Default 150000, clamped [30000, 320000]
+  summaryPrompt: string;      // Default long prompt
 }
+
+export const DEFAULT_FALLBACK_URL = 'https://api.deepseek.com/chat/completions';
 
 interface RawSettingsMap { [k: string]: string | undefined }
 
@@ -31,7 +39,8 @@ const PRESET_CONFIG: Record<Exclude<AIProvider, 'custom'>, { url: string; model:
 };
 
 export async function getAIConfig(): Promise<AIConfig | { error: string; code: string }> {
-  // Pull all potentially relevant settings in a single query to reduce latency.
+  // Pull ALL relevant settings in a single query — includes AI provider config
+  // plus temperature, maxTokens, maxCharacters, and summaryPrompt to avoid extra round-trips.
   const rows = await prisma.setting.findMany({
     where: { key: { in: [
       'apiKey', // legacy / fallback
@@ -41,7 +50,9 @@ export async function getAIConfig(): Promise<AIConfig | { error: string; code: s
       'apiKey_anthropic',
       'apiKey_custom',
       'aiProvider', 'apiBaseUrl', 'modelName',
-      'modelEnableTemperature', 'maxTokenFieldName'
+      'modelEnableTemperature', 'maxTokenFieldName',
+      // Batched settings (previously separate queries)
+      'temperature', 'maxTokens', 'maxCharacters', 'summaryPrompt'
     ] } }
   });
   const map: RawSettingsMap = {};
@@ -85,7 +96,18 @@ export async function getAIConfig(): Promise<AIConfig | { error: string; code: s
     : map.modelEnableTemperature === 'true';
   const tokenFieldOverride = (map.maxTokenFieldName || '').trim() || undefined;
 
-  return { apiKey, provider, url, model, enableTemperature, tokenFieldOverride };
+  // Parse batched settings from the same query
+  const temperature = map.temperature ? parseFloat(map.temperature) : NaN;
+  const maxTokensRaw = map.maxTokens ? parseInt(map.maxTokens, 10) : NaN;
+  const maxCharsRaw = map.maxCharacters ? parseInt(map.maxCharacters, 10) : NaN;
+
+  return {
+    apiKey, provider, url, model, enableTemperature, tokenFieldOverride,
+    temperature: !isNaN(temperature) ? temperature : DEFAULT_TEMPERATURE,
+    maxTokens: !isNaN(maxTokensRaw) ? clampMaxTokens(maxTokensRaw) : DEFAULT_MAX_TOKENS,
+    truncationLimit: !isNaN(maxCharsRaw) ? Math.max(TRUNCATION_MIN, Math.min(TRUNCATION_MAX, maxCharsRaw)) : DEFAULT_TRUNCATION_LIMIT,
+    summaryPrompt: map.summaryPrompt || DEFAULT_SUMMARY_PROMPT,
+  };
 }
 
 // Lightweight helper to lazily fetch at call sites while preserving existing error flows.
@@ -121,4 +143,77 @@ export function normalizeTemperature(provider: AIProvider, model: string, reques
   // Clamp general range 0..2 for other providers
   const clamped = Math.max(0, Math.min(2, requested));
   return clamped;
+}
+
+// ---------------------------------------------------------------------------
+// Settings helpers — single source of truth for DB-backed AI settings.
+// Each returns a sensible default on missing/invalid data or DB error.
+// ---------------------------------------------------------------------------
+
+const DEFAULT_TRUNCATION_LIMIT = 150000;
+const TRUNCATION_MIN = 30000;
+const TRUNCATION_MAX = 320000;
+
+/** Read the max-characters truncation limit from settings. Default: 150 000. Clamped [30 000, 320 000]. */
+export async function getTruncationLimit(): Promise<number> {
+  try {
+    const row = await prisma.setting.findUnique({ where: { key: 'maxCharacters' } });
+    if (row?.value) {
+      const parsed = parseInt(row.value, 10);
+      if (!isNaN(parsed)) return Math.max(TRUNCATION_MIN, Math.min(TRUNCATION_MAX, parsed));
+    }
+  } catch { /* DB error — use default */ }
+  return DEFAULT_TRUNCATION_LIMIT;
+}
+
+export const DEFAULT_MAX_TOKENS = 4096;
+export const MAX_TOKENS_MIN = 256;
+export const MAX_TOKENS_MAX = 8192;
+
+/** Clamp a max-tokens value to [min, 8192]. */
+export function clampMaxTokens(n: number, min = MAX_TOKENS_MIN): number {
+  return Math.max(min, Math.min(MAX_TOKENS_MAX, n));
+}
+
+/**
+ * Read the max-tokens setting from DB.
+ * @param opts.defaultValue — override default (default 4096)
+ * @param opts.min — override min clamp (default 256)
+ */
+export async function getMaxTokens(opts?: { defaultValue?: number; min?: number }): Promise<number> {
+  const def = opts?.defaultValue ?? DEFAULT_MAX_TOKENS;
+  const min = opts?.min ?? MAX_TOKENS_MIN;
+  try {
+    const row = await prisma.setting.findUnique({ where: { key: 'maxTokens' } });
+    if (row?.value) {
+      const parsed = parseInt(row.value, 10);
+      if (!isNaN(parsed)) return clampMaxTokens(parsed, min);
+    }
+  } catch { /* DB error — use default */ }
+  return def;
+}
+
+export const DEFAULT_TEMPERATURE = 0.7;
+
+/** Read the temperature setting from DB. Default: 0.7. */
+export async function getTemperature(): Promise<number> {
+  try {
+    const row = await prisma.setting.findUnique({ where: { key: 'temperature' } });
+    if (row?.value) {
+      const parsed = parseFloat(row.value);
+      if (!isNaN(parsed)) return parsed;
+    }
+  } catch { /* DB error — use default */ }
+  return DEFAULT_TEMPERATURE;
+}
+
+const DEFAULT_SUMMARY_PROMPT = 'Create a brief, focused summary (~100 words) of the roleplay between {{char}} and {{user}}. Include:\n\n- Key events and decisions\n- Important emotional moments\n- Location/time changes\n\nRules: Only summarize provided transcript. No speculation. Single paragraph format.';
+
+/** Read the summary prompt from DB, with a sensible default. */
+export async function getSummaryPrompt(): Promise<string> {
+  try {
+    const row = await prisma.setting.findUnique({ where: { key: 'summaryPrompt' } });
+    if (row?.value) return row.value;
+  } catch { /* DB error — use default */ }
+  return DEFAULT_SUMMARY_PROMPT;
 }

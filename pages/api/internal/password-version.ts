@@ -1,16 +1,14 @@
-import type { NextApiRequest, NextApiResponse } from 'next';
 import prisma from '../../../lib/prisma';
+import { withApiHandler } from '../../../lib/withApiHandler';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== 'GET') {
-    res.setHeader('Allow', ['GET']);
-    return res.status(405).end('Method Not Allowed');
-  }
-  try {
-    const versionSetting = await prisma.setting.findUnique({ where: { key: 'authPasswordVersion' } });
-    const version = versionSetting ? parseInt(versionSetting.value, 10) || 1 : 1;
-    res.status(200).json({ version });
-  } catch (e) {
-    res.status(200).json({ version: 1 });
-  }
-}
+export default withApiHandler({ auth: false }, {
+  GET: async (_req, res) => {
+    try {
+      const versionSetting = await prisma.setting.findUnique({ where: { key: 'authPasswordVersion' } });
+      const version = versionSetting ? parseInt(versionSetting.value, 10) || 1 : 1;
+      res.status(200).json({ version });
+    } catch (e) {
+      res.status(200).json({ version: 1 });
+    }
+  },
+});

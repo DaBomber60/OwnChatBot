@@ -7,7 +7,7 @@ import createDOMPurify from 'isomorphic-dompurify';
 const ALLOWED_TAGS = [
   'b', 'strong', 'i', 'em', 'code', 'pre', 'br', 'hr', 'p', 'div', 'ul', 'ol', 'li', 'a', 'span'
 ];
-const ALLOWED_ATTR = ['href', 'target', 'rel'];
+const ALLOWED_ATTR = ['href', 'target', 'rel', 'class'];
 
 export function sanitizeMessage(input: string): string {
   const DOMPurify = createDOMPurify();

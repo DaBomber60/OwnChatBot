@@ -499,6 +499,14 @@ p {
   to { opacity: 1; transform: translateY(0); }
 }
 
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.animate-fade-in {
+  animation: fadeIn 0.35s ease-out both;
+}
+
 /* Utility classes */
 .flex { display: flex; }
 .flex-1 { flex: 1; }
@@ -2034,4 +2042,136 @@ p {
     will-change: transform;
   }
   
+}
+
+/* ==========================================================================
+   P3-21: Extracted inline styles — DropdownMenu, VariantTempPopover, ChatInput
+   ========================================================================== */
+
+/* --- DropdownMenu --- */
+.dropdown-menu-item {
+  color: var(--text-primary);
+  background-color: transparent;
+  border: none;
+  padding: 12px 20px;
+}
+.dropdown-menu-item:hover:not(:disabled) {
+  background-color: var(--bg-hover);
+}
+.dropdown-menu-item--danger {
+  color: var(--error);
+}
+.dropdown-menu-item--danger:hover:not(:disabled) {
+  background-color: rgba(239, 68, 68, 0.1);
+}
+.dropdown-menu-item--disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.dropdown-menu-divider {
+  height: 1px;
+  background-color: var(--border-secondary);
+  margin: 8px 20px;
+}
+.dropdown-menu-trigger-wrap--open {
+  height: 2rem;
+  min-height: 2rem;
+  z-index: 999999;
+}
+.dropdown-menu-panel {
+  top: 0;
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.3),
+              0 10px 10px -5px rgba(0, 0, 0, 0.2);
+  z-index: 999999;
+}
+
+/* --- VariantTempPopover --- */
+.popover-overlay-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: transparent;
+}
+.variant-temp-popover {
+  position: fixed;
+  width: 280px;
+  padding: 14px 16px;
+  border-radius: 12px;
+  background: rgba(20, 20, 28, 0.9);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  color: var(--text-primary, #fff);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+}
+.variant-temp-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.variant-temp-title {
+  font-weight: 650;
+  letter-spacing: 0.2px;
+}
+.variant-temp-badge {
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+.variant-temp-hint {
+  font-size: 12px;
+  opacity: 0.75;
+  margin-bottom: 10px;
+}
+.variant-temp-slider-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.variant-temp-range-label {
+  font-size: 12px;
+  opacity: 0.8;
+  width: 24px;
+}
+.variant-temp-range-label--left {
+  text-align: right;
+}
+.variant-temp-range {
+  flex: 1;
+  height: 28px;
+  accent-color: var(--primary, #7c5cff);
+}
+.variant-temp-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 14px;
+  justify-content: flex-end;
+}
+
+/* --- ChatInput --- */
+.chat-input-buttons {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+}
+.chat-scroll-btn {
+  width: 48px;
+  padding: 4px 0;
+  line-height: 1;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+}
+.chat-scroll-btn--hidden {
+  visibility: hidden;
+  pointer-events: none;
 }

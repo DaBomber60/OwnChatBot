@@ -1,67 +1,9 @@
 import { NextResponse, NextRequest } from 'next/server';
+import { verifyJwtHs256, signJwtHs256, TOKEN_LIFETIME, TOKEN_RENEWAL_THRESHOLD } from './lib/jwtCrypto';
 
 // JWT secret is injected at container start (auto-generated if absent) and must be present here.
 // We intentionally DO NOT provide a hard-coded fallback to avoid accidental insecure deployments.
 const RUNTIME_JWT_SECRET = process.env.JWT_SECRET;
-
-// Convert a base64url string to ArrayBuffer
-function b64urlToUint8Array(b64url: string): Uint8Array {
-  const pad = '='.repeat((4 - (b64url.length % 4)) % 4);
-  const b64 = (b64url.replace(/-/g, '+').replace(/_/g, '/')) + pad;
-  const binary = atob(b64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  return bytes;
-}
-
-function uint8ArrayToB64url(bytes: Uint8Array): string {
-  let str = '';
-  for (let i = 0; i < bytes.length; i++) str += String.fromCharCode(bytes[i]!);
-  const b64 = btoa(str).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
-  return b64;
-}
-
-// Token lifetime constants (seconds)
-const TOKEN_LIFETIME = 14 * 24 * 60 * 60; // 14 days
-const TOKEN_RENEWAL_THRESHOLD = 7 * 24 * 60 * 60; // renew when >7 days old (halfway)
-
-async function verifyJwtHs256(token: string, secret: string): Promise<{ valid: boolean; payload?: any }>{
-  const parts = token.split('.');
-  if (parts.length !== 3) return { valid: false };
-  const [headerB64, payloadB64, sigB64] = parts as [string, string, string];
-  try {
-    const enc = new TextEncoder();
-    const keyData = enc.encode(secret);
-    const key = await crypto.subtle.importKey('raw', keyData, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign', 'verify']);
-    const data = enc.encode(`${headerB64}.${payloadB64}`);
-    const computed = new Uint8Array(await crypto.subtle.sign('HMAC', key, data));
-    const computedB64 = uint8ArrayToB64url(computed);
-    if (computedB64 !== sigB64) return { valid: false };
-    const json = atob(payloadB64.replace(/-/g, '+').replace(/_/g, '/'));
-    const payload = JSON.parse(json);
-    // Basic exp check if present
-    if (payload.exp && Date.now() / 1000 > payload.exp) return { valid: false };
-    return { valid: true, payload };
-  } catch {
-    return { valid: false };
-  }
-}
-
-// Edge-compatible JWT HS256 signing (used for sliding token renewal)
-async function signJwtHs256(payload: Record<string, any>, secret: string): Promise<string> {
-  const enc = new TextEncoder();
-  const header = { alg: 'HS256', typ: 'JWT' };
-  const nowSec = Math.floor(Date.now() / 1000);
-  const fullPayload = { ...payload, iat: nowSec, exp: nowSec + TOKEN_LIFETIME };
-  const headerB64 = btoa(JSON.stringify(header)).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
-  const payloadB64 = btoa(JSON.stringify(fullPayload)).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
-  const key = await crypto.subtle.importKey('raw', enc.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
-  const sig = new Uint8Array(await crypto.subtle.sign('HMAC', key, enc.encode(`${headerB64}.${payloadB64}`)));
-  const sigB64 = uint8ArrayToB64url(sig);
-  return `${headerB64}.${payloadB64}.${sigB64}`;
-}
-
-// JWT secret resolved dynamically; middleware runs in node runtime (see config)
 
 // Paths that do not require auth (exact or prefix handling below)
 const PUBLIC_PREFIXES = ['/api/auth/', '/_next/', '/favicon', '/api/health', '/api/internal/password-version'];
@@ -220,15 +162,30 @@ export async function middleware(req: NextRequest) {
   }
 }
 
+// Extract origin (scheme + host) from a URL string; returns empty string on failure.
+function originOf(url: string): string {
+  try {
+    const u = new URL(url);
+    return u.origin;
+  } catch {
+    return '';
+  }
+}
+
 // Security headers (Item 9 implementation)
 function attachSecurityHeaders(res: NextResponse, req: NextRequest) {
+  // Build connect-src: known providers + optional custom AI_BASE_URL from env
+  const knownProviders = 'https://api.deepseek.com https://api.openai.com https://openrouter.ai https://api.anthropic.com';
+  const extraOrigin = originOf(process.env.AI_BASE_URL || '');
+  const connectSrc = `connect-src 'self' ${knownProviders}${extraOrigin ? ' ' + extraOrigin : ''}`;
+
   const csp = [
     "default-src 'self'",
     "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data: blob:",
     "font-src 'self' data:",
-  "connect-src 'self' https://api.deepseek.com https://api.openai.com https://openrouter.ai https://api.anthropic.com",
+    connectSrc,
     "frame-ancestors 'none'",
     "base-uri 'self'",
     "form-action 'self'"

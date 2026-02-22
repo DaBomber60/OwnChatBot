@@ -2,24 +2,31 @@ import Head from 'next/head';
 import { useRouter } from 'next/router';
 import useSWR from 'swr';
 import { useState, useMemo } from 'react';
+import { fetcher } from '../lib/fetcher';
+import type { Session } from '../types/models';
 
-// Session data shape
-type Session = { 
-  id: number; 
-  persona: { name: string; profileName?: string }; 
-  character: { name: string; profileName?: string }; 
-  updatedAt: string; 
-  messageCount: number 
+/** Fetcher that also extracts X-Total-Count header */
+const sessionsFetcher = async (url: string) => {
+  const res = await fetch(url);
+  const data = await res.json();
+  const total = res.headers.get('X-Total-Count');
+  return { sessions: data, totalCount: total ? parseInt(total, 10) : undefined };
 };
 
-const fetcher = (url: string) => fetch(url).then(res => res.json());
+interface SessionsResponse {
+  sessions: Session[];
+  totalCount?: number;
+}
 
 export default function Home() {
   const router = useRouter();
-  const { data: sessions } = useSWR<Session[] | { error?: string }>(
-    '/api/sessions',
-    fetcher
+  const { data: sessionsData, isLoading: sessionsLoading } = useSWR<SessionsResponse>(
+    '/api/sessions?limit=3&sort=updatedAt',
+    sessionsFetcher,
+    { revalidateOnFocus: true, dedupingInterval: 0, keepPreviousData: false }
   );
+  const sessions = sessionsData?.sessions;
+  const totalConversations = sessionsData?.totalCount;
   // Fetch global settings to determine if an API key exists or the reminder was dismissed
   const { data: settings, mutate: mutateSettings } = useSWR<Record<string, string> | { error?: string }>(
     '/api/settings',
@@ -56,11 +63,8 @@ export default function Home() {
     setDismissedThisSession(true);
     if (navigateToSettings) router.push('/settings');
   }
-  const recent = Array.isArray(sessions)
-    ? [...sessions]
-        .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
-        .slice(0, 3)
-    : [];
+  // Sessions already arrive sorted by updatedAt desc and limited to 3 from the API
+  const recent = Array.isArray(sessions) ? sessions : [];
 
   return (
     <>
@@ -69,7 +73,6 @@ export default function Home() {
         <meta name="description" content="Chat with AI characters using different personas. Create immersive conversations with custom characters and personalities." />
       </Head>
 
-      <div className="container">
         {/* Inline first-time API key guidance (above Conversations card) */}
         {/* Header */}
         <header className="text-center mb-12">
@@ -80,11 +83,29 @@ export default function Home() {
         </header>
 
         {/* Recent Chats */}
-        {recent.length > 0 && (
+        {(sessionsLoading || recent.length > 0) && (
           <section className="mb-6">
             <h2 className="text-2xl font-semibold mb-6">Recent Conversations</h2>
-            <div className="grid grid-auto-fit gap-6">
-              {recent.map(session => (
+            {sessionsLoading ? (
+              <div className="grid grid-auto-fit gap-6">
+                {[0, 1, 2].map(i => (
+                  <div key={i} className="card card-compact text-center" style={{ visibility: 'hidden' }}>
+                    <div className="card-header">
+                      <h3 className="card-title text-base" style={{ visibility: 'hidden' }}>Placeholder Name</h3>
+                      <div className="mb-1" style={{ height: '15px' }}></div>
+                      <p className="card-description mb-4" style={{ visibility: 'hidden' }}>01/01/2000</p>
+                      <div className="flex items-center justify-center gap-2 text-xs text-muted">
+                        <div className="status-dot status-loading"></div>
+                        <span>Loading...</span>
+                      </div>
+                    </div>
+                    <div className="text-primary font-medium" style={{ visibility: 'hidden' }}>Continue Chat</div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="grid grid-auto-fit gap-6 animate-fade-in">
+                {recent.map(session => (
                 <div 
                   key={session.id} 
                   className="card card-compact cursor-pointer text-center"
@@ -117,6 +138,7 @@ export default function Home() {
                 </div>
               ))}
             </div>
+            )}
           </section>
         )}
 
@@ -237,17 +259,16 @@ export default function Home() {
         </section>
 
         {/* Quick Stats */}
-  {Array.isArray(sessions) && sessions.length > 0 && (
+  {typeof totalConversations === 'number' && totalConversations > 0 && (
           <section className="text-center">
             <div className="inline-flex items-center gap-4 text-sm text-muted">
               <span className="flex items-center gap-2">
                 <div className="status-dot status-online"></div>
-                {Array.isArray(sessions) ? sessions.length : 0} total conversations
+                {totalConversations} total conversation{totalConversations !== 1 ? 's' : ''}
               </span>
             </div>
           </section>
         )}
-      </div>
     </>
   );
 }

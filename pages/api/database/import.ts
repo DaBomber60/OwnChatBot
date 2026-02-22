@@ -1,17 +1,20 @@
-import type { NextApiRequest, NextApiResponse } from 'next';
 import prisma from '../../../lib/prisma';
 import { IncomingForm, Fields, Files } from 'formidable';
 import { promises as fs } from 'fs';
+import path from 'path';
+import os from 'os';
 import JSZip from 'jszip';
-import { requireAuth } from '../../../lib/apiAuth';
 import { limiters, clientIp } from '../../../lib/rateLimit';
-import { tooManyRequests } from '../../../lib/apiErrors';
+import { badRequest, serverError, tooManyRequests } from '../../../lib/apiErrors';
+import { withApiHandler } from '../../../lib/withApiHandler';
 
 // Disable Next.js body parser for file uploads and increase size limits
 export const config = {
   api: {
     bodyParser: false,
     responseLimit: false,
+    // Increase the default body size limit for large imports (Next.js 13+)
+    externalResolver: true,
   },
 };
 
@@ -31,39 +34,44 @@ interface ImportData {
   metadata?: any;
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (!(await requireAuth(req, res))) return;
-  if (req.method !== 'POST') {
-    res.setHeader('Allow', ['POST']);
-    return res.status(405).end(`Method ${req.method} Not Allowed`);
-  }
+export default withApiHandler({}, {
+  POST: async (req, res) => {
+    const ip = clientIp(req as any);
+    const rl = limiters.dbImport(ip);
+    if (!rl.allowed) {
+      return tooManyRequests(res, 'Database import rate limit exceeded', 'RATE_LIMITED', rl.retryAfterSeconds);
+    }
 
-  const ip = clientIp(req as any);
-  const rl = limiters.dbImport(ip);
-  if (!rl.allowed) {
-    return tooManyRequests(res, 'Database import rate limit exceeded', 'RATE_LIMITED', rl.retryAfterSeconds);
-  }
-
-  try {
+    // Use a dedicated temp directory to avoid cross-device rename issues
+    const uploadDir = await fs.mkdtemp(path.join(os.tmpdir(), 'hcb-import-'));
+    
     const form = new IncomingForm({
       maxFileSize: 500 * 1024 * 1024, // 500MB limit for zip files
       maxFieldsSize: 500 * 1024 * 1024, // 500MB for form fields
-      maxFields: 1000, // Allow more fields if needed
+      maxTotalFileSize: 500 * 1024 * 1024, // total file size limit (formidable v3)
+      maxFields: 1000,
       keepExtensions: true,
-      multiples: false
+      multiples: false,
+      uploadDir, // explicit temp dir
+      allowEmptyFiles: false,
+      hashAlgorithm: false, // skip hashing for faster uploads
     });
     
     const { files } = await new Promise<{ files: Files }>((resolve, reject) => {
       form.parse(req, (err: any, fields: Fields, files: Files) => {
-        if (err) reject(err);
-        else resolve({ files });
+        if (err) {
+          console.error('[database/import] Formidable parse error:', err.code, err.httpCode, err.message);
+          reject(err);
+        } else {
+          resolve({ files });
+        }
       });
     });
 
     const uploadedFile = Array.isArray(files.file) ? files.file[0] : files.file;
     
     if (!uploadedFile) {
-      return res.status(400).json({ error: 'No file uploaded' });
+      return badRequest(res, 'No file uploaded', 'NO_FILE');
     }
 
     // Determine file type and process accordingly
@@ -72,8 +80,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const isJsonFile = fileName.toLowerCase().endsWith('.json');
 
     if (!isZipFile && !isJsonFile) {
-      return res.status(400).json({ 
-        error: 'Invalid file type',
+      return badRequest(res, 'Invalid file type', 'INVALID_FILE_TYPE', {
         details: 'Please upload a .zip or .json export file'
       });
     }
@@ -90,16 +97,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         // Look for database.json in the zip
         const databaseFile = loadedZip.file('database.json');
         if (!databaseFile) {
-          return res.status(400).json({ 
-            error: 'Invalid zip file format',
+          return badRequest(res, 'Invalid zip file format', 'INVALID_ZIP', {
             details: 'Zip file must contain database.json'
           });
         }
         
         fileContent = await databaseFile.async('text');
       } catch (zipError) {
-        return res.status(400).json({ 
-          error: 'Failed to read zip file',
+        return badRequest(res, 'Failed to read zip file', 'ZIP_READ_FAILED', {
           details: zipError instanceof Error ? zipError.message : 'Could not extract zip contents'
         });
       }
@@ -112,8 +117,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     try {
       importData = JSON.parse(fileContent);
     } catch (parseError) {
-      return res.status(400).json({ 
-        error: 'Invalid JSON file format',
+      return badRequest(res, 'Invalid JSON file format', 'INVALID_JSON', {
         details: parseError instanceof Error ? parseError.message : 'Could not parse JSON'
       });
     }
@@ -126,8 +130,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // Validate the import data structure
     if (!importData.data || !importData.version) {
-      return res.status(400).json({ 
-        error: 'Invalid export file format',
+      return badRequest(res, 'Invalid export file format', 'INVALID_FORMAT', {
         details: 'File must contain data and version fields'
       });
     }
@@ -337,25 +340,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
-    // Process imports in batches to handle large datasets more efficiently
-    const BATCH_SIZE = 100; // Process records in batches of 100
-
-    // Helper function to process arrays in batches
-    const processBatch = async <T>(
-      items: T[], 
-      processor: (item: T) => Promise<void>
-    ) => {
-      for (let i = 0; i < items.length; i += BATCH_SIZE) {
-        const batch = items.slice(i, i + BATCH_SIZE);
-        await Promise.all(batch.map(processor));
-        
-        // Small delay to prevent overwhelming the database
-        if (i + BATCH_SIZE < items.length) {
-          await new Promise(resolve => setTimeout(resolve, 10));
-        }
-      }
-    };
-
     // Create lookup maps for better performance
     const personaLookup = new Map();
     const characterLookup = new Map();
@@ -378,86 +362,82 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         characterLookup.set(key, c);
       });
 
-      for (const session of importData.data.chatSessions) {
-        try {
-          // Find persona and character using lookup maps
-          const originalPersona = importData.data.personas?.find(p => p.id === session.personaId);
-          const originalCharacter = importData.data.characters?.find(c => c.id === session.characterId);
+      await prisma.$transaction(async (tx) => {
+        for (const session of importData.data.chatSessions) {
+          try {
+            // Find persona and character using lookup maps
+            const originalPersona = importData.data.personas?.find(p => p.id === session.personaId);
+            const originalCharacter = importData.data.characters?.find(c => c.id === session.characterId);
 
-          if (!originalPersona || !originalCharacter) {
-            results.errors.push(`ChatSession: Missing original persona or character data`);
-            continue;
-          }
+            if (!originalPersona || !originalCharacter) {
+              results.errors.push(`ChatSession: Missing original persona or character data`);
+              continue;
+            }
 
-          const personaKey = `${originalPersona.name}|${originalPersona.profileName || ''}`;
-          const characterKey = `${originalCharacter.name}|${originalCharacter.profileName || ''}`;
+            const personaKey = `${originalPersona.name}|${originalPersona.profileName || ''}`;
+            const characterKey = `${originalCharacter.name}|${originalCharacter.profileName || ''}`;
 
-          const persona = personaLookup.get(personaKey);
-          const character = characterLookup.get(characterKey);
+            const persona = personaLookup.get(personaKey);
+            const character = characterLookup.get(characterKey);
 
-          if (persona && character) {
-            const existing = await prisma.chatSession.findFirst({
-              where: {
-                personaId: persona.id,
-                characterId: character.id,
-                createdAt: new Date(session.createdAt)
-              }
-            });
-
-            if (!existing) {
-              const newSession = await prisma.chatSession.create({
-                data: {
+            if (persona && character) {
+              const existing = await tx.chatSession.findFirst({
+                where: {
                   personaId: persona.id,
                   characterId: character.id,
-                  lastApiRequest: session.lastApiRequest,
-                  summary: session.summary,
-                  description: session.description,
-                  lastSummary: session.lastSummary,
-                  notes: session.notes,
-                  createdAt: new Date(session.createdAt),
-                  updatedAt: new Date(session.updatedAt)
+                  createdAt: new Date(session.createdAt)
                 }
               });
-              
-              // Store session mapping for messages import
-              sessionLookup.set(session.id, newSession);
-              results.imported.chatSessions++;
+
+              if (!existing) {
+                const newSession = await tx.chatSession.create({
+                  data: {
+                    personaId: persona.id,
+                    characterId: character.id,
+                    lastApiRequest: session.lastApiRequest,
+                    summary: session.summary,
+                    description: session.description,
+                    lastSummary: session.lastSummary,
+                    notes: session.notes,
+                    createdAt: new Date(session.createdAt),
+                    updatedAt: new Date(session.updatedAt)
+                  }
+                });
+                
+                // Store session mapping for messages import
+                sessionLookup.set(session.id, newSession);
+                results.imported.chatSessions++;
+              } else {
+                sessionLookup.set(session.id, existing);
+                results.skipped.chatSessions++;
+              }
             } else {
-              sessionLookup.set(session.id, existing);
-              results.skipped.chatSessions++;
+              results.errors.push(`ChatSession: Missing persona (${originalPersona.name}) or character (${originalCharacter.name}) reference`);
             }
-          } else {
-            results.errors.push(`ChatSession: Missing persona (${originalPersona.name}) or character (${originalCharacter.name}) reference`);
+          } catch (error) {
+            results.errors.push(`ChatSession: ${error instanceof Error ? error.message : 'Unknown error'}`);
           }
-        } catch (error) {
-          results.errors.push(`ChatSession: ${error instanceof Error ? error.message : 'Unknown error'}`);
         }
-      }
+      }, { timeout: 60000 });
     }
+
+    // Small delay between major transaction batches
+    await new Promise(r => setTimeout(r, 50));
 
     // 7. Import ChatMessages (depends on ChatSessions)
     if (importData.data.chatMessages?.length) {
-      for (const message of importData.data.chatMessages) {
-        try {
-          const importedSession = sessionLookup.get(message.sessionId);
-          if (!importedSession) {
-            results.errors.push(`ChatMessage: Could not find imported session for message ${message.id}`);
-            continue;
-          }
-
-          // Check if message already exists (by content, role, and timestamp)
-          const existing = await prisma.chatMessage.findFirst({
-            where: {
-              sessionId: importedSession.id,
-              role: message.role,
-              content: message.content,
-              createdAt: new Date(message.createdAt)
+      await prisma.$transaction(async (tx) => {
+        for (const message of importData.data.chatMessages) {
+          try {
+            const importedSession = sessionLookup.get(message.sessionId);
+            if (!importedSession) {
+              results.errors.push(`ChatMessage: Could not find imported session for message ${message.id}`);
+              continue;
             }
-          });
 
-          if (!existing) {
-            const newMessage = await prisma.chatMessage.create({
-              data: {
+            // Check if message already exists (by content, role, and timestamp)
+            const existing = await tx.chatMessage.findFirst({
+              where: {
                 sessionId: importedSession.id,
                 role: message.role,
                 content: message.content,
@@ -465,56 +445,72 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               }
             });
 
-            // Store message mapping for versions import
-            messageLookup.set(message.id, newMessage);
-            results.imported.chatMessages++;
-          } else {
-            messageLookup.set(message.id, existing);
-            results.skipped.chatMessages++;
+            if (!existing) {
+              const newMessage = await tx.chatMessage.create({
+                data: {
+                  sessionId: importedSession.id,
+                  role: message.role,
+                  content: message.content,
+                  createdAt: new Date(message.createdAt)
+                }
+              });
+
+              // Store message mapping for versions import
+              messageLookup.set(message.id, newMessage);
+              results.imported.chatMessages++;
+            } else {
+              messageLookup.set(message.id, existing);
+              results.skipped.chatMessages++;
+            }
+          } catch (error) {
+            results.errors.push(`ChatMessage ${message.id}: ${error instanceof Error ? error.message : 'Unknown error'}`);
           }
-        } catch (error) {
-          results.errors.push(`ChatMessage ${message.id}: ${error instanceof Error ? error.message : 'Unknown error'}`);
         }
-      }
+      }, { timeout: 120000 });
     }
+
+    // Small delay between major transaction batches
+    await new Promise(r => setTimeout(r, 50));
 
     // 8. Import MessageVersions (depends on ChatMessages)
     if (importData.data.messageVersions?.length) {
-      for (const version of importData.data.messageVersions) {
-        try {
-          const importedMessage = messageLookup.get(version.messageId);
-          if (!importedMessage) {
-            results.errors.push(`MessageVersion: Could not find imported message for version ${version.id}`);
-            continue;
-          }
-
-          // Check if version already exists
-          const existing = await prisma.messageVersion.findFirst({
-            where: {
-              messageId: importedMessage.id,
-              version: version.version,
-              content: version.content
+      await prisma.$transaction(async (tx) => {
+        for (const version of importData.data.messageVersions) {
+          try {
+            const importedMessage = messageLookup.get(version.messageId);
+            if (!importedMessage) {
+              results.errors.push(`MessageVersion: Could not find imported message for version ${version.id}`);
+              continue;
             }
-          });
 
-          if (!existing) {
-            await prisma.messageVersion.create({
-              data: {
+            // Check if version already exists
+            const existing = await tx.messageVersion.findFirst({
+              where: {
                 messageId: importedMessage.id,
-                content: version.content,
                 version: version.version,
-                isActive: version.isActive,
-                createdAt: new Date(version.createdAt)
+                content: version.content
               }
             });
-            results.imported.messageVersions++;
-          } else {
-            results.skipped.messageVersions++;
+
+            if (!existing) {
+              await tx.messageVersion.create({
+                data: {
+                  messageId: importedMessage.id,
+                  content: version.content,
+                  version: version.version,
+                  isActive: version.isActive,
+                  createdAt: new Date(version.createdAt)
+                }
+              });
+              results.imported.messageVersions++;
+            } else {
+              results.skipped.messageVersions++;
+            }
+          } catch (error) {
+            results.errors.push(`MessageVersion ${version.id}: ${error instanceof Error ? error.message : 'Unknown error'}`);
           }
-        } catch (error) {
-          results.errors.push(`MessageVersion ${version.id}: ${error instanceof Error ? error.message : 'Unknown error'}`);
         }
-      }
+      }, { timeout: 120000 });
     }
 
     return res.status(200).json({
@@ -527,12 +523,5 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         totalErrors: results.errors.length
       }
     });
-
-  } catch (error) {
-    console.error('Database import error:', error);
-    return res.status(500).json({
-      error: 'Failed to import database',
-      details: error instanceof Error ? error.message : 'Unknown error'
-    });
-  }
-}
+  },
+});

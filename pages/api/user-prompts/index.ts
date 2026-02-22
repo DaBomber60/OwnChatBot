@@ -1,9 +1,8 @@
-import type { NextApiRequest, NextApiResponse } from 'next';
 import prisma from '../../../lib/prisma';
-import { requireAuth } from '../../../lib/apiAuth';
 import { schemas, validateBody } from '../../../lib/validate';
 import { badRequest } from '../../../lib/apiErrors';
 import { DEFAULT_USER_PROMPT_TITLE, DEFAULT_USER_PROMPT_BODY } from '../../../lib/defaultUserPrompt';
+import { withApiHandler } from '../../../lib/withApiHandler';
 
 // Setting key to record that we have seeded the default prompt at least once.
 const SEED_FLAG_KEY = 'defaultUserPromptSeeded';
@@ -43,45 +42,37 @@ async function recreateDefaultPrompt() {
   return created;
 }
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (!(await requireAuth(req, res))) return;
-  try {
-    if (req.method === 'GET') {
-      if (!('userPrompt' in prisma)) {
-        return res.status(200).json([]);
-      }
-      // Seed exactly once (creates if never seeded before, even if user deleted it later the seed flag prevents recreation).
-      await ensureSeedOnce();
-      const prompts = await prisma.userPrompt.findMany({ orderBy: { createdAt: 'desc' } });
-      return res.status(200).json(prompts);
+export default withApiHandler({}, {
+  GET: async (_req, res) => {
+    if (!('userPrompt' in prisma)) {
+      return res.status(200).json([]);
     }
-    if (req.method === 'POST') {
-      if (!('userPrompt' in prisma)) {
-        return badRequest(res, 'UserPrompt model not available', 'USER_PROMPT_MODEL_MISSING');
-      }
-      // Optional special action for recreating default (developer mode button will call with { action: 'recreate_default' })
-      if (req.body && req.body.action === 'recreate_default') {
-        const recreated = await recreateDefaultPrompt();
-        return res.status(201).json({ recreated: true, prompt: recreated });
-      }
-      const body = validateBody(schemas.createUserPrompt, req, res);
-      if (!body) return;
-      const { title, body: promptBody } = body as any;
-      try {
-        const prompt = await prisma.userPrompt.create({ data: { title, body: promptBody } });
-        return res.status(201).json(prompt);
-      } catch (e: any) {
-        if (e?.code === 'P2002') {
-          return badRequest(res, 'A prompt with this title already exists', 'DUPLICATE_TITLE');
-        }
-        throw e;
-      }
+    // Seed exactly once (creates if never seeded before, even if user deleted it later the seed flag prevents recreation).
+    await ensureSeedOnce();
+    const prompts = await prisma.userPrompt.findMany({ orderBy: { createdAt: 'desc' } });
+    return res.status(200).json(prompts);
+  },
+
+  POST: async (req, res) => {
+    if (!('userPrompt' in prisma)) {
+      return badRequest(res, 'UserPrompt model not available', 'USER_PROMPT_MODEL_MISSING');
     }
-    res.setHeader('Allow', ['GET', 'POST']);
-    return res.status(405).end(`Method ${req.method} Not Allowed`);
-  } catch (error: unknown) {
-    console.error('User-prompts API error:', error);
-    const errorMessage = error instanceof Error ? error.message : 'Internal Server Error';
-    return res.status(500).json({ error: errorMessage });
-  }
-}
+    // Optional special action for recreating default (developer mode button will call with { action: 'recreate_default' })
+    if (req.body && req.body.action === 'recreate_default') {
+      const recreated = await recreateDefaultPrompt();
+      return res.status(201).json({ recreated: true, prompt: recreated });
+    }
+    const body = validateBody(schemas.createUserPrompt, req, res);
+    if (!body) return;
+    const { title, body: promptBody } = body as any;
+    try {
+      const prompt = await prisma.userPrompt.create({ data: { title, body: promptBody } });
+      return res.status(201).json(prompt);
+    } catch (e: any) {
+      if (e?.code === 'P2002') {
+        return badRequest(res, 'A prompt with this title already exists', 'DUPLICATE_TITLE');
+      }
+      throw e;
+    }
+  },
+});

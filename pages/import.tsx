@@ -2,12 +2,8 @@ import { useState, useEffect, useMemo } from 'react';
 import useSWR, { mutate } from 'swr';
 import { useRouter } from 'next/router';
 import Head from 'next/head';
-
-const fetcher = (url: string) => fetch(url).then(res => res.json());
-
-type Persona = { id: number; name: string; profileName?: string };
-type Character = { id: number; name: string; profileName?: string; firstMessage?: string };
-type CharacterGroup = { id: number; name: string; color: string; isCollapsed: boolean; sortOrder: number; characters: Character[]; };
+import { fetcher } from '../lib/fetcher';
+import type { Persona, Character, CharacterGroup } from '../types/models';
 
 interface ImportedData {
   characterData: {
@@ -529,7 +525,7 @@ export default function ImportPage() {
 
   if (!personas || !chars || !groups) {
     return (
-      <div className="container text-center">
+      <div className="text-center">
         <div className="card">
           <div className="status-indicator">
             <div className="status-dot status-loading"></div>
@@ -543,7 +539,7 @@ export default function ImportPage() {
   // Queue processing removed
 
   return (
-    <div className="container">
+    <>
       <Head>
         <title>Import - OwnChatBot</title>
         <meta name="description" content="Import characters, personas, and chats from external tools" />
@@ -1079,6 +1075,6 @@ export default function ImportPage() {
           </>
         )}
       </div>
-    </div>
+    </>
   );
 }

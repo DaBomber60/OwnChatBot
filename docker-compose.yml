@@ -8,8 +8,11 @@ services:
       - POSTGRES_DB=${POSTGRES_DB:-ownchatbot}
       - POSTGRES_USER=${POSTGRES_USER:-ownchatbot}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-ownchatbot_secure_password}
-    ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+    # Port is intentionally NOT exposed to the host. The app connects via the
+    # internal chatbot-network. To access Postgres from the host for debugging,
+    # uncomment the ports mapping below.
+    # ports:
+    #   - "${POSTGRES_PORT:-5432}:5432"
     networks:
       - chatbot-network
     volumes:

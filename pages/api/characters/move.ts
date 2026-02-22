@@ -1,22 +1,34 @@
-import { NextApiRequest, NextApiResponse } from 'next';
 import prisma from '../../../lib/prisma';
-import { requireAuth } from '../../../lib/apiAuth';
-import { badRequest, methodNotAllowed, notFound, serverError } from '../../../lib/apiErrors';
+import { notFound, serverError } from '../../../lib/apiErrors';
+import { schemas, validateBody } from '../../../lib/validate';
+import { withApiHandler } from '../../../lib/withApiHandler';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (!(await requireAuth(req, res))) return;
+export default withApiHandler({}, {
+  PUT: async (req, res) => {
+    // Batch mode: update multiple characters' group and sort order at once
+    if (req.body?.batch) {
+      const body = validateBody<{ batch: { id: number; groupId?: number | null; sortOrder?: number }[] }>(schemas.moveCharactersBatch, req, res);
+      if (!body) return;
 
-  if (req.method !== 'PUT') {
-    res.setHeader('Allow', ['PUT']);
-    return methodNotAllowed(res, req.method);
-  }
+      await prisma.$transaction(
+        body.batch.map((entry) =>
+          prisma.character.update({
+            where: { id: entry.id },
+            data: {
+              groupId: entry.groupId || null,
+              sortOrder: entry.sortOrder ?? 0
+            }
+          })
+        )
+      );
 
-  try {
-    const { characterId, groupId, newSortOrder } = req.body;
-
-    if (!characterId || typeof characterId !== 'number') {
-      return badRequest(res, 'Valid character ID is required', 'CHARACTER_ID_REQUIRED');
+      return res.status(200).json({ success: true, updated: body.batch.length });
     }
+
+    // Single character mode (legacy)
+    const body = validateBody<{ characterId: number; groupId?: number | null; newSortOrder?: number }>(schemas.moveCharacterSingle, req, res);
+    if (!body) return;
+    const { characterId, groupId, newSortOrder } = body;
 
     const character = await prisma.character.findUnique({ where: { id: characterId } });
 
@@ -32,7 +44,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     const updateData: any = { groupId: groupId || null };
-    if (newSortOrder !== undefined) updateData.sortOrder = newSortOrder;
+    if (newSortOrder !== undefined) {
+      updateData.sortOrder = newSortOrder;
+
+      // Bump sort orders of sibling characters at or after the insertion point
+      // to make room for the moved character
+      await prisma.character.updateMany({
+        where: {
+          id: { not: characterId },
+          groupId: groupId || null,
+          sortOrder: { gte: newSortOrder }
+        },
+        data: { sortOrder: { increment: 1 } }
+      });
+    }
 
     const updatedCharacter = await prisma.character.update({
       where: { id: characterId },
@@ -41,11 +66,5 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
 
     return res.status(200).json(updatedCharacter);
-  } catch (error: any) {
-    console.error('Error moving character:', error);
-    if (error.code === 'P2025') {
-      return notFound(res, 'Character not found', 'CHARACTER_NOT_FOUND');
-    }
-    return serverError(res, 'Failed to move character', 'CHARACTER_MOVE_FAILED');
-  }
-}
+  },
+});

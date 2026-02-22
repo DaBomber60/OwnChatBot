@@ -4,15 +4,7 @@
 // We derive an HMAC-SHA256 using the JWT secret and the string `import:${version}` and
 // base64url encode the full digest, truncating for brevity.
 
-function toB64Url(bytes: Uint8Array): string {
-  let str = '';
-  for (let i = 0; i < bytes.length; i++) str += String.fromCharCode(bytes[i]!);
-  const b64 = (typeof btoa !== 'undefined' ? btoa(str) : Buffer.from(bytes).toString('base64'))
-    .replace(/=/g, '')
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_');
-  return b64;
-}
+import { toBase64Url } from './base64url';
 
 export async function deriveImportToken(version: number, secret: string): Promise<string> {
   const dataStr = `import:${version}`;
@@ -28,7 +20,7 @@ export async function deriveImportToken(version: number, secret: string): Promis
         ['sign']
       );
       const sig = new Uint8Array(await crypto.subtle.sign('HMAC', key, enc.encode(dataStr)));
-      return toB64Url(sig).slice(0, 40); // truncate to 40 chars for usability
+      return toBase64Url(sig).slice(0, 40); // truncate to 40 chars for usability
     }
   } catch {
     // fallback below
@@ -37,7 +29,7 @@ export async function deriveImportToken(version: number, secret: string): Promis
   // Use dynamic import to avoid CommonJS require (ESLint compliant)
   const { createHmac } = await import('crypto');
   const h = createHmac('sha256', secret).update(dataStr).digest();
-  return toB64Url(h).slice(0, 40);
+  return toBase64Url(h).slice(0, 40);
 }
 
 // Convenience helper to memoize per process (light optimization for server endpoints)

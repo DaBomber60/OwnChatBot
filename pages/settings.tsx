@@ -1,27 +1,106 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useReducer } from 'react';
 import UserPromptsManager from '../components/UserPromptsManager';
 import { DEFAULT_USER_PROMPT_TITLE } from '../lib/defaultUserPrompt';
 import useSWR from 'swr';
 import { useRouter } from 'next/router';
 import { logout } from '../lib/auth';
 import Head from 'next/head';
+import type { AIProvider } from '../types/models';
+
+// --- Settings reducer (single state object replaces 24 individual useState calls) ---
+
+interface SettingsState {
+  // API / Provider
+  apiKey: string;
+  keysByProvider: Record<string, string>;
+  aiProvider: AIProvider;
+  apiBaseUrl: string;
+  modelName: string;
+  enableTemperatureOverride: boolean;
+  maxTokenFieldName: string;
+  stream: boolean;
+  originalApiKey: string;
+  // Prompt & model params
+  defaultPromptId: number | null;
+  temperature: number;
+  maxCharacters: number;
+  maxTokens: number;
+  devMode: boolean;
+  summaryPrompt: string;
+  // Limits
+  limitBio: number;
+  limitScenario: number;
+  limitPersonality: number;
+  limitFirstMessage: number;
+  limitExampleDialogue: number;
+  limitSummary: number;
+  limitNotes: number;
+  limitGenerateDescription: number;
+  limitMessageContent: number;
+}
+
+const initialSettingsState: SettingsState = {
+  apiKey: '',
+  keysByProvider: {},
+  aiProvider: 'deepseek',
+  apiBaseUrl: '',
+  modelName: '',
+  enableTemperatureOverride: true,
+  maxTokenFieldName: '',
+  stream: true,
+  originalApiKey: '',
+  defaultPromptId: null,
+  temperature: 0.7,
+  maxCharacters: 150000,
+  maxTokens: 4096,
+  devMode: false,
+  summaryPrompt: 'Create a brief, focused summary (~100 words) of the roleplay between {{char}} and {{user}}. Include:\\n\\n- Key events and decisions\\n- Important emotional moments\\n- Location/time changes\\n\\nRules: Only summarize provided transcript. No speculation. Single paragraph format.',
+  limitBio: 2500,
+  limitScenario: 25000,
+  limitPersonality: 25000,
+  limitFirstMessage: 25000,
+  limitExampleDialogue: 25000,
+  limitSummary: 20000,
+  limitNotes: 10000,
+  limitGenerateDescription: 3000,
+  limitMessageContent: 8000,
+};
+
+type SettingsAction =
+  | { type: 'SET_FIELD'; field: keyof SettingsState; value: any }
+  | { type: 'LOAD_ALL'; payload: Partial<SettingsState> }
+  | { type: 'UPDATE_API_KEY'; value: string; provider: string };
+
+function settingsReducer(state: SettingsState, action: SettingsAction): SettingsState {
+  switch (action.type) {
+    case 'SET_FIELD':
+      return { ...state, [action.field]: action.value };
+    case 'LOAD_ALL':
+      return { ...state, ...action.payload };
+    case 'UPDATE_API_KEY':
+      return {
+        ...state,
+        apiKey: action.value,
+        keysByProvider: { ...state.keysByProvider, [action.provider]: action.value },
+      };
+    default:
+      return state;
+  }
+}
 
 export default function SettingsPage() {
   const appVersion = (process.env.NEXT_PUBLIC_APP_VERSION || '0.0.0').replace(/^v/, '');
-  // Provider-specific API keys (stored independently)
-  const [apiKey, setApiKey] = useState(''); // Currently selected provider key (UI convenience)
-  const [keysByProvider, setKeysByProvider] = useState<Record<string, string>>({});
-  const [aiProvider, setAiProvider] = useState<'deepseek' | 'openai' | 'openrouter' | 'custom'>('deepseek');
-  const [apiBaseUrl, setApiBaseUrl] = useState(''); // only for custom
-  const [modelName, setModelName] = useState('');
+
+  // Settings state (single reducer replaces 24 individual useState calls)
+  const [state, dispatch] = useReducer(settingsReducer, initialSettingsState);
+
+  // UI toggles (not part of settings data loading)
   const [modelSettingsOpen, setModelSettingsOpen] = useState(false);
-  const [enableTemperatureOverride, setEnableTemperatureOverride] = useState(true);
-  const [maxTokenFieldName, setMaxTokenFieldName] = useState('');
-  const isFixedTemp = (prov: string, model: string) => prov === 'openai' && /^gpt-5/i.test(model || '');
-  const [stream, setStream] = useState(true);
-  // Added state for API key edit mode
+  const [limitsOpen, setLimitsOpen] = useState(false);
   const [apiKeyEditing, setApiKeyEditing] = useState(false);
-  const [originalApiKey, setOriginalApiKey] = useState('');
+
+  const isFixedTemp = (prov: string, model: string) => prov === 'openai' && /^gpt-5/i.test(model || '');
+
   const { data: userPrompts, error: userPromptsError, mutate: mutateUserPrompts } = useSWR<{id: number; title: string; body: string;} | { error?: string } | null>(
     '/api/user-prompts',
     (url: string) => fetch(url).then(async res => {
@@ -29,37 +108,26 @@ export default function SettingsPage() {
       return json;
     })
   );
-  const [defaultPromptId, setDefaultPromptId] = useState<number | null>(null);
-  const [temperature, setTemperature] = useState(0.7);
-  const [maxCharacters, setMaxCharacters] = useState(150000);
-  const [maxTokens, setMaxTokens] = useState(4096);
-  const [devMode, setDevMode] = useState(false);
-  const [summaryPrompt, setSummaryPrompt] = useState('Create a brief, focused summary (~100 words) of the roleplay between {{char}} and {{user}}. Include:\\n\\n- Key events and decisions\\n- Important emotional moments\\n- Location/time changes\\n\\nRules: Only summarize provided transcript. No speculation. Single paragraph format.');
-  // Limits (defaults align with validate.ts)
-  const [limitBio, setLimitBio] = useState(2500);
-  const [limitScenario, setLimitScenario] = useState(25000);
-  const [limitPersonality, setLimitPersonality] = useState(25000);
-  const [limitFirstMessage, setLimitFirstMessage] = useState(25000);
-  const [limitExampleDialogue, setLimitExampleDialogue] = useState(25000);
-  const [limitSummary, setLimitSummary] = useState(20000);
-  const [limitNotes, setLimitNotes] = useState(10000);
-  const [limitGenerateDescription, setLimitGenerateDescription] = useState(3000);
-  const [limitMessageContent, setLimitMessageContent] = useState(8000); // shared with variants
-  const [limitsOpen, setLimitsOpen] = useState(false);
+
+  // Password form state (standalone)
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showPasswordSection, setShowPasswordSection] = useState(false);
   const [passwordError, setPasswordError] = useState('');
+
+  // Import/Export state (standalone)
   const [importStatus, setImportStatus] = useState<'idle' | 'importing' | 'success' | 'error'>('idle');
   const [importMessage, setImportMessage] = useState('');
   const [exportLoading, setExportLoading] = useState(false);
   const [importProgress, setImportProgress] = useState<string>('');
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { data: dbSettings, mutate: mutateSettings } = useSWR<Record<string, string>>(
     '/api/settings',
     (url: string) => fetch(url).then(res => res.json())
   );
-  // Toast notification state
+
+  // Toast notification state (standalone)
   const [toast, setToast] = useState<null | { message: string; type?: 'success' | 'error' }>(null);
 
   const showToast = (message: string, type: 'success' | 'error' = 'success') => {
@@ -69,52 +137,58 @@ export default function SettingsPage() {
   const router = useRouter();
 
   useEffect(() => {
-    // Initialize all settings from database (avoid clobbering unsaved key edits)
+    // Initialize all settings from database via single batched dispatch
     if (dbSettings) {
+      const payload: Partial<SettingsState> = {};
+
       if (!apiKeyEditing) {
         // Load provider-specific keys (fallback to legacy apiKey)
-        const loaded: Record<string,string> = {
+        const loaded: Record<string, string> = {
           deepseek: dbSettings.apiKey_deepseek || '',
           openai: dbSettings.apiKey_openai || '',
           openrouter: dbSettings.apiKey_openrouter || '',
           anthropic: dbSettings.apiKey_anthropic || '',
-          custom: dbSettings.apiKey_custom || ''
+          custom: dbSettings.apiKey_custom || '',
         };
         // Migrate legacy apiKey into selected provider slot if empty
         if ((dbSettings.apiKey || '') && !loaded[(dbSettings.aiProvider as string) || 'deepseek']) {
           const legacyProviderKey = (dbSettings.aiProvider as string) || 'deepseek';
           loaded[legacyProviderKey] = dbSettings.apiKey as string;
         }
-        setKeysByProvider(loaded);
+        payload.keysByProvider = loaded;
         const currentKey = loaded[(dbSettings.aiProvider as any) || 'deepseek'] || '';
-        setOriginalApiKey(currentKey);
-        setApiKey(currentKey);
+        payload.originalApiKey = currentKey;
+        payload.apiKey = currentKey;
       }
-  const incomingProvider = (dbSettings.aiProvider as any) || 'deepseek';
-  // Temporarily hide anthropic; coerce to deepseek if encountered
-  setAiProvider(incomingProvider === 'anthropic' ? 'deepseek' : incomingProvider);
-      setApiBaseUrl(dbSettings.apiBaseUrl || '');
-      setModelName(dbSettings.modelName || '');
-  setEnableTemperatureOverride(dbSettings.modelEnableTemperature === undefined ? true : dbSettings.modelEnableTemperature === 'true');
-  setMaxTokenFieldName(dbSettings.maxTokenFieldName || '');
-  // Default streaming to true if the setting has never been saved (undefined)
-  setStream(dbSettings.stream === undefined ? true : dbSettings.stream === 'true');
-      setDefaultPromptId(dbSettings.defaultPromptId ? Number(dbSettings.defaultPromptId) : null);
-      setTemperature(dbSettings.temperature ? parseFloat(dbSettings.temperature) : 0.7);
-      setMaxCharacters(dbSettings.maxCharacters ? Math.max(30000, Math.min(320000, parseInt(dbSettings.maxCharacters))) : 150000);
-      setMaxTokens(dbSettings.maxTokens ? Math.max(256, Math.min(8192, parseInt(dbSettings.maxTokens))) : 4096);
-      setDevMode(dbSettings.devMode === 'true');
-      setSummaryPrompt(dbSettings.summaryPrompt || 'Create a brief, focused summary (~100 words) of the roleplay between {{char}} and {{user}}. Include:\\n\\n- Key events and decisions\\n- Important emotional moments\\n- Location/time changes\\n\\nRules: Only summarize provided transcript. No speculation. Single paragraph format.');
+
+      const incomingProvider = (dbSettings.aiProvider as any) || 'deepseek';
+      // Temporarily hide anthropic; coerce to deepseek if encountered
+      payload.aiProvider = incomingProvider === 'anthropic' ? 'deepseek' : incomingProvider;
+      payload.apiBaseUrl = dbSettings.apiBaseUrl || '';
+      payload.modelName = dbSettings.modelName || '';
+      payload.enableTemperatureOverride = dbSettings.modelEnableTemperature === undefined ? true : dbSettings.modelEnableTemperature === 'true';
+      payload.maxTokenFieldName = dbSettings.maxTokenFieldName || '';
+      // Default streaming to true if the setting has never been saved (undefined)
+      payload.stream = dbSettings.stream === undefined ? true : dbSettings.stream === 'true';
+      payload.defaultPromptId = dbSettings.defaultPromptId ? Number(dbSettings.defaultPromptId) : null;
+      payload.temperature = dbSettings.temperature ? parseFloat(dbSettings.temperature) : 0.7;
+      payload.maxCharacters = dbSettings.maxCharacters ? Math.max(30000, Math.min(320000, parseInt(dbSettings.maxCharacters))) : 150000;
+      payload.maxTokens = dbSettings.maxTokens ? Math.max(256, Math.min(8192, parseInt(dbSettings.maxTokens))) : 4096;
+      payload.devMode = dbSettings.devMode === 'true';
+      payload.summaryPrompt = dbSettings.summaryPrompt || 'Create a brief, focused summary (~100 words) of the roleplay between {{char}} and {{user}}. Include:\\n\\n- Key events and decisions\\n- Important emotional moments\\n- Location/time changes\\n\\nRules: Only summarize provided transcript. No speculation. Single paragraph format.';
       // Dynamic limits (fallback to defaults)
-      setLimitBio(dbSettings.limit_bio ? parseInt(dbSettings.limit_bio) : 2500);
-      setLimitScenario(dbSettings.limit_scenario ? parseInt(dbSettings.limit_scenario) : 25000);
-      setLimitPersonality(dbSettings.limit_personality ? parseInt(dbSettings.limit_personality) : 25000);
-      setLimitFirstMessage(dbSettings.limit_firstMessage ? parseInt(dbSettings.limit_firstMessage) : 25000);
-      setLimitExampleDialogue(dbSettings.limit_exampleDialogue ? parseInt(dbSettings.limit_exampleDialogue) : 25000);
-      setLimitSummary(dbSettings.limit_summary ? parseInt(dbSettings.limit_summary) : 20000);
-      setLimitNotes(dbSettings.limit_notes ? parseInt(dbSettings.limit_notes) : 10000);
-      setLimitGenerateDescription(dbSettings.limit_generateDescription ? parseInt(dbSettings.limit_generateDescription) : 3000);
-      setLimitMessageContent(dbSettings.limit_messageContent ? parseInt(dbSettings.limit_messageContent) : 8000);
+      payload.limitBio = dbSettings.limit_bio ? parseInt(dbSettings.limit_bio) : 2500;
+      payload.limitScenario = dbSettings.limit_scenario ? parseInt(dbSettings.limit_scenario) : 25000;
+      payload.limitPersonality = dbSettings.limit_personality ? parseInt(dbSettings.limit_personality) : 25000;
+      payload.limitFirstMessage = dbSettings.limit_firstMessage ? parseInt(dbSettings.limit_firstMessage) : 25000;
+      payload.limitExampleDialogue = dbSettings.limit_exampleDialogue ? parseInt(dbSettings.limit_exampleDialogue) : 25000;
+      payload.limitSummary = dbSettings.limit_summary ? parseInt(dbSettings.limit_summary) : 20000;
+      payload.limitNotes = dbSettings.limit_notes ? parseInt(dbSettings.limit_notes) : 10000;
+      payload.limitGenerateDescription = dbSettings.limit_generateDescription ? parseInt(dbSettings.limit_generateDescription) : 3000;
+      payload.limitMessageContent = dbSettings.limit_messageContent ? parseInt(dbSettings.limit_messageContent) : 8000;
+
+      // Single dispatch triggers exactly ONE re-render instead of 24+
+      dispatch({ type: 'LOAD_ALL', payload });
     }
   }, [dbSettings, apiKeyEditing]);
 
@@ -127,40 +201,39 @@ export default function SettingsPage() {
           // Persist only the selected provider key + keep others intact
           // We send all provider-specific keys so backend upserts them independently.
           apiKey: '', // keep legacy slot empty going forward
-          apiKey_deepseek: keysByProvider.deepseek || '',
-          apiKey_openai: keysByProvider.openai || '',
-          apiKey_openrouter: keysByProvider.openrouter || '',
-          apiKey_anthropic: keysByProvider.anthropic || '',
-          apiKey_custom: keysByProvider.custom || '',
-          aiProvider: aiProvider,
-          apiBaseUrl: aiProvider === 'custom' ? apiBaseUrl : '',
-          modelName: modelName,
-          modelEnableTemperature: String(enableTemperatureOverride),
-          maxTokenFieldName: maxTokenFieldName,
-          stream: String(stream),
-          defaultPromptId: defaultPromptId ?? '',
-          temperature: temperature.toString(),
-          maxCharacters: String(maxCharacters),
-          maxTokens: String(maxTokens),
-          devMode: String(devMode),
-          summaryPrompt: summaryPrompt
-          ,
+          apiKey_deepseek: state.keysByProvider.deepseek || '',
+          apiKey_openai: state.keysByProvider.openai || '',
+          apiKey_openrouter: state.keysByProvider.openrouter || '',
+          apiKey_anthropic: state.keysByProvider.anthropic || '',
+          apiKey_custom: state.keysByProvider.custom || '',
+          aiProvider: state.aiProvider,
+          apiBaseUrl: state.aiProvider === 'custom' ? state.apiBaseUrl : '',
+          modelName: state.modelName,
+          modelEnableTemperature: String(state.enableTemperatureOverride),
+          maxTokenFieldName: state.maxTokenFieldName,
+          stream: String(state.stream),
+          defaultPromptId: state.defaultPromptId ?? '',
+          temperature: state.temperature.toString(),
+          maxCharacters: String(state.maxCharacters),
+          maxTokens: String(state.maxTokens),
+          devMode: String(state.devMode),
+          summaryPrompt: state.summaryPrompt,
           // Limits persistence
-          limit_bio: String(limitBio),
-          limit_scenario: String(limitScenario),
-          limit_personality: String(limitPersonality),
-          limit_firstMessage: String(limitFirstMessage),
-          limit_exampleDialogue: String(limitExampleDialogue),
-          limit_summary: String(limitSummary),
-          limit_notes: String(limitNotes),
-          limit_generateDescription: String(limitGenerateDescription),
-          limit_messageContent: String(limitMessageContent)
+          limit_bio: String(state.limitBio),
+          limit_scenario: String(state.limitScenario),
+          limit_personality: String(state.limitPersonality),
+          limit_firstMessage: String(state.limitFirstMessage),
+          limit_exampleDialogue: String(state.limitExampleDialogue),
+          limit_summary: String(state.limitSummary),
+          limit_notes: String(state.limitNotes),
+          limit_generateDescription: String(state.limitGenerateDescription),
+          limit_messageContent: String(state.limitMessageContent),
         })
       });
       if (res.ok) {
         mutateSettings();
         if (apiKeyEditing) {
-          setOriginalApiKey(apiKey);
+          dispatch({ type: 'SET_FIELD', field: 'originalApiKey', value: state.apiKey });
           setApiKeyEditing(false);
         }
         showToast('Settings saved');
@@ -485,7 +558,7 @@ export default function SettingsPage() {
   };
 
   return (
-    <div className="container">
+    <>
       {toast && (
         <div className="toast-container">
           <div className={`toast ${toast.type === 'error' ? 'toast-error' : 'toast-success'}`}>
@@ -518,14 +591,11 @@ export default function SettingsPage() {
             <label className="form-label">AI Provider</label>
             <select
               className="form-select"
-              value={aiProvider}
+              value={state.aiProvider}
               onChange={e => {
                 const next = e.target.value as any;
-                setAiProvider(next);
-                // Swap displayed key based on selection
-                const newKey = keysByProvider[next] || '';
-                setOriginalApiKey(newKey);
-                setApiKey(newKey);
+                const newKey = state.keysByProvider[next] || '';
+                dispatch({ type: 'LOAD_ALL', payload: { aiProvider: next, originalApiKey: newKey, apiKey: newKey } });
                 setApiKeyEditing(false);
               }}
             >
@@ -540,13 +610,13 @@ export default function SettingsPage() {
           <div className="form-group">
             <label className="form-label flex items-center justify-between">
               <span>API Key</span>
-              {originalApiKey && !apiKeyEditing && (
+              {state.originalApiKey && !apiKeyEditing && (
                 <button
                   type="button"
                   className="btn btn-secondary btn-small"
                   onClick={() => {
                     setApiKeyEditing(true);
-                    setApiKey(originalApiKey);
+                    dispatch({ type: 'SET_FIELD', field: 'apiKey', value: state.originalApiKey });
                   }}
                 >
                   Edit
@@ -558,7 +628,7 @@ export default function SettingsPage() {
                   className="btn btn-secondary btn-small"
                   onClick={() => {
                     setApiKeyEditing(false);
-                    setApiKey(originalApiKey); // revert
+                    dispatch({ type: 'SET_FIELD', field: 'apiKey', value: state.originalApiKey });
                   }}
                   title="Cancel editing and revert"
                 >
@@ -566,19 +636,17 @@ export default function SettingsPage() {
                 </button>
               )}
             </label>
-            {(!originalApiKey || apiKeyEditing) ? (
+            {(!state.originalApiKey || apiKeyEditing) ? (
               <input
                 type="password"
                 className="form-input"
-                value={apiKey}
+                value={state.apiKey}
                 onChange={e => {
-                  const val = e.target.value;
-                  setApiKey(val);
-                  setKeysByProvider(prev => ({ ...prev, [aiProvider]: val }));
+                  dispatch({ type: 'UPDATE_API_KEY', value: e.target.value, provider: state.aiProvider });
                 }}
                 placeholder="sk-..."
                 style={{ fontFamily: 'monospace' }}
-                disabled={!apiKeyEditing && !!originalApiKey}
+                disabled={!apiKeyEditing && !!state.originalApiKey}
               />
             ) : (
               <div className="flex items-center gap-2">
@@ -591,7 +659,7 @@ export default function SettingsPage() {
                 />
               </div>
             )}
-            {originalApiKey && !apiKeyEditing && (
+            {state.originalApiKey && !apiKeyEditing && (
               <p className="text-xs text-secondary mt-1">Click Edit to modify stored key.</p>
             )}
             {apiKeyEditing && (
@@ -599,15 +667,15 @@ export default function SettingsPage() {
             )}
           </div>
 
-          {aiProvider === 'custom' && (
+          {state.aiProvider === 'custom' && (
             <>
               <div className="form-group">
                 <label className="form-label">Custom API Base URL</label>
                 <input
                   type="text"
                   className="form-input"
-                  value={apiBaseUrl}
-                  onChange={e => setApiBaseUrl(e.target.value)}
+                  value={state.apiBaseUrl}
+                  onChange={e => dispatch({ type: 'SET_FIELD', field: 'apiBaseUrl', value: e.target.value })}
                   placeholder="https://your-endpoint.example.com/v1/chat/completions"
                   style={{ fontFamily: 'monospace' }}
                 />
@@ -621,11 +689,11 @@ export default function SettingsPage() {
             <input
               type="text"
               className="form-input"
-              value={modelName}
-              onChange={e => setModelName(e.target.value)}
-              placeholder={aiProvider === 'deepseek' ? 'deepseek-chat' 
-                : aiProvider === 'openai' ? 'gpt-5-mini' 
-                : aiProvider === 'openrouter' ? 'openrouter/auto' 
+              value={state.modelName}
+              onChange={e => dispatch({ type: 'SET_FIELD', field: 'modelName', value: e.target.value })}
+              placeholder={state.aiProvider === 'deepseek' ? 'deepseek-chat' 
+                : state.aiProvider === 'openai' ? 'gpt-5-mini' 
+                : state.aiProvider === 'openrouter' ? 'openrouter/auto' 
                 : 'your-model-name'}
               style={{ fontFamily: 'monospace' }}
             />
@@ -648,8 +716,8 @@ export default function SettingsPage() {
                     <input
                       type="checkbox"
                       className="form-checkbox"
-                      checked={enableTemperatureOverride}
-                      onChange={e => setEnableTemperatureOverride(e.target.checked)}
+                      checked={state.enableTemperatureOverride}
+                      onChange={e => dispatch({ type: 'SET_FIELD', field: 'enableTemperatureOverride', value: e.target.checked })}
                     />
                     Enable Temperature Parameter
                   </label>
@@ -660,12 +728,12 @@ export default function SettingsPage() {
                   <input
                     type="text"
                     className="form-input"
-                    value={maxTokenFieldName}
-                    onChange={e => setMaxTokenFieldName(e.target.value)}
-                    placeholder={aiProvider === 'openai' ? 'max_completion_tokens' : 'max_tokens'}
+                    value={state.maxTokenFieldName}
+                    onChange={e => dispatch({ type: 'SET_FIELD', field: 'maxTokenFieldName', value: e.target.value })}
+                    placeholder={state.aiProvider === 'openai' ? 'max_completion_tokens' : 'max_tokens'}
                     style={{ fontFamily: 'monospace' }}
                   />
-                  <p className="text-xs text-secondary mt-1">Override the upstream JSON field name for token limit. Leave blank for auto-detect ({aiProvider === 'openai' ? 'max_completion_tokens' : 'max_tokens'}).</p>
+                  <p className="text-xs text-secondary mt-1">Override the upstream JSON field name for token limit. Leave blank for auto-detect ({state.aiProvider === 'openai' ? 'max_completion_tokens' : 'max_tokens'}).</p>
                 </div>
               </div>
             )}
@@ -687,39 +755,39 @@ export default function SettingsPage() {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
                     <label className="form-label">Bio</label>
-                    <input type="number" className="form-input" value={limitBio} onChange={e=>setLimitBio(parseInt(e.target.value)||0)} min={500} max={200000} />
+                    <input type="number" className="form-input" value={state.limitBio} onChange={e=>dispatch({ type: 'SET_FIELD', field: 'limitBio', value: parseInt(e.target.value)||0 })} min={500} max={200000} />
                   </div>
                   <div>
                     <label className="form-label">Scenario</label>
-                    <input type="number" className="form-input" value={limitScenario} onChange={e=>setLimitScenario(parseInt(e.target.value)||0)} min={1000} max={300000} />
+                    <input type="number" className="form-input" value={state.limitScenario} onChange={e=>dispatch({ type: 'SET_FIELD', field: 'limitScenario', value: parseInt(e.target.value)||0 })} min={1000} max={300000} />
                   </div>
                   <div>
                     <label className="form-label">Personality</label>
-                    <input type="number" className="form-input" value={limitPersonality} onChange={e=>setLimitPersonality(parseInt(e.target.value)||0)} min={1000} max={300000} />
+                    <input type="number" className="form-input" value={state.limitPersonality} onChange={e=>dispatch({ type: 'SET_FIELD', field: 'limitPersonality', value: parseInt(e.target.value)||0 })} min={1000} max={300000} />
                   </div>
                   <div>
                     <label className="form-label">First Message</label>
-                    <input type="number" className="form-input" value={limitFirstMessage} onChange={e=>setLimitFirstMessage(parseInt(e.target.value)||0)} min={500} max={300000} />
+                    <input type="number" className="form-input" value={state.limitFirstMessage} onChange={e=>dispatch({ type: 'SET_FIELD', field: 'limitFirstMessage', value: parseInt(e.target.value)||0 })} min={500} max={300000} />
                   </div>
                   <div>
                     <label className="form-label">Example Dialogue</label>
-                    <input type="number" className="form-input" value={limitExampleDialogue} onChange={e=>setLimitExampleDialogue(parseInt(e.target.value)||0)} min={500} max={300000} />
+                    <input type="number" className="form-input" value={state.limitExampleDialogue} onChange={e=>dispatch({ type: 'SET_FIELD', field: 'limitExampleDialogue', value: parseInt(e.target.value)||0 })} min={500} max={300000} />
                   </div>
                   <div>
                     <label className="form-label">Summary</label>
-                    <input type="number" className="form-input" value={limitSummary} onChange={e=>setLimitSummary(parseInt(e.target.value)||0)} min={1000} max={50000} />
+                    <input type="number" className="form-input" value={state.limitSummary} onChange={e=>dispatch({ type: 'SET_FIELD', field: 'limitSummary', value: parseInt(e.target.value)||0 })} min={1000} max={50000} />
                   </div>
                   <div>
                     <label className="form-label">Notes</label>
-                    <input type="number" className="form-input" value={limitNotes} onChange={e=>setLimitNotes(parseInt(e.target.value)||0)} min={1000} max={100000} />
+                    <input type="number" className="form-input" value={state.limitNotes} onChange={e=>dispatch({ type: 'SET_FIELD', field: 'limitNotes', value: parseInt(e.target.value)||0 })} min={1000} max={100000} />
                   </div>
                   <div>
                     <label className="form-label">Generate Description</label>
-                    <input type="number" className="form-input" value={limitGenerateDescription} onChange={e=>setLimitGenerateDescription(parseInt(e.target.value)||0)} min={200} max={6000} />
+                    <input type="number" className="form-input" value={state.limitGenerateDescription} onChange={e=>dispatch({ type: 'SET_FIELD', field: 'limitGenerateDescription', value: parseInt(e.target.value)||0 })} min={200} max={6000} />
                   </div>
                   <div>
                     <label className="form-label">Message & Variant Content</label>
-                    <input type="number" className="form-input" value={limitMessageContent} onChange={e=>setLimitMessageContent(parseInt(e.target.value)||0)} min={1000} max={20000} />
+                    <input type="number" className="form-input" value={state.limitMessageContent} onChange={e=>dispatch({ type: 'SET_FIELD', field: 'limitMessageContent', value: parseInt(e.target.value)||0 })} min={1000} max={20000} />
                   </div>
                 </div>
                 <p className="text-xs text-secondary">Keep limits reasonable to avoid extremely large payloads. Some hard upper bounds may still apply upstream via token limits.</p>
@@ -731,8 +799,8 @@ export default function SettingsPage() {
             <label className="form-label flex items-center gap-3">
               <input
                 type="checkbox"
-                checked={stream}
-                onChange={e => setStream(e.target.checked)}
+                checked={state.stream}
+                onChange={e => dispatch({ type: 'SET_FIELD', field: 'stream', value: e.target.checked })}
                 className="form-checkbox"
               />
               Enable Streamed Chat
@@ -749,42 +817,42 @@ export default function SettingsPage() {
           
           <div className="form-group">
             <label className="form-label">
-              Temperature: {isFixedTemp(aiProvider, modelName || '') ? '1 (fixed)' : temperature.toFixed(1)}
+              Temperature: {isFixedTemp(state.aiProvider, state.modelName || '') ? '1 (fixed)' : state.temperature.toFixed(1)}
             </label>
             <input
               type="range"
               min="0"
               max="2"
               step="0.1"
-              value={isFixedTemp(aiProvider, modelName || '') ? 1 : temperature}
-              onChange={e => setTemperature(parseFloat(e.target.value))}
+              value={isFixedTemp(state.aiProvider, state.modelName || '') ? 1 : state.temperature}
+              onChange={e => dispatch({ type: 'SET_FIELD', field: 'temperature', value: parseFloat(e.target.value) })}
               className="form-range w-full"
-              disabled={isFixedTemp(aiProvider, modelName || '') || !enableTemperatureOverride}
+              disabled={isFixedTemp(state.aiProvider, state.modelName || '') || !state.enableTemperatureOverride}
             />
             <div className="flex justify-between text-xs text-muted mt-1">
               <span>Focused</span>
               <span>Balanced</span>
               <span>Creative</span>
             </div>
-            {isFixedTemp(aiProvider, modelName || '') && (
+            {isFixedTemp(state.aiProvider, state.modelName || '') && (
               <p className="text-xs text-secondary mt-1">Selected model enforces a fixed temperature of 1.</p>
             )}
-            {!enableTemperatureOverride && !isFixedTemp(aiProvider, modelName || '') && (
+            {!state.enableTemperatureOverride && !isFixedTemp(state.aiProvider, state.modelName || '') && (
               <p className="text-xs text-secondary mt-1">Temperature disabled in Model Settings.</p>
             )}
           </div>
 
           <div className="form-group">
             <label className="form-label">
-              Max characters in context: {maxCharacters.toLocaleString()}
+              Max characters in context: {state.maxCharacters.toLocaleString()}
             </label>
             <input
               type="range"
               min="30000"
               max="320000"
               step="1000"
-              value={maxCharacters}
-              onChange={e => setMaxCharacters(parseInt(e.target.value))}
+              value={state.maxCharacters}
+              onChange={e => dispatch({ type: 'SET_FIELD', field: 'maxCharacters', value: parseInt(e.target.value) })}
               className="form-range w-full"
             />
             <div className="flex justify-between text-xs text-muted mt-1">
@@ -796,15 +864,15 @@ export default function SettingsPage() {
 
           <div className="form-group">
             <label className="form-label">
-              Max tokens per response: {maxTokens}
+              Max tokens per response: {state.maxTokens}
             </label>
             <input
               type="range"
               min="256"
               max="8192"
               step="128"
-              value={maxTokens}
-              onChange={e => setMaxTokens(parseInt(e.target.value))}
+              value={state.maxTokens}
+              onChange={e => dispatch({ type: 'SET_FIELD', field: 'maxTokens', value: parseInt(e.target.value) })}
               className="form-range w-full"
             />
             <div className="flex justify-between text-xs text-muted mt-1">
@@ -819,8 +887,8 @@ export default function SettingsPage() {
             {Array.isArray(userPrompts) ? (
               <select 
                 className="form-select"
-                value={defaultPromptId || ''} 
-                onChange={e => setDefaultPromptId(e.target.value ? Number(e.target.value) : null)}
+                value={state.defaultPromptId || ''} 
+                onChange={e => dispatch({ type: 'SET_FIELD', field: 'defaultPromptId', value: e.target.value ? Number(e.target.value) : null })}
               >
                 <option value="">None</option>
                 {userPrompts.map(p => (
@@ -841,8 +909,8 @@ export default function SettingsPage() {
             <label className="form-label">Summary Generation Prompt</label>
             <textarea
               className="form-textarea"
-              value={summaryPrompt}
-              onChange={e => setSummaryPrompt(e.target.value)}
+              value={state.summaryPrompt}
+              onChange={e => dispatch({ type: 'SET_FIELD', field: 'summaryPrompt', value: e.target.value })}
               placeholder="Prompt template for AI summary generation..."
               rows={3}
             />
@@ -855,8 +923,8 @@ export default function SettingsPage() {
             <label className="form-label flex items-center gap-3">
               <input
                 type="checkbox"
-                checked={devMode}
-                onChange={e => setDevMode(e.target.checked)}
+                checked={state.devMode}
+                onChange={e => dispatch({ type: 'SET_FIELD', field: 'devMode', value: e.target.checked })}
                 className="form-checkbox"
               />
               Developer Mode
@@ -982,7 +1050,7 @@ export default function SettingsPage() {
                     'Export Database'
                   )}
                 </button>
-                {devMode && (
+                {state.devMode && (
                   <button
                     className={`btn btn-secondary w-full text-sm ${exportLoading ? 'opacity-50' : ''}`}
                     onClick={handleExportLegacyJson}
@@ -1098,7 +1166,7 @@ export default function SettingsPage() {
               <h2 className="card-title">Global User Prompts</h2>
               <p className="card-description">Manage system-wide prompt templates</p>
             </div>
-            {devMode && Array.isArray(userPrompts) && !userPrompts.some(p => p.title === DEFAULT_USER_PROMPT_TITLE) && (
+            {state.devMode && Array.isArray(userPrompts) && !userPrompts.some(p => p.title === DEFAULT_USER_PROMPT_TITLE) && (
               <button
                 className="btn btn-secondary btn-small"
                 onClick={async () => {
@@ -1119,6 +1187,6 @@ export default function SettingsPage() {
           <UserPromptsManager />
         </div>
       </div>
-    </div>
+    </>
   );
 }

@@ -1,6 +1,5 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import useSWR from 'swr';
-import { useRouter } from 'next/router';
 import Head from 'next/head';
 import {
   DndContext,
@@ -23,38 +22,12 @@ import {
   useSortable,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-
-const fetcher = (url: string) => fetch(url).then(res => res.json());
-
-type Character = {
-  id: number;
-  name: string;
-  profileName?: string;
-  bio?: string;
-  scenario: string;
-  personality: string;
-  firstMessage: string;
-  exampleDialogue: string;
-  groupId?: number | null;
-  sortOrder?: number;
-  group?: CharacterGroup | null;
-};
-
-type CharacterGroup = {
-  id: number;
-  name: string;
-  color: string;
-  isCollapsed: boolean;
-  sortOrder: number;
-  characters: Character[];
-};
-
-// Utility to render multiline text with paragraphs
-function renderMultiline(text: string) {
-  return text.split(/\r?\n/).map((line, idx) => (
-    <p key={idx} style={{ margin: '0.05rem 0' }}>{line}</p>
-  ));
-}
+import { fetcher } from '../../lib/fetcher';
+import type { Character, CharacterGroup } from '../../types/models';
+import { renderMultiline } from '../../components/RenderMultiline';
+import { useClickOutside } from '../../hooks/useClickOutside';
+import { PageHeader } from '../../components/PageHeader';
+import { DropdownMenu, DropdownMenuItem, DropdownMenuDivider, ConfirmDeleteItem } from '../../components/DropdownMenu';
 
 // Utility to get preview text for character cards
 function getCharacterPreview(character: Character): { text: string; label: string } | null {
@@ -233,164 +206,44 @@ function SortableCharacterCard({
           </div>
         </div>
         <div className="flex gap-4" onClick={(e) => e.stopPropagation()}>
-          <div 
-            className="menu-container relative"
-            style={{
-              height: openMenuId === character.id ? '2rem' : 'auto',
-              minHeight: openMenuId === character.id ? '2rem' : 'auto',
-              zIndex: openMenuId === character.id ? 999999 : 'auto'
-            }}
+          <DropdownMenu
+            entityId={character.id}
+            isOpen={openMenuId === character.id}
+            onToggle={() => toggleMenu(character.id)}
+            onClose={closeMenu}
           >
-            {openMenuId !== character.id && (
-              <button
-                className="btn btn-secondary btn-small"
-                onClick={() => toggleMenu(character.id)}
-                title="More actions"
-              >
-                ⋯
-              </button>
-            )}
-            
-            {openMenuId === character.id && (
-              <div 
-                className="absolute right-0 min-w-48 overflow-hidden"
-                style={{
-                  top: openMenuId === character.id ? '0' : 'calc(100% + 4px)',
-                  backgroundColor: 'var(--bg-secondary)',
-                  border: '1px solid var(--border-primary)',
-                  borderRadius: 'var(--radius-lg)',
-                  boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.3), 0 10px 10px -5px rgba(0, 0, 0, 0.2)',
-                  zIndex: 999999
-                }}
-              >
-                <div>
-                  <button
-                    className="w-full text-left text-sm transition-colors duration-150 flex items-center gap-3 font-medium"
-                    style={{
-                      color: 'var(--text-primary)',
-                      backgroundColor: 'transparent',
-                      border: 'none',
-                      padding: '12px 20px'
-                    }}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.backgroundColor = 'var(--bg-hover)';
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.backgroundColor = 'transparent';
-                    }}
-                    onClick={() => {
-                      setEditingId(character.id);
-                      setEditName(character.name);
-                      setEditProfileName(character.profileName || '');
-                      setEditBio(character.bio || '');
-                      setEditScenario(character.scenario);
-                      setEditPersonality(character.personality);
-                      setEditFirstMessage(character.firstMessage);
-                      setEditExampleDialogue(character.exampleDialogue);
-                      closeMenu();
-                    }}
-                  >
-                    <span className="text-base">✏️</span>
-                    <span className="font-medium">Edit Character</span>
-                  </button>
-                  
-                  <button
-                    className="w-full text-left text-sm transition-colors duration-150 flex items-center gap-3"
-                    style={{
-                      color: 'var(--text-primary)',
-                      backgroundColor: 'transparent',
-                      border: 'none',
-                      padding: '12px 20px'
-                    }}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.backgroundColor = 'var(--bg-hover)';
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.backgroundColor = 'transparent';
-                    }}
-                    onClick={() => onClone(character)}
-                  >
-                    <span className="text-base">📋</span>
-                    <span className="font-medium">Clone Character</span>
-                  </button>
-                  
-                  <div style={{ 
-                    height: '1px', 
-                    backgroundColor: 'var(--border-secondary)', 
-                    margin: '8px 20px' 
-                  }}></div>
-                  
-                  {confirmDeleteId === character.id ? (
-                    <>
-                      <button
-                        className="w-full text-left text-sm transition-colors duration-150 flex items-center gap-3 font-medium"
-                        style={{
-                          color: 'var(--error)',
-                          backgroundColor: 'transparent',
-                          border: 'none',
-                          padding: '12px 20px'
-                        }}
-                        onMouseEnter={(e) => {
-                          e.currentTarget.style.backgroundColor = 'rgba(239, 68, 68, 0.1)';
-                        }}
-                        onMouseLeave={(e) => {
-                          e.currentTarget.style.backgroundColor = 'transparent';
-                        }}
-                        onClick={() => onDelete(character.id)}
-                      >
-                        <span className="text-base">✓</span>
-                        <span>Confirm Delete</span>
-                      </button>
-                      <button
-                        className="w-full text-left text-sm transition-colors duration-150 flex items-center gap-3"
-                        style={{
-                          color: 'var(--text-primary)',
-                          backgroundColor: 'transparent',
-                          border: 'none',
-                          padding: '12px 20px'
-                        }}
-                        onMouseEnter={(e) => {
-                          e.currentTarget.style.backgroundColor = 'var(--bg-hover)';
-                        }}
-                        onMouseLeave={(e) => {
-                          e.currentTarget.style.backgroundColor = 'transparent';
-                        }}
-                        onClick={() => {
-                          setConfirmDeleteId(null);
-                          closeMenu();
-                        }}
-                      >
-                        <span className="text-base">✕</span>
-                        <span className="font-medium">Cancel</span>
-                      </button>
-                    </>
-                  ) : (
-                    <button
-                      className="w-full text-left text-sm transition-colors duration-150 flex items-center gap-3 font-medium"
-                      style={{
-                        color: 'var(--error)',
-                        backgroundColor: 'transparent',
-                        border: 'none',
-                        padding: '12px 20px'
-                      }}
-                      onMouseEnter={(e) => {
-                        e.currentTarget.style.backgroundColor = 'rgba(239, 68, 68, 0.1)';
-                      }}
-                      onMouseLeave={(e) => {
-                        e.currentTarget.style.backgroundColor = 'transparent';
-                      }}
-                      onClick={() => {
-                        setConfirmDeleteId(character.id);
-                      }}
-                    >
-                      <span className="text-base">🗑️</span>
-                      <span>Delete Character</span>
-                    </button>
-                  )}
-                </div>
-              </div>
-            )}
-          </div>
+            <DropdownMenuItem
+              icon="✏️"
+              label="Edit Character"
+              onClick={() => {
+                setEditingId(character.id);
+                setEditName(character.name);
+                setEditProfileName(character.profileName || '');
+                setEditBio(character.bio || '');
+                setEditScenario(character.scenario || '');
+                setEditPersonality(character.personality || '');
+                setEditFirstMessage(character.firstMessage || '');
+                setEditExampleDialogue(character.exampleDialogue || '');
+                closeMenu();
+              }}
+            />
+            <DropdownMenuItem
+              icon="📋"
+              label="Clone Character"
+              onClick={() => onClone(character)}
+            />
+            <DropdownMenuDivider />
+            <ConfirmDeleteItem
+              label="Delete Character"
+              isConfirming={confirmDeleteId === character.id}
+              onRequestDelete={() => setConfirmDeleteId(character.id)}
+              onConfirm={() => onDelete(character.id)}
+              onCancel={() => {
+                setConfirmDeleteId(null);
+                closeMenu();
+              }}
+            />
+          </DropdownMenu>
         </div>
       </div>
       
@@ -502,28 +355,28 @@ function SortableCharacterCard({
               <div className="character-section" style={{ marginBottom: '0' }}>
                 <h4 className="character-section-title" style={{ marginBottom: '0.125rem' }}>Scenario</h4>
                 <div className="character-section-content">
-                  {renderMultiline(character.scenario)}
+                  {renderMultiline(character.scenario || '')}
                 </div>
               </div>
               
               <div className="character-section" style={{ marginBottom: '0' }}>
                 <h4 className="character-section-title" style={{ marginBottom: '0.125rem' }}>Personality</h4>
                 <div className="character-section-content">
-                  {renderMultiline(character.personality)}
+                  {renderMultiline(character.personality || '')}
                 </div>
               </div>
               
               <div className="character-section" style={{ marginBottom: '0' }}>
                 <h4 className="character-section-title" style={{ marginBottom: '0.125rem' }}>First Message</h4>
                 <div className="character-section-content">
-                  {renderMultiline(character.firstMessage)}
+                  {renderMultiline(character.firstMessage || '')}
                 </div>
               </div>
               
               <div className="character-section" style={{ marginBottom: '0' }}>
                 <h4 className="character-section-title" style={{ marginBottom: '0.125rem' }}>Example Dialogue</h4>
                 <div className="character-section-content">
-                  {renderMultiline(character.exampleDialogue)}
+                  {renderMultiline(character.exampleDialogue || '')}
                 </div>
               </div>
             </div>
@@ -568,7 +421,6 @@ function DroppableArea({
 }
 
 export default function CharactersPage() {
-  const router = useRouter();
   const { data: chars, error, mutate } = useSWR<Character[]>('/api/characters', fetcher);
   const { data: groups, error: groupsError, mutate: mutateGroups } = useSWR<CharacterGroup[]>('/api/character-groups', fetcher);
   
@@ -810,34 +662,7 @@ export default function CharactersPage() {
     })
   );
   
-  // Cleanup effect for component unmount and route changes
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && openMenuId) {
-        setOpenMenuId(null);
-      }
-    };
-
-    const handleClickOutside = (event: MouseEvent) => {
-      if (openMenuId) {
-        const target = event.target as HTMLElement;
-        if (!target.closest('.menu-container')) {
-          setOpenMenuId(null);
-        }
-      }
-    };
-
-    if (openMenuId) {
-      document.addEventListener('keydown', handleKeyDown);
-      document.addEventListener('click', handleClickOutside);
-    }
-
-    // Cleanup on unmount
-    return () => {
-      document.removeEventListener('keydown', handleKeyDown);
-      document.removeEventListener('click', handleClickOutside);
-    };
-  }, [openMenuId]);
+  useClickOutside(openMenuId !== null, () => setOpenMenuId(null));
 
   const toggleMenu = (characterId: number) => {
     setOpenMenuId(openMenuId === characterId ? null : characterId);
@@ -852,10 +677,10 @@ export default function CharactersPage() {
     setName(character.name);
     setProfileName(character.profileName ? `${character.profileName} - [Clone]` : `${character.name} - [Clone]`);
     setBio(character.bio || '');
-    setScenario(character.scenario);
-    setPersonality(character.personality);
-    setFirstMessage(character.firstMessage);
-    setExampleDialogue(character.exampleDialogue);
+    setScenario(character.scenario || '');
+    setPersonality(character.personality || '');
+    setFirstMessage(character.firstMessage || '');
+    setExampleDialogue(character.exampleDialogue || '');
     
     // Open the create form and close the menu
     setIsAdding(true);
@@ -1100,14 +925,14 @@ export default function CharactersPage() {
   };
 
   // Handle loading state
-  if (!chars || !groups) return <div className="container text-center">Loading...</div>;
+  if (!chars || !groups) return <div className="text-center">Loading...</div>;
 
   // Validate data shapes (in case API returned an error object due to auth)
   const charsIsArray = Array.isArray(chars);
   const groupsIsArray = Array.isArray(groups);
   if (!charsIsArray || !groupsIsArray || error || groupsError) {
     return (
-      <div className="container text-center text-error">
+      <div className="text-center text-error">
         <p>Failed to load characters or groups.</p>
         {!charsIsArray && <p>Characters response was not a list (maybe not authenticated).</p>}
         {!groupsIsArray && <p>Groups response was not a list (maybe not authenticated).</p>}
@@ -1117,18 +942,13 @@ export default function CharactersPage() {
   }
 
   return (
-    <div className="container">
+    <>
       <Head>
         <title>Characters - AI Character Builder</title>
         <meta name="description" content="Create and manage AI characters with detailed personalities, scenarios, and backstories for immersive conversations." />
       </Head>
 
-      <div className="flex items-center justify-between mb-6">
-        <h1 className="text-3xl font-semibold mb-0">Characters</h1>
-        <button className="btn btn-secondary" onClick={() => router.push('/')}>
-          🏠 Home
-        </button>
-      </div>
+      <PageHeader title="Characters" />
 
       <div className="card mb-6">
         <div className="card-header">
@@ -1585,143 +1405,35 @@ export default function CharactersPage() {
                       </button>
                     </div>
                   ) : (
-                    <div 
-                      className="menu-container relative"
-                      style={{
-                        height: openMenuId === `group-${group.id}` ? '2rem' : 'auto',
-                        minHeight: openMenuId === `group-${group.id}` ? '2rem' : 'auto',
-                        zIndex: openMenuId === `group-${group.id}` ? 999999 : 'auto'
-                      }}
-                      onClick={(e) => e.stopPropagation()}
+                    <DropdownMenu
+                      entityId={`group-${group.id}`}
+                      isOpen={openMenuId === `group-${group.id}`}
+                      onToggle={() => setOpenMenuId(`group-${group.id}`)}
+                      onClose={() => setOpenMenuId(null)}
+                      stopPropagation
                     >
-                      {openMenuId !== `group-${group.id}` && (
-                        <button
-                          className="btn btn-secondary btn-small"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setOpenMenuId(`group-${group.id}`);
-                          }}
-                          title="More actions"
-                        >
-                          ⋯
-                        </button>
-                      )}
-                      
-                      {openMenuId === `group-${group.id}` && (
-                        <div 
-                          className="absolute right-0 min-w-48 overflow-hidden"
-                          style={{
-                            top: openMenuId === `group-${group.id}` ? '0' : 'calc(100% + 4px)',
-                            backgroundColor: 'var(--bg-secondary)',
-                            border: '1px solid var(--border-primary)',
-                            borderRadius: 'var(--radius-lg)',
-                            boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.3), 0 10px 10px -5px rgba(0, 0, 0, 0.2)',
-                            zIndex: 999999
-                          }}
-                        >
-                          <div>
-                            <button
-                              className="w-full text-left text-sm transition-colors duration-150 flex items-center gap-3"
-                              style={{
-                                color: 'var(--text-primary)',
-                                backgroundColor: 'transparent',
-                                border: 'none',
-                                padding: '12px 20px'
-                              }}
-                              onMouseEnter={(e) => {
-                                e.currentTarget.style.backgroundColor = 'var(--bg-hover)';
-                              }}
-                              onMouseLeave={(e) => {
-                                e.currentTarget.style.backgroundColor = 'transparent';
-                              }}
-                              onClick={() => {
-                                setEditingGroupId(group.id);
-                                setEditGroupName(group.name);
-                                setEditGroupColor(group.color);
-                                setOpenMenuId(null);
-                              }}
-                            >
-                              <span className="text-base">✏️</span>
-                              <span className="font-medium">Edit Group</span>
-                            </button>
-                            
-                            <div style={{ 
-                              height: '1px', 
-                              backgroundColor: 'var(--border-secondary)', 
-                              margin: '8px 20px' 
-                            }}></div>
-                            
-                            {confirmDeleteGroupId === group.id ? (
-                              <>
-                                <button
-                                  className="w-full text-left text-sm transition-colors duration-150 flex items-center gap-3 font-medium"
-                                  style={{
-                                    color: 'var(--error)',
-                                    backgroundColor: 'transparent',
-                                    border: 'none',
-                                    padding: '12px 20px'
-                                  }}
-                                  onMouseEnter={(e) => {
-                                    e.currentTarget.style.backgroundColor = 'rgba(239, 68, 68, 0.1)';
-                                  }}
-                                  onMouseLeave={(e) => {
-                                    e.currentTarget.style.backgroundColor = 'transparent';
-                                  }}
-                                  onClick={() => deleteGroup(group.id)}
-                                >
-                                  <span className="text-base">✓</span>
-                                  <span>Confirm Delete</span>
-                                </button>
-                                <button
-                                  className="w-full text-left text-sm transition-colors duration-150 flex items-center gap-3"
-                                  style={{
-                                    color: 'var(--text-primary)',
-                                    backgroundColor: 'transparent',
-                                    border: 'none',
-                                    padding: '12px 20px'
-                                  }}
-                                  onMouseEnter={(e) => {
-                                    e.currentTarget.style.backgroundColor = 'var(--bg-hover)';
-                                  }}
-                                  onMouseLeave={(e) => {
-                                    e.currentTarget.style.backgroundColor = 'transparent';
-                                  }}
-                                  onClick={() => {
-                                    setConfirmDeleteGroupId(null);
-                                    setOpenMenuId(null);
-                                  }}
-                                >
-                                  <span className="text-base">✕</span>
-                                  <span className="font-medium">Cancel</span>
-                                </button>
-                              </>
-                            ) : (
-                              <button
-                                className="w-full text-left text-sm transition-colors duration-150 flex items-center gap-3 font-medium"
-                                style={{
-                                  color: 'var(--error)',
-                                  backgroundColor: 'transparent',
-                                  border: 'none',
-                                  padding: '12px 20px'
-                                }}
-                                onMouseEnter={(e) => {
-                                  e.currentTarget.style.backgroundColor = 'rgba(239, 68, 68, 0.1)';
-                                }}
-                                onMouseLeave={(e) => {
-                                  e.currentTarget.style.backgroundColor = 'transparent';
-                                }}
-                                onClick={() => {
-                                  setConfirmDeleteGroupId(group.id);
-                                }}
-                              >
-                                <span className="text-base">🗑️</span>
-                                <span>Delete Group</span>
-                              </button>
-                            )}
-                          </div>
-                        </div>
-                      )}
-                    </div>
+                      <DropdownMenuItem
+                        icon="✏️"
+                        label="Edit Group"
+                        onClick={() => {
+                          setEditingGroupId(group.id);
+                          setEditGroupName(group.name);
+                          setEditGroupColor(group.color);
+                          setOpenMenuId(null);
+                        }}
+                      />
+                      <DropdownMenuDivider />
+                      <ConfirmDeleteItem
+                        label="Delete Group"
+                        isConfirming={confirmDeleteGroupId === group.id}
+                        onRequestDelete={() => setConfirmDeleteGroupId(group.id)}
+                        onConfirm={() => deleteGroup(group.id)}
+                        onCancel={() => {
+                          setConfirmDeleteGroupId(null);
+                          setOpenMenuId(null);
+                        }}
+                      />
+                    </DropdownMenu>
                   )}
                 </div>
               </div>
@@ -1971,6 +1683,6 @@ export default function CharactersPage() {
         </div>
       )}
 
-    </div>
+    </>
   );
 }

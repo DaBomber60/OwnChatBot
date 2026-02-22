@@ -1,24 +1,19 @@
-import type { NextApiRequest, NextApiResponse } from 'next';
-import { requireAuth } from '../../../lib/apiAuth';
-import { apiKeyNotConfigured, badRequest, methodNotAllowed, serverError } from '../../../lib/apiErrors';
-import { getAIConfig, tokenFieldFor, normalizeTemperature } from '../../../lib/aiProvider';
+import { apiKeyNotConfigured, serverError } from '../../../lib/apiErrors';
+import { getAIConfig, tokenFieldFor, normalizeTemperature, getMaxTokens } from '../../../lib/aiProvider';
+import type { AIConfig } from '../../../lib/aiProvider';
+import { callUpstreamAI } from '../../../lib/upstreamAI';
 import prisma from '../../../lib/prisma';
 import { schemas, validateBody } from '../../../lib/validate';
 import { z } from 'zod';
+import { withApiHandler } from '../../../lib/withApiHandler';
 
 // This endpoint does NOT persist a character; it returns generated fields so the client can review/edit then save.
 // POST /api/characters/generate
 // Body: { name, profileName?, description, sliders?: { key: number } }
 // Returns: { scenario, personality, firstMessage, exampleDialogue, rawPrompt }
 
-const DEFAULT_FALLBACK_URL = 'https://api.deepseek.com/chat/completions';
-
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (!(await requireAuth(req, res))) return;
-  if (req.method !== 'POST') {
-    res.setHeader('Allow', ['POST']);
-    return methodNotAllowed(res, req.method);
-  }
+export default withApiHandler({}, {
+  POST: async (req, res) => {
 
   // Fetch dynamic limit (does NOT change default unless user configured it).
   let dynLimit = 3000; // default fallback (do not change globally)
@@ -48,17 +43,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (aiCfg.code === 'NO_API_KEY') return apiKeyNotConfigured(res);
       return serverError(res, aiCfg.error, aiCfg.code);
     }
-    const { apiKey, url: upstreamUrl, model, provider, enableTemperature, tokenFieldOverride } = aiCfg as any;
+    const { apiKey, url: upstreamUrl, model, provider, enableTemperature, tokenFieldOverride, temperature: cfgTemperature } = aiCfg as AIConfig;
 
-    // Pull optional temperature setting
-    let temperature = 0.7;
-    try {
-      const setting = await prisma.setting.findUnique({ where: { key: 'temperature' } });
-      if (setting?.value) {
-        const t = parseFloat(setting.value);
-        if (!isNaN(t)) temperature = t;
-      }
-    } catch {}
+    const temperature = cfgTemperature;
 
     const tokenField = tokenFieldFor(provider, model, tokenFieldOverride);
     const normTemp = normalizeTemperature(provider, model, temperature, enableTemperature);
@@ -90,14 +77,7 @@ Perspective: ${perspective.toUpperCase()} POV. ${perspectiveLine}
     ];
 
     // Token limit logic similar to other endpoints
-    let requestMaxTokens: number | undefined = 2048;
-    try {
-      const maxTokensSetting = await prisma.setting.findUnique({ where: { key: 'maxTokens' } });
-      if (maxTokensSetting?.value) {
-        const parsed = parseInt(maxTokensSetting.value);
-        if (!isNaN(parsed)) requestMaxTokens = Math.max(512, Math.min(8192, parsed));
-      }
-    } catch {}
+    const requestMaxTokens = await getMaxTokens({ defaultValue: 2048, min: 512 });
 
     const bodyPayload: any = {
       model,
@@ -107,21 +87,13 @@ Perspective: ${perspective.toUpperCase()} POV. ${perspectiveLine}
       messages
     };
 
-    const upstreamRes = await fetch(upstreamUrl || DEFAULT_FALLBACK_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`
-      },
-      body: JSON.stringify(bodyPayload)
-    });
+    const upstream = await callUpstreamAI({ url: upstreamUrl, apiKey, body: bodyPayload });
 
-    if (!upstreamRes.ok) {
-      const text = await upstreamRes.text();
-      return serverError(res, 'Generation API error: ' + text, 'UPSTREAM_API_ERROR');
+    if (!upstream.ok) {
+      return serverError(res, 'Generation API error: ' + (upstream.rawText || 'Unknown error'), 'UPSTREAM_API_ERROR');
     }
 
-    const data = await upstreamRes.json();
+    const data = upstream.data;
     const content: string | undefined = data?.choices?.[0]?.message?.content;
     if (!content) return serverError(res, 'Malformed upstream response', 'INVALID_UPSTREAM');
 
@@ -155,8 +127,9 @@ Perspective: ${perspective.toUpperCase()} POV. ${perspectiveLine}
       rawPrompt: userPrompt,
       perspective
     });
-  } catch (err) {
-    console.error('Character generation error:', err);
-    return serverError(res, 'Failed to generate character', 'CHARACTER_GENERATE_FAILED');
+  } catch (error) {
+    console.error('Character generation error:', error);
+    serverError(res);
   }
-}
+  },
+});

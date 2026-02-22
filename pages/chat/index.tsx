@@ -1,15 +1,87 @@
-import { useState, useEffect } from 'react';
+import { useState, useMemo } from 'react';
 import useSWR from 'swr';
 import { useRouter } from 'next/router';
 import Head from 'next/head';
+import { fetcher } from '../../lib/fetcher';
+import type { Persona, Character, CharacterGroup, Session, Message } from '../../types/models';
+import { useClickOutside } from '../../hooks/useClickOutside';
+import { PageHeader } from '../../components/PageHeader';
+import { DropdownMenu, DropdownMenuItem, DropdownMenuDivider, ConfirmDeleteItem } from '../../components/DropdownMenu';
+import { Modal } from '../../components/Modal';
 
-const fetcher = (url: string) => fetch(url).then(res => res.json());
+// Pure function — defined outside the component so its reference is stable.
+function organizeCharactersForDisplay(
+  chars: Character[] | undefined,
+  groups: CharacterGroup[] | undefined
+): Array<{
+  isGroup: boolean;
+  isHeader: boolean;
+  group?: CharacterGroup;
+  character?: Character;
+  headerText?: string;
+}> {
+  if (!chars || !groups) return [];
 
-type Persona = { id: number; name: string; profileName?: string };
-type Character = { id: number; name: string; profileName?: string; firstMessage?: string; groupId?: number | null; group?: CharacterGroup | null };
-type CharacterGroup = { id: number; name: string; color: string; isCollapsed: boolean; sortOrder: number };
-type Session = { id: number; persona: Persona; character: Character; updatedAt: string; summary?: string; description?: string; messageCount: number };
-type Message = { id: number; role: string; content: string };
+  const organizedCharacters: Array<{
+    isGroup: boolean;
+    isHeader: boolean;
+    group?: CharacterGroup;
+    character?: Character;
+    headerText?: string;
+  }> = [];
+
+  // Create a map of grouped characters
+  const grouped: { [key: number]: Character[] } = {};
+  const ungrouped: Character[] = [];
+
+  // Initialize group arrays
+  groups.forEach(group => {
+    grouped[group.id] = [];
+  });
+
+  // Sort characters into groups
+  chars.forEach(char => {
+    if (char.groupId && grouped[char.groupId]) {
+      const groupArray = grouped[char.groupId];
+      if (groupArray) {
+        groupArray.push(char);
+      }
+    } else {
+      ungrouped.push(char);
+    }
+  });
+
+  // Sort groups alphabetically by name
+  const sortedGroups = [...groups].sort((a, b) => a.name.localeCompare(b.name));
+
+  // Check if there are any groups with characters
+  const hasGroupedCharacters = sortedGroups.some(group => (grouped[group.id] || []).length > 0);
+
+  // Add grouped characters
+  sortedGroups.forEach(group => {
+    const groupCharacters = grouped[group.id] || [];
+    if (groupCharacters.length > 0) {
+      organizedCharacters.push({ isGroup: true, isHeader: true, group, headerText: group.name });
+      groupCharacters.sort((a, b) => (a.profileName || a.name).localeCompare(b.profileName || b.name));
+      groupCharacters.forEach(char => {
+        organizedCharacters.push({ isGroup: false, isHeader: false, character: char });
+      });
+    }
+  });
+
+  // Add "UNGROUPED:" header and ungrouped characters
+  if (ungrouped.length > 0) {
+    if (hasGroupedCharacters) {
+      organizedCharacters.push({ isGroup: false, isHeader: true, headerText: "UNGROUPED:" });
+    }
+    ungrouped.sort((a, b) => (a.profileName || a.name).localeCompare(b.profileName || b.name));
+    ungrouped.forEach(char => {
+      organizedCharacters.push({ isGroup: false, isHeader: false, character: char });
+    });
+  }
+
+  return organizedCharacters;
+}
 
 export default function ChatIndexPage() {
   const router = useRouter();
@@ -120,106 +192,16 @@ export default function ChatIndexPage() {
     setOpenMenuId(null);
   };
 
-  // Click outside and keyboard handler
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && openMenuId) {
-        setOpenMenuId(null);
-      }
-    };
+  useClickOutside(openMenuId !== null, () => setOpenMenuId(null));
 
-    const handleClickOutside = (event: MouseEvent) => {
-      if (openMenuId) {
-        const target = event.target as HTMLElement;
-        if (!target.closest('.menu-container')) {
-          setOpenMenuId(null);
-        }
-      }
-    };
-
-    if (openMenuId) {
-      document.addEventListener('keydown', handleKeyDown);
-      document.addEventListener('click', handleClickOutside);
-    }
-
-    return () => {
-      document.removeEventListener('keydown', handleKeyDown);
-      document.removeEventListener('click', handleClickOutside);
-    };
-  }, [openMenuId]);
-
-  // Function to organize characters by groups for display in dropdown
-  const organizeCharactersForDisplay = () => {
-    if (!chars || !groups) return [];
-    
-    const organizedCharacters: Array<{ 
-      isGroup: boolean; 
-      isHeader: boolean;
-      group?: CharacterGroup; 
-      character?: Character; 
-      headerText?: string;
-    }> = [];
-    
-    // Create a map of grouped characters
-    const grouped: { [key: number]: Character[] } = {};
-    const ungrouped: Character[] = [];
-    
-    // Initialize group arrays
-    groups.forEach(group => {
-      grouped[group.id] = [];
-    });
-    
-    // Sort characters into groups
-    chars.forEach(char => {
-      if (char.groupId && grouped[char.groupId]) {
-        const groupArray = grouped[char.groupId];
-        if (groupArray) {
-          groupArray.push(char);
-        }
-      } else {
-        ungrouped.push(char);
-      }
-    });
-
-    // Sort groups alphabetically by name
-    const sortedGroups = [...groups].sort((a, b) => a.name.localeCompare(b.name));
-
-    // Check if there are any groups with characters
-    const hasGroupedCharacters = sortedGroups.some(group => (grouped[group.id] || []).length > 0);
-
-    // Add grouped characters
-    sortedGroups.forEach(group => {
-      const groupCharacters = grouped[group.id] || [];
-      if (groupCharacters.length > 0) {
-        // Add group name as header
-        organizedCharacters.push({ isGroup: true, isHeader: true, group, headerText: group.name });
-        
-        // Sort characters within group by name and add them
-        groupCharacters.sort((a, b) => (a.profileName || a.name).localeCompare(b.profileName || b.name));
-        groupCharacters.forEach(char => {
-          organizedCharacters.push({ isGroup: false, isHeader: false, character: char });
-        });
-      }
-    });
-    
-    // Add "UNGROUPED:" header and ungrouped characters
-    // Only show "UNGROUPED:" header if there are also grouped characters
-    if (ungrouped.length > 0) {
-      if (hasGroupedCharacters) {
-        organizedCharacters.push({ isGroup: false, isHeader: true, headerText: "UNGROUPED:" });
-      }
-      ungrouped.sort((a, b) => (a.profileName || a.name).localeCompare(b.profileName || b.name));
-      ungrouped.forEach(char => {
-        organizedCharacters.push({ isGroup: false, isHeader: false, character: char });
-      });
-    }
-    
-    return organizedCharacters;
-  };
+  const organizedChars = useMemo(
+    () => organizeCharactersForDisplay(chars, groups),
+    [chars, groups]
+  );
 
   if (!personas || !chars || !groups) {
     return (
-      <div className="container text-center">
+      <div className="text-center">
         <div className="card">
           <div className="status-indicator">
             <div className="status-dot status-loading"></div>
@@ -231,18 +213,13 @@ export default function ChatIndexPage() {
   }
 
   return (
-    <div className="container">
+    <>
       <Head>
         <title>Chat - Start New Conversation</title>
         <meta name="description" content="Choose a character and persona to start a new chat conversation." />
       </Head>
 
-      <div className="flex items-center justify-between mb-6">
-        <h1 className="text-3xl font-semibold mb-0">Start New Chat</h1>
-        <button className="btn btn-secondary" onClick={() => router.push('/')}>
-          🏠 Home
-        </button>
-      </div>
+      <PageHeader title="Start New Chat" />
 
       {/* New Chat Section */}
       <div className="card mb-8">
@@ -281,7 +258,7 @@ export default function ChatIndexPage() {
                 onChange={e => setSelectedCharacter(Number(e.target.value))}
               >
                 <option value={0}>Choose a character...</option>
-                {organizeCharactersForDisplay().map((item, index) => {
+                {organizedChars.map((item, index) => {
                   if (item.isHeader) {
                     return (
                       <option 
@@ -504,174 +481,41 @@ export default function ChatIndexPage() {
                                         </div>
                                       </div>
                                       
-                                      <div 
-                                        className="menu-container relative"
-                                        onClick={(e) => e.stopPropagation()}
-                                        style={{
-                                          height: openMenuId === s.id ? '2rem' : 'auto',
-                                          minHeight: openMenuId === s.id ? '2rem' : 'auto',
-                                          zIndex: openMenuId === s.id ? 999999 : 'auto'
-                                        }}
+                                      <DropdownMenu
+                                        entityId={s.id}
+                                        isOpen={openMenuId === s.id}
+                                        onToggle={() => setOpenMenuId(s.id)}
+                                        onClose={closeMenu}
+                                        triggerChar="⋮"
+                                        stopPropagation
+                                        triggerStyle={{ minWidth: '32px' }}
                                       >
-                                        {openMenuId !== s.id && (
-                                          <button
-                                            className="btn btn-secondary btn-small"
-                                            onClick={(e) => {
-                                              e.stopPropagation();
-                                              setOpenMenuId(s.id);
-                                            }}
-                                            aria-label="More options"
-                                            style={{ minWidth: '32px' }}
-                                          >
-                                            ⋮
-                                          </button>
-                                        )}
-                                        
-                                        {/* Dropdown Menu */}
-                                        {openMenuId === s.id && (
-                                          <div
-                                            className="absolute right-0 min-w-48 overflow-hidden"
-                                            style={{
-                                              top: '0',
-                                              backgroundColor: 'var(--bg-secondary)',
-                                              border: '1px solid var(--border-primary)',
-                                              borderRadius: 'var(--radius-lg)',
-                                              boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.3), 0 10px 10px -5px rgba(0, 0, 0, 0.2)',
-                                              zIndex: 999999
-                                            }}
-                                          >
-                                            <div>
-                                              <button
-                                                className="w-full text-left text-sm transition-colors duration-150 flex items-center gap-3"
-                                                style={{
-                                                  color: 'var(--text-primary)',
-                                                  backgroundColor: 'transparent',
-                                                  border: 'none',
-                                                  padding: '12px 20px'
-                                                }}
-                                                onMouseEnter={(e) => {
-                                                  e.currentTarget.style.backgroundColor = 'var(--bg-hover)';
-                                                }}
-                                                onMouseLeave={(e) => {
-                                                  e.currentTarget.style.backgroundColor = 'transparent';
-                                                }}
-                                                onClick={(e) => {
-                                                  e.stopPropagation();
-                                                  openDescriptionModal(s.id, s.description || '');
-                                                }}
-                                              >
-                                                <span className="text-base">📝</span>
-                                                <span className="font-medium">{s.description ? 'Edit' : 'Add'} Description</span>
-                                              </button>
-                                              
-                                              <button
-                                                className="w-full text-left text-sm transition-colors duration-150 flex items-center gap-3"
-                                                style={{
-                                                  color: 'var(--text-primary)',
-                                                  backgroundColor: 'transparent',
-                                                  border: 'none',
-                                                  padding: '12px 20px'
-                                                }}
-                                                onMouseEnter={(e) => {
-                                                  if (!e.currentTarget.disabled) {
-                                                    e.currentTarget.style.backgroundColor = 'var(--bg-hover)';
-                                                  }
-                                                }}
-                                                onMouseLeave={(e) => {
-                                                  e.currentTarget.style.backgroundColor = 'transparent';
-                                                }}
-                                                onClick={(e) => {
-                                                  e.stopPropagation();
-                                                  cloneSession(s.id);
-                                                }}
-                                                disabled={cloningSessionId === s.id}
-                                              >
-                                                <span className="text-base">{cloningSessionId === s.id ? '⏳' : '📋'}</span>
-                                                <span className="font-medium">Clone Chat</span>
-                                              </button>
-                                              
-                                              <div style={{ 
-                                                height: '1px', 
-                                                backgroundColor: 'var(--border-secondary)', 
-                                                margin: '8px 20px' 
-                                              }}></div>
-                                              
-                                              {confirmDeleteId === s.id ? (
-                                                <>
-                                                  <button
-                                                    className="w-full text-left text-sm transition-colors duration-150 flex items-center gap-3 font-medium"
-                                                    style={{
-                                                      color: 'var(--error)',
-                                                      backgroundColor: 'transparent',
-                                                      border: 'none',
-                                                      padding: '12px 20px'
-                                                    }}
-                                                    onMouseEnter={(e) => {
-                                                      e.currentTarget.style.backgroundColor = 'rgba(239, 68, 68, 0.1)';
-                                                    }}
-                                                    onMouseLeave={(e) => {
-                                                      e.currentTarget.style.backgroundColor = 'transparent';
-                                                    }}
-                                                    onClick={(e) => {
-                                                      e.stopPropagation();
-                                                      deleteSession(s.id);
-                                                    }}
-                                                  >
-                                                    <span className="text-base">✓</span>
-                                                    <span>Confirm Delete</span>
-                                                  </button>
-                                                  <button
-                                                    className="w-full text-left text-sm transition-colors duration-150 flex items-center gap-3"
-                                                    style={{
-                                                      color: 'var(--text-primary)',
-                                                      backgroundColor: 'transparent',
-                                                      border: 'none',
-                                                      padding: '12px 20px'
-                                                    }}
-                                                    onMouseEnter={(e) => {
-                                                      e.currentTarget.style.backgroundColor = 'var(--bg-hover)';
-                                                    }}
-                                                    onMouseLeave={(e) => {
-                                                      e.currentTarget.style.backgroundColor = 'transparent';
-                                                    }}
-                                                    onClick={(e) => {
-                                                      e.stopPropagation();
-                                                      setConfirmDeleteId(null);
-                                                      closeMenu();
-                                                    }}
-                                                  >
-                                                    <span className="text-base">✕</span>
-                                                    <span className="font-medium">Cancel</span>
-                                                  </button>
-                                                </>
-                                              ) : (
-                                                <button
-                                                  className="w-full text-left text-sm transition-colors duration-150 flex items-center gap-3"
-                                                  style={{
-                                                    color: 'var(--error)',
-                                                    backgroundColor: 'transparent',
-                                                    border: 'none',
-                                                    padding: '12px 20px'
-                                                  }}
-                                                  onMouseEnter={(e) => {
-                                                    e.currentTarget.style.backgroundColor = 'rgba(239, 68, 68, 0.1)';
-                                                  }}
-                                                  onMouseLeave={(e) => {
-                                                    e.currentTarget.style.backgroundColor = 'transparent';
-                                                  }}
-                                                  onClick={(e) => {
-                                                    e.stopPropagation();
-                                                    setConfirmDeleteId(s.id);
-                                                  }}
-                                                >
-                                                  <span className="text-base">🗑️</span>
-                                                  <span className="font-medium">Delete Chat</span>
-                                                </button>
-                                              )}
-                                            </div>
-                                          </div>
-                                        )}
-                                      </div>
+                                        <DropdownMenuItem
+                                          icon="📝"
+                                          label={`${s.description ? 'Edit' : 'Add'} Description`}
+                                          onClick={() => openDescriptionModal(s.id, s.description || '')}
+                                          stopPropagation
+                                        />
+                                        <DropdownMenuItem
+                                          icon={cloningSessionId === s.id ? '⏳' : '📋'}
+                                          label="Clone Chat"
+                                          onClick={() => cloneSession(s.id)}
+                                          disabled={cloningSessionId === s.id}
+                                          stopPropagation
+                                        />
+                                        <DropdownMenuDivider />
+                                        <ConfirmDeleteItem
+                                          label="Delete Chat"
+                                          isConfirming={confirmDeleteId === s.id}
+                                          onRequestDelete={() => setConfirmDeleteId(s.id)}
+                                          onConfirm={() => deleteSession(s.id)}
+                                          onCancel={() => {
+                                            setConfirmDeleteId(null);
+                                            closeMenu();
+                                          }}
+                                          stopPropagation
+                                        />
+                                      </DropdownMenu>
                                     </div>
                                   </div>
                                 ))}
@@ -697,61 +541,54 @@ export default function ChatIndexPage() {
 
       {/* Description Modal */}
       {showDescriptionModal && (
-        <div className="modal-overlay" onClick={(e) => e.target === e.currentTarget && closeDescriptionModal()}>
-          <div className="modal-content">
-            <div className="modal-header">
-              <h2 className="text-2xl font-semibold text-primary mb-0">
-                {descriptionText.trim() ? 'Edit Description' : 'Add Description'}
-              </h2>
+        <Modal
+          open
+          onClose={closeDescriptionModal}
+          title={descriptionText.trim() ? 'Edit Description' : 'Add Description'}
+          footer={
+            <div className="flex gap-3">
+              <button 
+                className="btn btn-secondary" 
+                onClick={closeDescriptionModal}
+                disabled={savingDescription}
+              >
+                Cancel
+              </button>
+              <button 
+                className="btn btn-primary" 
+                onClick={saveDescription}
+                disabled={savingDescription}
+              >
+                {savingDescription ? 'Saving...' : 'Save Description'}
+              </button>
             </div>
-            
-            <div className="modal-body">
-              <div className="form-group mb-0">
-                <label className="form-label mt-2">Chat Description</label>
-                <textarea
-                  className="form-input"
-                  rows={4}
-                  value={descriptionText}
-                  onChange={e => setDescriptionText(e.target.value)}
-                  placeholder="Enter a description for this chat conversation..."
-                  maxLength={500}
-                />
-                <p className="text-xs text-muted mt-1">
-                  {descriptionText.length}/500 characters
-                </p>
-              </div>
-              
-              <div className="bg-info rounded-lg p-3 text-sm">
-                <p className="mb-2">
-                  💡 <strong>Tip:</strong> Descriptions help you quickly identify and organize your conversations.
-                </p>
-                <p className="mb-4">
-                  They will be displayed instead of the auto-generated summary in the chat list.
-                </p>
-              </div>
-            </div>
-            
-            <div className="modal-footer">
-              <div className="flex gap-3">
-                <button 
-                  className="btn btn-secondary" 
-                  onClick={closeDescriptionModal}
-                  disabled={savingDescription}
-                >
-                  Cancel
-                </button>
-                <button 
-                  className="btn btn-primary" 
-                  onClick={saveDescription}
-                  disabled={savingDescription}
-                >
-                  {savingDescription ? 'Saving...' : 'Save Description'}
-                </button>
-              </div>
-            </div>
+          }
+        >
+          <div className="form-group mb-0">
+            <label className="form-label mt-2">Chat Description</label>
+            <textarea
+              className="form-input"
+              rows={4}
+              value={descriptionText}
+              onChange={e => setDescriptionText(e.target.value)}
+              placeholder="Enter a description for this chat conversation..."
+              maxLength={500}
+            />
+            <p className="text-xs text-muted mt-1">
+              {descriptionText.length}/500 characters
+            </p>
           </div>
-        </div>
+          
+          <div className="bg-info rounded-lg p-3 text-sm">
+            <p className="mb-2">
+              💡 <strong>Tip:</strong> Descriptions help you quickly identify and organize your conversations.
+            </p>
+            <p className="mb-4">
+              They will be displayed instead of the auto-generated summary in the chat list.
+            </p>
+          </div>
+        </Modal>
       )}
-    </div>
+    </>
   );
 }
