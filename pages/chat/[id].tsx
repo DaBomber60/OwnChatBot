@@ -2280,6 +2280,22 @@ export default function ChatSessionPage() {
                       ref={editTextareaRef}
                       className="form-textarea message-edit-input"
                       value={editingContent}
+                      onPointerDown={() => {
+                        // Lock parent container scroll during drag-to-select inside textarea.
+                        // The browser's selection auto-scroll would otherwise scroll .chat-messages.
+                        const el = containerRef.current;
+                        if (!el) return;
+                        const lockedTop = el.scrollTop;
+                        const pin = () => { el.scrollTop = lockedTop; };
+                        el.addEventListener('scroll', pin);
+                        const release = () => {
+                          el.removeEventListener('scroll', pin);
+                          document.removeEventListener('pointerup', release);
+                          document.removeEventListener('pointercancel', release);
+                        };
+                        document.addEventListener('pointerup', release);
+                        document.addEventListener('pointercancel', release);
+                      }}
                       onChange={e => {
                         setEditingContent(e.target.value);
                         // Auto-resize with scroll position preservation

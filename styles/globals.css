@@ -1210,6 +1210,7 @@ p {
   -webkit-text-size-adjust: 100%;
   font-variant-ligatures: none; /* avoid ligature width shifts affecting caret */
   -webkit-overflow-scrolling: touch; /* smooth momentum scrolling inside edit area */
+  overscroll-behavior: contain; /* prevent scroll chaining to parent during internal scroll */
 }
 
 .message-edit-input:focus {
