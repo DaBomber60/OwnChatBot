@@ -55,7 +55,7 @@ function formatMessage(content: string) {
 export default function ChatSessionPage() {
   const router = useRouter();
   const { id } = router.query;
-  const { data: session, error, mutate } = useSWR<SessionData>(id ? `/api/sessions/${id}?limit=${INITIAL_PAGE_SIZE}` : null, fetcher);
+  const { data: session, error, mutate } = useSWR<SessionData>(id ? `/api/sessions/${id}?limit=${INITIAL_PAGE_SIZE}` : null, fetcher, { revalidateOnFocus: false });
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [hasMore, setHasMore] = useState<boolean>(false);
   const [loadingMore, setLoadingMore] = useState<boolean>(false);
@@ -282,12 +282,16 @@ export default function ChatSessionPage() {
   useEffect(() => {
     const el = containerRef.current; if (!el) return;
     const handleScroll = () => {
+      // During editing, only update refs silently – avoid any setState that would trigger
+      // a React re-render (which causes the browser to fight with text-selection scrolling).
+      if (editingMessageIndex !== null) return;
+
       const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
       const wasPinned = userPinnedBottomRef.current;
       userPinnedBottomRef.current = distanceFromBottom < 120; // threshold
       if (wasPinned && !userPinnedBottomRef.current) suppressNextAutoScrollRef.current = true;
       setShowScrollToLatest(!userPinnedBottomRef.current);
-      // Near the top? Load older messages if available
+      // Near the top? Load older messages if available (but not while editing)
       if (el.scrollTop < 120 && hasMore && !loadingMore) {
         loadOlderMessages();
       }
@@ -295,7 +299,7 @@ export default function ChatSessionPage() {
     el.addEventListener('scroll', handleScroll, { passive: true });
     handleScroll();
     return () => el.removeEventListener('scroll', handleScroll as any);
-  }, [hasMore, loadingMore, loadOlderMessages]);
+  }, [hasMore, loadingMore, loadOlderMessages, editingMessageIndex]);
 
   // Function to stop streaming (both chat and variant generation)
   const stopStreaming = useCallback(() => {
@@ -1174,8 +1178,8 @@ export default function ChatSessionPage() {
         console.log('Skipping message update due to active editing');
       }
       
-      // Load variants only for the last assistant message from server data - but only if not in streaming state
-      if (!isStreaming && !justFinishedStreaming && generatingVariant === null) {
+      // Load variants only for the last assistant message from server data - but only if not in streaming state or editing
+      if (!isStreaming && !justFinishedStreaming && generatingVariant === null && editingMessageIndex === null) {
         const lastAssistant = (() => {
           for (let i = session.messages.length - 1; i >= 0; i--) {
             const msg = session.messages[i];
@@ -1335,7 +1339,8 @@ export default function ChatSessionPage() {
     };
 
     // Update after session loads to ensure proper calculation with all content rendered
-    if (session) {
+    // Skip recalculation while the user is editing a message to avoid scroll jumps
+    if (session && editingMessageIndex === null) {
       updateHeaderHeight();
       
       // Additional updates to catch any delayed content rendering
@@ -1349,7 +1354,7 @@ export default function ChatSessionPage() {
         timeouts.forEach(clearTimeout);
       };
     }
-  }, [session]);
+  }, [session, editingMessageIndex]);
 
   // Close burger menu on outside click
   useClickOutside(isBurgerMenuOpen, () => setIsBurgerMenuOpen(false), {
@@ -2286,18 +2291,6 @@ export default function ChatSessionPage() {
                             container.scrollTop = scrollTop;
                           }
                         });
-                      }}
-                      onFocus={(e) => {
-                        // Prevent browser from scrolling to focus
-                        e.preventDefault();
-                        const container = containerRef.current;
-                        if (container) {
-                          const scrollTop = container.scrollTop;
-                          // Restore scroll position after focus
-                          requestAnimationFrame(() => {
-                            container.scrollTop = scrollTop;
-                          });
-                        }
                       }}
                       onKeyDown={e => {
                         if (e.key === 'Enter' && e.ctrlKey) {

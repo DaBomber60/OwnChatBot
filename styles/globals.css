@@ -750,7 +750,7 @@ p {
   border-radius: var(--radius-xl);
   position: relative;
   box-shadow: var(--shadow-sm);
-  transition: all 0.2s ease;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
   overflow: visible; /* remove internal scrollbars per message */
 }
 
