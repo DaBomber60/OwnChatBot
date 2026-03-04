@@ -99,6 +99,16 @@ export default function SettingsPage() {
   const [limitsOpen, setLimitsOpen] = useState(false);
   const [apiKeyEditing, setApiKeyEditing] = useState(false);
 
+  // Connection test state
+  const [connStatus, setConnStatus] = useState<'idle' | 'testing' | 'ok' | 'slow' | 'degraded' | 'down'>('idle');
+  const [connLatency, setConnLatency] = useState<number | null>(null);
+  const [connError, setConnError] = useState<string>('');
+
+  // DeepSeek balance state
+  const [dsBalance, setDsBalance] = useState<string | null>(null);
+  const [dsBalanceLoading, setDsBalanceLoading] = useState(false);
+  const [dsBalanceError, setDsBalanceError] = useState<string>('');
+
   const isFixedTemp = (prov: string, model: string) => prov === 'openai' && /^gpt-5/i.test(model || '');
 
   const { data: userPrompts, error: userPromptsError, mutate: mutateUserPrompts } = useSWR<{id: number; title: string; body: string;} | { error?: string } | null>(
@@ -135,6 +145,94 @@ export default function SettingsPage() {
     setTimeout(() => setToast(null), 3000);
   };
   const router = useRouter();
+
+  // --- Connection test handler ---
+  const runConnectionTest = async () => {
+    setConnStatus('testing');
+    setConnLatency(null);
+    setConnError('');
+
+    const start = Date.now();
+    // Timer ticks to update status while waiting
+    const timerId = setInterval(() => {
+      const elapsed = Date.now() - start;
+      if (elapsed >= 10000) setConnStatus('degraded');
+      else if (elapsed >= 5000) setConnStatus('slow');
+    }, 500);
+
+    try {
+      const controller = new AbortController();
+      const hardTimeout = setTimeout(() => controller.abort(), 15000);
+
+      const res = await fetch('/api/settings/test-connection', {
+        method: 'POST',
+        signal: controller.signal,
+      });
+      clearTimeout(hardTimeout);
+      clearInterval(timerId);
+
+      const elapsed = Date.now() - start;
+      setConnLatency(elapsed);
+
+      const data = await res.json();
+
+      // Easter egg: log every response to the console
+      console.log('[Connection Test Response]', data);
+
+      if (!res.ok || !data.ok) {
+        setConnStatus('down');
+        setConnError(data.error || `HTTP ${res.status}`);
+        return;
+      }
+
+      // Classify by total round-trip time
+      if (elapsed >= 10000) setConnStatus('degraded');
+      else if (elapsed >= 5000) setConnStatus('slow');
+      else setConnStatus('ok');
+    } catch (err: any) {
+      clearInterval(timerId);
+      const elapsed = Date.now() - start;
+      setConnLatency(elapsed);
+      console.log('[Connection Test Error]', err);
+      setConnStatus('down');
+      setConnError(err?.name === 'AbortError' ? 'Request timed out' : (err?.message || 'Network error'));
+    }
+  };
+
+  // --- DeepSeek balance fetcher ---
+  const fetchBalance = async () => {
+    setDsBalanceLoading(true);
+    setDsBalanceError('');
+    setDsBalance(null);
+    try {
+      const res = await fetch('/api/settings/balance');
+      const data = await res.json();
+      if (!res.ok) {
+        setDsBalanceError(data.error || 'Failed to fetch balance');
+      } else if (data.balance_infos?.length) {
+        const info = data.balance_infos[0];
+        const symbol = info.currency === 'USD' ? '$' : info.currency + ' ';
+        setDsBalance(`${symbol}${info.total_balance}`);
+      } else {
+        setDsBalanceError('No balance info returned');
+      }
+    } catch (err: any) {
+      setDsBalanceError(err?.message || 'Network error');
+    } finally {
+      setDsBalanceLoading(false);
+    }
+  };
+
+  // Auto-fetch balance when provider is deepseek and key exists
+  useEffect(() => {
+    if (state.aiProvider === 'deepseek' && state.originalApiKey) {
+      fetchBalance();
+    } else {
+      setDsBalance(null);
+      setDsBalanceError('');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.aiProvider, state.originalApiKey]);
 
   useEffect(() => {
     // Initialize all settings from database via single batched dispatch
@@ -666,6 +764,71 @@ export default function SettingsPage() {
               <p className="text-xs text-secondary mt-1">Editing API key. Save settings to apply or Cancel to revert.</p>
             )}
           </div>
+
+          {/* Connection Test */}
+          <div className="form-group">
+            <div className={`p-3 rounded-lg border flex items-center justify-between ${
+              connStatus === 'ok' ? 'bg-success/10 border-success/30' :
+              connStatus === 'slow' ? 'bg-warning/10 border-warning/30' :
+              connStatus === 'degraded' || connStatus === 'down' ? 'bg-error/10 border-error/30' :
+              'bg-black/5 border-border'
+            }`}>
+              <div className="flex items-center gap-2">
+                <span className={`inline-block w-2.5 h-2.5 rounded-full ${
+                  connStatus === 'ok' ? 'bg-success' :
+                  connStatus === 'slow' ? 'bg-warning' :
+                  connStatus === 'degraded' || connStatus === 'down' ? 'bg-error' :
+                  connStatus === 'testing' ? 'bg-primary animate-pulse' :
+                  'bg-secondary'
+                }`} />
+                <span className={`text-sm font-medium ${
+                  connStatus === 'ok' ? 'text-success' :
+                  connStatus === 'slow' ? 'text-warning' :
+                  connStatus === 'degraded' || connStatus === 'down' ? 'text-error' :
+                  'text-secondary'
+                }`}>
+                  {connStatus === 'idle' && 'Connection not tested'}
+                  {connStatus === 'testing' && 'Testing connection...'}
+                  {connStatus === 'ok' && `API connected${connLatency ? ` (${connLatency}ms)` : ''}`}
+                  {connStatus === 'slow' && `Slow response${connLatency ? ` (${connLatency}ms)` : '...'}`}
+                  {connStatus === 'degraded' && `API degraded${connLatency ? ` (${connLatency}ms)` : '...'}`}
+                  {connStatus === 'down' && 'API down'}
+                </span>
+                {connError && <span className="text-xs text-error ml-1">— {connError}</span>}
+              </div>
+              <button
+                type="button"
+                className="btn btn-secondary btn-small"
+                onClick={runConnectionTest}
+                disabled={connStatus === 'testing'}
+              >
+                {connStatus === 'testing' ? 'Testing...' : 'Test'}
+              </button>
+            </div>
+          </div>
+
+          {/* DeepSeek Balance */}
+          {state.aiProvider === 'deepseek' && (
+            <div className="form-group">
+              <div className="p-3 rounded-lg border bg-black/5 border-border flex items-center justify-between">
+                <div>
+                  <span className="text-sm font-medium">Remaining Balance: </span>
+                  {dsBalanceLoading && <span className="text-sm text-secondary">Loading...</span>}
+                  {dsBalance && <span className="text-sm font-semibold text-success">{dsBalance}</span>}
+                  {dsBalanceError && <span className="text-sm text-error">{dsBalanceError}</span>}
+                  {!dsBalanceLoading && !dsBalance && !dsBalanceError && <span className="text-sm text-secondary">—</span>}
+                </div>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-small"
+                  onClick={fetchBalance}
+                  disabled={dsBalanceLoading}
+                >
+                  {dsBalanceLoading ? 'Checking...' : 'Refresh'}
+                </button>
+              </div>
+            </div>
+          )}
 
           {state.aiProvider === 'custom' && (
             <>
