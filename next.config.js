@@ -7,12 +7,9 @@ const nextConfig = {
   devIndicators: false,
   experimental: {
     optimizePackageImports: ['@prisma/client'],
-    // Allow large request bodies through middleware (default is 10MB).
+    // Allow large request bodies through proxy (default is 10MB).
     // Required for database import (ZIP uploads up to 500MB).
-    middlewareClientMaxBodySize: '500mb',
-  },
-  serverRuntimeConfig: {
-    apiTimeout: 15 * 60 * 1000,
+    proxyClientMaxBodySize: '500mb',
   },
   // Removed unsupported top-level `api` key (was causing warnings). For large payloads,
   // set custom config inside individual API route files via export const config = { api: { bodyParser: { sizeLimit: '500mb' } } }

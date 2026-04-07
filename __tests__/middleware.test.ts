@@ -1,13 +1,13 @@
 /**
  * @jest-environment node
  *
- * Tests for middleware.ts — auth gating, security headers, token renewal.
+ * Tests for proxy.ts — auth gating, security headers, token renewal.
  *
  * Strategy: mock jwtCrypto and the internal password-version fetch, then exercise
- * the middleware function with synthetic NextRequest objects.
+ * the proxy function with synthetic NextRequest objects.
  */
 
-// JWT_SECRET must be in env BEFORE module is loaded (top-level const in middleware.ts)
+// JWT_SECRET must be in env BEFORE module is loaded (top-level const in proxy.ts)
 process.env.JWT_SECRET = 'test-secret';
 process.env.NEXT_PUBLIC_API_URL = 'http://localhost:3000';
 
@@ -33,7 +33,7 @@ afterAll(() => {
   global.fetch = originalFetch;
 });
 
-import { middleware } from '../middleware';
+import { proxy } from '../proxy';
 
 // ---------------------------------------------------------------------------
 // Helper: build a NextRequest
@@ -76,7 +76,7 @@ afterEach(() => {
 // ---------------------------------------------------------------------------
 // Public paths
 // ---------------------------------------------------------------------------
-describe('middleware — public paths', () => {
+describe('proxy — public paths', () => {
   it.each([
     '/',
     '/login',
@@ -88,7 +88,7 @@ describe('middleware — public paths', () => {
     '/api/health',
     '/api/internal/password-version',
   ])('allows %s without a cookie (no 401)', async (path) => {
-    const res = await middleware(buildReq(path));
+    const res = await proxy(buildReq(path));
     expect(res.status).not.toBe(401);
     // Should set security headers
     expect(res.headers.get('X-Content-Type-Options')).toBe('nosniff');
@@ -98,16 +98,16 @@ describe('middleware — public paths', () => {
 // ---------------------------------------------------------------------------
 // Protected paths — no cookie
 // ---------------------------------------------------------------------------
-describe('middleware — protected paths without cookie', () => {
+describe('proxy — protected paths without cookie', () => {
   it('returns 401 JSON for API routes', async () => {
-    const res = await middleware(buildReq('/api/sessions'));
+    const res = await proxy(buildReq('/api/sessions'));
     expect(res.status).toBe(401);
     const body = await res.json();
     expect(body.error).toBe('Unauthorized');
   });
 
   it('redirects browser pages to /login', async () => {
-    const res = await middleware(buildReq('/settings'));
+    const res = await proxy(buildReq('/settings'));
     expect(res.status).toBe(307);
     expect(res.headers.get('location')).toContain('/login');
   });
@@ -116,11 +116,11 @@ describe('middleware — protected paths without cookie', () => {
 // ---------------------------------------------------------------------------
 // Valid auth cookie
 // ---------------------------------------------------------------------------
-describe('middleware — valid auth cookie', () => {
+describe('proxy — valid auth cookie', () => {
   it('allows request when JWT is valid and version matches', async () => {
     mockVerify.mockResolvedValue({ valid: true, payload: { v: 1, iat: Math.floor(Date.now() / 1000) - 100 } });
     stubPasswordVersion(1);
-    const res = await middleware(buildReq('/api/sessions', { cookie: 'hcb_auth=valid' }));
+    const res = await proxy(buildReq('/api/sessions', { cookie: 'hcb_auth=valid' }));
     expect(res.status).toBe(200);
     expect(res.headers.get('X-Frame-Options')).toBe('DENY');
   });
@@ -128,7 +128,7 @@ describe('middleware — valid auth cookie', () => {
   it('redirects to login when password version mismatches', async () => {
     // Token v=999 will never match the cached password version (1)
     mockVerify.mockResolvedValue({ valid: true, payload: { v: 999, iat: Math.floor(Date.now() / 1000) - 100 } });
-    const res = await middleware(buildReq('/chat/1', { cookie: 'hcb_auth=valid' }));
+    const res = await proxy(buildReq('/chat/1', { cookie: 'hcb_auth=valid' }));
     expect(res.status).toBe(307);
     expect(res.headers.get('location')).toContain('/login');
   });
@@ -137,10 +137,10 @@ describe('middleware — valid auth cookie', () => {
 // ---------------------------------------------------------------------------
 // Invalid / expired token
 // ---------------------------------------------------------------------------
-describe('middleware — invalid token', () => {
+describe('proxy — invalid token', () => {
   it('returns 401 for API route when JWT is invalid', async () => {
     mockVerify.mockResolvedValue({ valid: false });
-    const res = await middleware(buildReq('/api/sessions', { cookie: 'hcb_auth=invalid' }));
+    const res = await proxy(buildReq('/api/sessions', { cookie: 'hcb_auth=invalid' }));
     expect(res.status).toBe(401);
     const body = await res.json();
     expect(body.error).toMatch(/invalid|expired/i);
@@ -148,7 +148,7 @@ describe('middleware — invalid token', () => {
 
   it('redirects page request to /login when token is invalid', async () => {
     mockVerify.mockRejectedValue(new Error('JWT expired'));
-    const res = await middleware(buildReq('/settings', { cookie: 'hcb_auth=expired' }));
+    const res = await proxy(buildReq('/settings', { cookie: 'hcb_auth=expired' }));
     expect(res.status).toBe(307);
     expect(res.headers.get('location')).toContain('/login');
   });
@@ -157,12 +157,12 @@ describe('middleware — invalid token', () => {
 // ---------------------------------------------------------------------------
 // Token renewal
 // ---------------------------------------------------------------------------
-describe('middleware — token renewal', () => {
+describe('proxy — token renewal', () => {
   it('mints a fresh token when token age exceeds threshold', async () => {
     const oldIat = Math.floor(Date.now() / 1000) - 50000; // well past 43200s threshold
     mockVerify.mockResolvedValue({ valid: true, payload: { v: 1, iat: oldIat } });
     stubPasswordVersion(1);
-    const res = await middleware(buildReq('/api/sessions', { cookie: 'hcb_auth=old-token' }));
+    const res = await proxy(buildReq('/api/sessions', { cookie: 'hcb_auth=old-token' }));
     expect(res.status).toBe(200);
     expect(mockSign).toHaveBeenCalled();
     // Should set a new cookie
@@ -174,7 +174,7 @@ describe('middleware — token renewal', () => {
     const recentIat = Math.floor(Date.now() / 1000) - 100; // 100s old, well below 43200
     mockVerify.mockResolvedValue({ valid: true, payload: { v: 1, iat: recentIat } });
     stubPasswordVersion(1);
-    const res = await middleware(buildReq('/api/sessions', { cookie: 'hcb_auth=recent' }));
+    const res = await proxy(buildReq('/api/sessions', { cookie: 'hcb_auth=recent' }));
     expect(res.status).toBe(200);
     expect(mockSign).not.toHaveBeenCalled();
   });
@@ -183,9 +183,9 @@ describe('middleware — token renewal', () => {
 // ---------------------------------------------------------------------------
 // Security headers
 // ---------------------------------------------------------------------------
-describe('middleware — security headers', () => {
+describe('proxy — security headers', () => {
   it('sets all expected security headers on public paths', async () => {
-    const res = await middleware(buildReq('/'));
+    const res = await proxy(buildReq('/'));
     expect(res.headers.get('Content-Security-Policy')).toBeTruthy();
     expect(res.headers.get('Permissions-Policy')).toBeTruthy();
     expect(res.headers.get('Referrer-Policy')).toBe('no-referrer');
@@ -195,20 +195,20 @@ describe('middleware — security headers', () => {
   });
 
   it('CSP includes frame-ancestors none', async () => {
-    const res = await middleware(buildReq('/'));
+    const res = await proxy(buildReq('/'));
     const csp = res.headers.get('Content-Security-Policy') || '';
     expect(csp).toContain("frame-ancestors 'none'");
   });
 
   it('CSP includes connect-src with AI providers', async () => {
-    const res = await middleware(buildReq('/'));
+    const res = await proxy(buildReq('/'));
     const csp = res.headers.get('Content-Security-Policy') || '';
     expect(csp).toContain('connect-src');
     expect(csp).toContain('api.openai.com');
   });
 
   it('sets Cache-Control on 401 responses', async () => {
-    const res = await middleware(buildReq('/api/sessions'));
+    const res = await proxy(buildReq('/api/sessions'));
     expect(res.status).toBe(401);
     expect(res.headers.get('Cache-Control')).toContain('no-store');
   });
@@ -217,10 +217,10 @@ describe('middleware — security headers', () => {
 // ---------------------------------------------------------------------------
 // /api/import/receive — bearer token pass-through
 // ---------------------------------------------------------------------------
-describe('middleware — import receive endpoint', () => {
+describe('proxy — import receive endpoint', () => {
   it('allows request with valid Bearer token', async () => {
     const token = 'A'.repeat(25); // 25 chars, meets >=20 requirement
-    const res = await middleware(buildReq('/api/import/receive', {
+    const res = await proxy(buildReq('/api/import/receive', {
       method: 'POST',
       headers: { authorization: `Bearer ${token}` },
     }));
@@ -229,13 +229,13 @@ describe('middleware — import receive endpoint', () => {
   });
 
   it('allows OPTIONS preflight without auth', async () => {
-    const res = await middleware(buildReq('/api/import/receive', { method: 'OPTIONS' }));
+    const res = await proxy(buildReq('/api/import/receive', { method: 'OPTIONS' }));
     expect(res.status).not.toBe(401);
   });
 
   it('rejects request with no auth at all', async () => {
     // No cookie, no authorization header
-    const res = await middleware(buildReq('/api/import/receive', { method: 'POST' }));
+    const res = await proxy(buildReq('/api/import/receive', { method: 'POST' }));
     expect(res.status).toBe(401);
   });
 });

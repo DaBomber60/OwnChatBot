@@ -38,7 +38,7 @@ async function getPasswordVersionCached(): Promise<number | null> {
   }
 }
 
-export async function middleware(req: NextRequest) {
+export async function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
   // Allow public assets & prefixes
