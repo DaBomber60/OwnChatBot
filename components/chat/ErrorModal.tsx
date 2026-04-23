@@ -6,9 +6,10 @@ interface ErrorModalProps {
   onDownloadRequest: () => void;
   onDownloadResponse: () => void;
   onClose: () => void;
+  devMode?: boolean;
 }
 
-export function ErrorModal({ apiErrorMessage, onDownloadRequest, onDownloadResponse, onClose }: ErrorModalProps) {
+export function ErrorModal({ apiErrorMessage, onDownloadRequest, onDownloadResponse, onClose, devMode }: ErrorModalProps) {
   return (
     <Modal
       open
@@ -17,8 +18,8 @@ export function ErrorModal({ apiErrorMessage, onDownloadRequest, onDownloadRespo
       maxWidth="560px"
       footer={
         <div className="flex gap-3 justify-center">
-          <button className="btn btn-secondary" onClick={onDownloadRequest}>Download Last Request</button>
-          <button className="btn btn-secondary" onClick={onDownloadResponse}>Download Last Response</button>
+          {devMode && <button className="btn btn-secondary" onClick={onDownloadRequest}>Download Last Request</button>}
+          {devMode && <button className="btn btn-secondary" onClick={onDownloadResponse}>Download Last Response</button>}
           <button className="btn btn-primary" onClick={onClose}>Close</button>
         </div>
       }

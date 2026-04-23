@@ -2051,6 +2051,17 @@ export default function ChatSessionPage() {
     // Zero-content safety check (stream finished but no content arrived)
     if (result.wasStreaming && streamingMessageRef.current.length === 0) {
       console.warn('[Send] Stream finished with zero assistant content. Will trigger a mutate to refresh.');
+      // Clean up the empty assistant bubble and restore user input
+      if (!retryMessage && shouldRestoreInputRef.current && lastSentInputRef.current) {
+        setInput(lastSentInputRef.current);
+      }
+      setMessages(prev => {
+        const copy = [...prev];
+        if (copy.length > 0 && copy[copy.length - 1]?.role === 'assistant' && !copy[copy.length - 1]?.content) copy.pop();
+        if (!retryMessage && copy.length > 0 && copy[copy.length - 1]?.role === 'user') copy.pop();
+        return copy;
+      });
+      shouldRestoreInputRef.current = false;
     }
 
     // Post-request: truncation & max-token warnings
@@ -2443,6 +2454,7 @@ export default function ChatSessionPage() {
           onDownloadRequest={handleDownloadRequest}
           onDownloadResponse={handleDownloadResponse}
           onClose={() => setShowErrorModal(false)}
+          devMode={devMode}
         />
       )}
 

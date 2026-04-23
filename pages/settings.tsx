@@ -37,6 +37,7 @@ interface SettingsState {
   limitNotes: number;
   limitGenerateDescription: number;
   limitMessageContent: number;
+  apiFailureTimeout: number;
 }
 
 const initialSettingsState: SettingsState = {
@@ -64,6 +65,7 @@ const initialSettingsState: SettingsState = {
   limitNotes: 10000,
   limitGenerateDescription: 3000,
   limitMessageContent: 8000,
+  apiFailureTimeout: 20,
 };
 
 type SettingsAction =
@@ -284,6 +286,7 @@ export default function SettingsPage() {
       payload.limitNotes = dbSettings.limit_notes ? parseInt(dbSettings.limit_notes) : 10000;
       payload.limitGenerateDescription = dbSettings.limit_generateDescription ? parseInt(dbSettings.limit_generateDescription) : 3000;
       payload.limitMessageContent = dbSettings.limit_messageContent ? parseInt(dbSettings.limit_messageContent) : 8000;
+      payload.apiFailureTimeout = dbSettings.apiFailureTimeout ? Math.max(5, Math.min(120, parseInt(dbSettings.apiFailureTimeout))) : 20;
 
       // Single dispatch triggers exactly ONE re-render instead of 24+
       dispatch({ type: 'LOAD_ALL', payload });
@@ -326,6 +329,7 @@ export default function SettingsPage() {
           limit_notes: String(state.limitNotes),
           limit_generateDescription: String(state.limitGenerateDescription),
           limit_messageContent: String(state.limitMessageContent),
+          apiFailureTimeout: String(state.apiFailureTimeout),
         })
       });
       if (res.ok) {
@@ -1043,6 +1047,29 @@ export default function SettingsPage() {
               <span>4096 (default)</span>
               <span>8192</span>
             </div>
+          </div>
+
+          <div className="form-group">
+            <label className="form-label">
+              API failure timeout: {state.apiFailureTimeout}s
+            </label>
+            <input
+              type="range"
+              min="5"
+              max="120"
+              step="5"
+              value={state.apiFailureTimeout}
+              onChange={e => dispatch({ type: 'SET_FIELD', field: 'apiFailureTimeout', value: parseInt(e.target.value) })}
+              className="form-range w-full"
+            />
+            <div className="flex justify-between text-xs text-muted mt-1">
+              <span>5s</span>
+              <span>20s (default)</span>
+              <span>120s</span>
+            </div>
+            <p className="text-xs text-secondary mt-1">
+              If no response arrives within this time, the request is cancelled and an error is shown.
+            </p>
           </div>
 
           <div className="form-group">

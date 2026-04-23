@@ -57,7 +57,7 @@ export function isSSEResponse(res: Response): boolean {
 // ---------------------------------------------------------------------------
 
 import type React from 'react';
-import { fetchChatSettings, type ChatSettings } from './chatSettings';
+import { fetchChatSettings, type ChatSettings, PROVIDER_DISPLAY_NAMES } from './chatSettings';
 import { safeJson, extractErrorFromResponse, sanitizeErrorMessage, extractUsefulError } from './errorUtils';
 
 /** Options for performStreamingRequest. Each caller provides its specific callbacks. */
@@ -143,12 +143,28 @@ export async function performStreamingRequest(opts: StreamingRequestOpts): Promi
       };
 
   // 4. Fetch
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(requestBody),
-    ...(streamSetting && abortController ? { signal: abortController.signal } : {}),
-  });
+  const timeoutMs = (settings.apiFailureTimeout || 20) * 1000;
+  let fetchTimedOut = false;
+  const res = await (async () => {
+    try {
+      return await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestBody),
+        ...(streamSetting && abortController ? { signal: abortController.signal } : {}),
+        ...(!streamSetting ? { signal: AbortSignal.timeout(timeoutMs) } : {}),
+      });
+    } catch (err: any) {
+      if (!streamSetting && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
+        fetchTimedOut = true;
+        const providerName = PROVIDER_DISPLAY_NAMES[settings.aiProvider] || settings.aiProvider;
+        onError(`OwnChatBot is working, but the ${providerName} API is down.\n\nNo response was received within ${settings.apiFailureTimeout} seconds. You can adjust this timeout in Settings.`);
+        return null;
+      }
+      throw err;
+    }
+  })();
+  if (!res) return { settings, streamedContent: '', wasStreaming: streamSetting, wasAborted: false };
 
   // 5. Non-OK + non-SSE → immediate error
   if (!res.ok && (!streamSetting || !res.body || !isSSEResponse(res))) {
@@ -162,13 +178,36 @@ export async function performStreamingRequest(opts: StreamingRequestOpts): Promi
 
   // 6. SSE streaming path
   if (streamSetting && res.body && isSSEResponse(res)) {
+    // First-content timeout: abort if no content arrives within the configured limit
+    const timeoutMs = (settings.apiFailureTimeout || 20) * 1000;
+    let firstContentReceived = false;
+    let timedOutByUs = false;
+    const firstContentTimer = setTimeout(() => {
+      if (!firstContentReceived && abortController) {
+        timedOutByUs = true;
+        abortController.abort();
+      }
+    }, timeoutMs);
+
     try {
       streamedContent = await readSSEStream(res.body, (accumulated) => {
+        if (!firstContentReceived) {
+          firstContentReceived = true;
+          clearTimeout(firstContentTimer);
+        }
         onStreamChunk(accumulated);
       });
+      clearTimeout(firstContentTimer);
       if (onComplete) await onComplete();
     } catch (err: any) {
+      clearTimeout(firstContentTimer);
       if (err.name === 'AbortError') {
+        if (timedOutByUs) {
+          // API failure timeout — show provider-specific error
+          const providerName = PROVIDER_DISPLAY_NAMES[settings.aiProvider] || settings.aiProvider;
+          onError(`OwnChatBot is working, but the ${providerName} API is down.\n\nNo response was received within ${settings.apiFailureTimeout} seconds. You can adjust this timeout in Settings.`);
+          return { settings, streamedContent: '', wasStreaming: true, wasAborted: false };
+        }
         wasAborted = true;
         if (onAbort) onAbort();
       } else {
