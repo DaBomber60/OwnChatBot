@@ -38,6 +38,9 @@ interface SettingsState {
   limitGenerateDescription: number;
   limitMessageContent: number;
   apiFailureTimeout: number;
+  // DeepSeek thinking/reasoning
+  deepseekThinking: 'disabled' | 'enabled';
+  deepseekReasoningEffort: 'high' | 'max';
 }
 
 const initialSettingsState: SettingsState = {
@@ -66,6 +69,8 @@ const initialSettingsState: SettingsState = {
   limitGenerateDescription: 3000,
   limitMessageContent: 8000,
   apiFailureTimeout: 20,
+  deepseekThinking: 'disabled',
+  deepseekReasoningEffort: 'high',
 };
 
 type SettingsAction =
@@ -287,6 +292,9 @@ export default function SettingsPage() {
       payload.limitGenerateDescription = dbSettings.limit_generateDescription ? parseInt(dbSettings.limit_generateDescription) : 3000;
       payload.limitMessageContent = dbSettings.limit_messageContent ? parseInt(dbSettings.limit_messageContent) : 8000;
       payload.apiFailureTimeout = dbSettings.apiFailureTimeout ? Math.max(5, Math.min(120, parseInt(dbSettings.apiFailureTimeout))) : 20;
+      // DeepSeek thinking/reasoning
+      payload.deepseekThinking = dbSettings.deepseekThinking === 'enabled' ? 'enabled' : 'disabled';
+      payload.deepseekReasoningEffort = dbSettings.deepseekReasoningEffort === 'max' ? 'max' : 'high';
 
       // Single dispatch triggers exactly ONE re-render instead of 24+
       dispatch({ type: 'LOAD_ALL', payload });
@@ -330,6 +338,8 @@ export default function SettingsPage() {
           limit_generateDescription: String(state.limitGenerateDescription),
           limit_messageContent: String(state.limitMessageContent),
           apiFailureTimeout: String(state.apiFailureTimeout),
+          deepseekThinking: state.deepseekThinking,
+          deepseekReasoningEffort: state.deepseekReasoningEffort,
         })
       });
       if (res.ok) {
@@ -834,6 +844,36 @@ export default function SettingsPage() {
             </div>
           )}
 
+          {/* DeepSeek Thinking/Reasoning Mode */}
+          {state.aiProvider === 'deepseek' && (
+            <div className="form-group">
+              <label className="form-label">Thinking / Reasoning Mode</label>
+              <select
+                className="form-select"
+                value={state.deepseekThinking}
+                onChange={e => dispatch({ type: 'SET_FIELD', field: 'deepseekThinking', value: e.target.value })}
+              >
+                <option value="disabled">Disabled</option>
+                <option value="enabled">Enabled</option>
+              </select>
+              <p className="text-xs text-secondary mt-1">Enable DeepSeek thinking/reasoning for more thorough responses (uses more tokens).</p>
+              {state.deepseekThinking === 'enabled' && (
+                <div className="mt-3">
+                  <label className="form-label">Reasoning Effort</label>
+                  <select
+                    className="form-select"
+                    value={state.deepseekReasoningEffort}
+                    onChange={e => dispatch({ type: 'SET_FIELD', field: 'deepseekReasoningEffort', value: e.target.value })}
+                  >
+                    <option value="high">High</option>
+                    <option value="max">Max</option>
+                  </select>
+                  <p className="text-xs text-secondary mt-1">Controls how much reasoning effort the model applies.</p>
+                </div>
+              )}
+            </div>
+          )}
+
           {state.aiProvider === 'custom' && (
             <>
               <div className="form-group">
@@ -858,7 +898,7 @@ export default function SettingsPage() {
               className="form-input"
               value={state.modelName}
               onChange={e => dispatch({ type: 'SET_FIELD', field: 'modelName', value: e.target.value })}
-              placeholder={state.aiProvider === 'deepseek' ? 'deepseek-chat' 
+              placeholder={state.aiProvider === 'deepseek' ? 'deepseek-v4-flash' 
                 : state.aiProvider === 'openai' ? 'gpt-5-mini' 
                 : state.aiProvider === 'openrouter' ? 'openrouter/auto' 
                 : 'your-model-name'}

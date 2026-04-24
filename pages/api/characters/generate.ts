@@ -1,5 +1,5 @@
 import { apiKeyNotConfigured, serverError } from '../../../lib/apiErrors';
-import { getAIConfig, tokenFieldFor, normalizeTemperature, getMaxTokens } from '../../../lib/aiProvider';
+import { getAIConfig, tokenFieldFor, normalizeTemperature, getMaxTokens, buildDeepSeekThinking } from '../../../lib/aiProvider';
 import type { AIConfig } from '../../../lib/aiProvider';
 import { callUpstreamAI } from '../../../lib/upstreamAI';
 import prisma from '../../../lib/prisma';
@@ -84,6 +84,7 @@ Perspective: ${perspective.toUpperCase()} POV. ${perspectiveLine}
       ...(normTemp !== undefined ? { temperature: normTemp } : {}),
       stream: false,
       ...(requestMaxTokens ? { [tokenField]: requestMaxTokens } : {}),
+      ...buildDeepSeekThinking(aiCfg as AIConfig),
       messages
     };
 

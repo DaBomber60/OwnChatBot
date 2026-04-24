@@ -1,7 +1,7 @@
 import prisma from '../../../../lib/prisma';
 import { truncateMessagesIfNeeded, injectTruncationNote } from '../../../../lib/messageUtils';
 import { apiKeyNotConfigured, badRequest, notFound, serverError } from '../../../../lib/apiErrors';
-import { getAIConfig, tokenFieldFor, normalizeTemperature, type AIConfig } from '../../../../lib/aiProvider';
+import { getAIConfig, tokenFieldFor, normalizeTemperature, buildDeepSeekThinking, type AIConfig } from '../../../../lib/aiProvider';
 import { buildSystemPrompt, replacePlaceholders } from '../../../../lib/systemPrompt';
 import { callUpstreamAI } from '../../../../lib/upstreamAI';
 import { withApiHandler } from '../../../../lib/withApiHandler';
@@ -81,6 +81,7 @@ export default withApiHandler({ parseId: true }, {
       ...(normTemp !== undefined ? { temperature: normTemp } : {}),
       stream: false,
       ...(requestMaxTokens ? { [tokenField]: requestMaxTokens } : {}),
+      ...buildDeepSeekThinking(aiCfg as AIConfig),
       messages: truncationResult.messages
     };
 

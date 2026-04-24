@@ -3,7 +3,7 @@ import prisma from '../../../lib/prisma';
 import { buildSystemPrompt } from '../../../lib/systemPrompt';
 import { truncateMessagesIfNeeded, injectTruncationNote } from '../../../lib/messageUtils';
 import { apiKeyNotConfigured, badRequest, notFound, serverError, tooManyRequests, payloadTooLarge } from '../../../lib/apiErrors';
-import { getAIConfig, tokenFieldFor, normalizeTemperature, DEFAULT_FALLBACK_URL, clampMaxTokens } from '../../../lib/aiProvider';
+import { getAIConfig, tokenFieldFor, normalizeTemperature, DEFAULT_FALLBACK_URL, clampMaxTokens, buildDeepSeekThinking } from '../../../lib/aiProvider';
 import type { AIConfig } from '../../../lib/aiProvider';
 import { limiters, clientIp } from '../../../lib/rateLimit';
 import { enforceBodySize } from '../../../lib/bodyLimit';
@@ -157,6 +157,7 @@ export default withApiHandler({}, {
     ...(normTemp !== undefined ? { temperature: normTemp } : {}),
     stream,
     ...(computedMaxTokens ? { [tokenField]: computedMaxTokens } : {}),
+    ...buildDeepSeekThinking(aiCfg as AIConfig),
     messages: truncationResult.messages
   };
 

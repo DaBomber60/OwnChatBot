@@ -24,6 +24,9 @@ export interface AIConfig {
   maxTokens: number;          // Default 4096, clamped [256, 8192]
   truncationLimit: number;    // Default 150000, clamped [30000, 320000]
   summaryPrompt: string;      // Default long prompt
+  // DeepSeek thinking/reasoning mode
+  deepseekThinking: 'disabled' | 'enabled';  // Default 'disabled'
+  deepseekReasoningEffort: 'high' | 'max';   // Default 'high' (only used when thinking is enabled)
 }
 
 export const DEFAULT_FALLBACK_URL = 'https://api.deepseek.com/chat/completions';
@@ -32,7 +35,7 @@ interface RawSettingsMap { [k: string]: string | undefined }
 
 // Default presets (OpenAI-compatible response schema assumption)
 const PRESET_CONFIG: Record<Exclude<AIProvider, 'custom'>, { url: string; model: string; }> = {
-  deepseek: { url: 'https://api.deepseek.com/chat/completions', model: 'deepseek-chat' },
+  deepseek: { url: 'https://api.deepseek.com/chat/completions', model: 'deepseek-v4-flash' },
   openai: { url: 'https://api.openai.com/v1/chat/completions', model: 'gpt-5-mini' },
   openrouter: { url: 'https://openrouter.ai/api/v1/chat/completions', model: 'openrouter/auto' },
   anthropic: { url: 'https://api.anthropic.com/v1/messages', model: 'claude-3-5-haiku-20241022' }
@@ -51,6 +54,8 @@ export async function getAIConfig(): Promise<AIConfig | { error: string; code: s
       'apiKey_custom',
       'aiProvider', 'apiBaseUrl', 'modelName',
       'modelEnableTemperature', 'maxTokenFieldName',
+      // DeepSeek thinking/reasoning mode
+      'deepseekThinking', 'deepseekReasoningEffort',
       // Batched settings (previously separate queries)
       'temperature', 'maxTokens', 'maxCharacters', 'summaryPrompt'
     ] } }
@@ -101,12 +106,18 @@ export async function getAIConfig(): Promise<AIConfig | { error: string; code: s
   const maxTokensRaw = map.maxTokens ? parseInt(map.maxTokens, 10) : NaN;
   const maxCharsRaw = map.maxCharacters ? parseInt(map.maxCharacters, 10) : NaN;
 
+  // DeepSeek thinking/reasoning settings
+  const deepseekThinking = (map.deepseekThinking === 'enabled' ? 'enabled' : 'disabled') as 'disabled' | 'enabled';
+  const deepseekReasoningEffort = (map.deepseekReasoningEffort === 'max' ? 'max' : 'high') as 'high' | 'max';
+
   return {
     apiKey, provider, url, model, enableTemperature, tokenFieldOverride,
     temperature: !isNaN(temperature) ? temperature : DEFAULT_TEMPERATURE,
     maxTokens: !isNaN(maxTokensRaw) ? clampMaxTokens(maxTokensRaw) : DEFAULT_MAX_TOKENS,
     truncationLimit: !isNaN(maxCharsRaw) ? Math.max(TRUNCATION_MIN, Math.min(TRUNCATION_MAX, maxCharsRaw)) : DEFAULT_TRUNCATION_LIMIT,
     summaryPrompt: map.summaryPrompt || DEFAULT_SUMMARY_PROMPT,
+    deepseekThinking,
+    deepseekReasoningEffort,
   };
 }
 
@@ -216,4 +227,24 @@ export async function getSummaryPrompt(): Promise<string> {
     if (row?.value) return row.value;
   } catch { /* DB error — use default */ }
   return DEFAULT_SUMMARY_PROMPT;
+}
+
+// ---------------------------------------------------------------------------
+// DeepSeek thinking/reasoning helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Build the DeepSeek-specific `thinking` (and optionally `reasoning_effort`)
+ * fields to spread into an upstream request body.
+ * Returns an empty object for non-DeepSeek providers.
+ */
+export function buildDeepSeekThinking(cfg: AIConfig): Record<string, unknown> {
+  if (cfg.provider !== 'deepseek') return {};
+  if (cfg.deepseekThinking === 'enabled') {
+    return {
+      thinking: { type: 'enabled' },
+      reasoning_effort: cfg.deepseekReasoningEffort,
+    };
+  }
+  return { thinking: { type: 'disabled' } };
 }

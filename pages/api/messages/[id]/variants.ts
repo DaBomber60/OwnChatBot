@@ -6,7 +6,7 @@ import { apiKeyNotConfigured, badRequest, conflict, notFound, serverError, valid
 import { limiters, clientIp } from '../../../../lib/rateLimit';
 import { enforceBodySize } from '../../../../lib/bodyLimit';
 import { schemas, validateBody } from '../../../../lib/validate';
-import { getAIConfig, tokenFieldFor, normalizeTemperature } from '../../../../lib/aiProvider';
+import { getAIConfig, tokenFieldFor, normalizeTemperature, buildDeepSeekThinking } from '../../../../lib/aiProvider';
 import type { AIConfig } from '../../../../lib/aiProvider';
 import { withApiHandler } from '../../../../lib/withApiHandler';
 import { persistApiRequest, persistJsonResponse, persistSseResponse } from '../../../../lib/apiLog';
@@ -211,6 +211,7 @@ export default withApiHandler({ parseId: true }, {
         ...(normTemp !== undefined ? { temperature: normTemp } : {}),
         stream,
         ...(requestMaxTokens ? { [tokenField]: requestMaxTokens } : {}),
+        ...buildDeepSeekThinking(aiCfg as AIConfig),
         messages: truncationResult.messages
       };
 

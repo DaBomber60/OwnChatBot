@@ -60,6 +60,10 @@ export default withApiHandler({}, {
     const chatMessages = chatSessions.flatMap(s => s.messages);
     const messageVersions = chatMessages.flatMap(m => m.versions);
 
+    // Strip nested relations from sessions/messages to avoid duplicating data
+    const flatSessions = chatSessions.map(({ messages, ...s }) => s);
+    const flatMessages = chatMessages.map(({ versions, ...m }) => m);
+
     const exportData = {
       version: '1.0.0',
       exportedAt: new Date().toISOString(),
@@ -67,8 +71,8 @@ export default withApiHandler({}, {
         personas,
         characterGroups,
         characters,
-        chatSessions,
-        chatMessages,
+        chatSessions: flatSessions,
+        chatMessages: flatMessages,
         messageVersions,
         userPrompts,
         settings
@@ -100,8 +104,8 @@ export default withApiHandler({}, {
       // Default ZIP format
       const zip = new JSZip();
       
-      // Add the main data file
-      zip.file('database.json', JSON.stringify(exportData, null, 2));
+      // Add the main data file (compact JSON to reduce memory usage)
+      zip.file('database.json', JSON.stringify(exportData));
       
       // Add a readme file explaining the export
       const readmeContent = `OwnChatBot Database Export

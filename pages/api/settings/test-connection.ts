@@ -1,4 +1,5 @@
-import { getAIConfig } from '../../../lib/aiProvider';
+import { getAIConfig, buildDeepSeekThinking } from '../../../lib/aiProvider';
+import type { AIConfig } from '../../../lib/aiProvider';
 import { callUpstreamAI } from '../../../lib/upstreamAI';
 import { withApiHandler } from '../../../lib/withApiHandler';
 import { serverError, apiKeyNotConfigured } from '../../../lib/apiErrors';
@@ -20,12 +21,8 @@ export default withApiHandler({}, {
       ],
       max_tokens: 16,
       stream: false,
+      ...buildDeepSeekThinking(cfg as AIConfig),
     };
-
-    // DeepSeek-specific: disable thinking/reasoning to keep latency low
-    if (cfg.provider === 'deepseek') {
-      body.thinking = { type: 'disabled' };
-    }
 
     const start = Date.now();
     try {
