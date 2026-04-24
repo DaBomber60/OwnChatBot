@@ -266,11 +266,9 @@ export function injectThinkingGuidance(cfg: AIConfig, messages: Array<{ role: st
   if (!guidance) return;
   // Find the first user message that is not just a placeholder '.'
   const firstUserIdx = messages.findIndex(m => m.role === 'user' && m.content.trim() !== '.');
-  if (firstUserIdx === -1) return;
-  messages[firstUserIdx] = {
-    ...messages[firstUserIdx],
-    content: messages[firstUserIdx].content + '\n\n' + guidance,
-  };
+  const msg = messages[firstUserIdx];
+  if (firstUserIdx === -1 || !msg) return;
+  messages[firstUserIdx] = { role: msg.role, content: msg.content + '\n\n' + guidance };
 }
 
 /**

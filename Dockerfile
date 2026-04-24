@@ -45,11 +45,12 @@ RUN --mount=type=cache,target=/root/.npm,id=npm-${TARGETARCH} \
 # Copy full source (after deps to keep cache stable on code-only changes)
 COPY . .
 
-# Generate Prisma client, build Next.js (standalone), then prune dev deps in a single layer
+# Generate Prisma client and build Next.js (standalone).
+# Dev deps are NOT pruned — the build stage is discarded after multi-stage copy,
+# and pruning would remove the prisma CLI needed by the assembly step below.
 RUN --mount=type=cache,target=/root/.npm,id=npm-${TARGETARCH} \
     npx prisma generate && \
-    npm run build && \
-    npm prune --omit=dev || true
+    npm run build
 
 # Assemble minimal runtime artifact set under /out for a single COPY later
 RUN set -eux; \
