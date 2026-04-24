@@ -63,10 +63,11 @@ RUN set -eux; \
     # Prisma schema and engines/CLI pieces (for migrations & runtime queries)
     cp -R prisma /out/prisma; \
     mkdir -p /out/node_modules; \
-    cp -R node_modules/.prisma /out/node_modules/.prisma; \
-    cp -R node_modules/prisma /out/node_modules/prisma; \
-    cp -R node_modules/@prisma /out/node_modules/@prisma; \
-    cp -R node_modules/.bin /out/node_modules/.bin; \
+    # Use trailing '/.' to merge contents into dirs that may already exist from standalone output
+    cp -R node_modules/.prisma/. /out/node_modules/.prisma/; \
+    cp -R node_modules/prisma/. /out/node_modules/prisma/; \
+    cp -R node_modules/@prisma/. /out/node_modules/@prisma/; \
+    cp -R node_modules/.bin/. /out/node_modules/.bin/; \
     cp docker-entrypoint.sh /out/docker-entrypoint.sh; \
     cp healthcheck.js /out/healthcheck.js
 
