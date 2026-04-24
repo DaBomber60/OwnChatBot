@@ -6,7 +6,7 @@ import { apiKeyNotConfigured, badRequest, conflict, notFound, serverError, valid
 import { limiters, clientIp } from '../../../../lib/rateLimit';
 import { enforceBodySize } from '../../../../lib/bodyLimit';
 import { schemas, validateBody } from '../../../../lib/validate';
-import { getAIConfig, tokenFieldFor, normalizeTemperature, buildDeepSeekThinking } from '../../../../lib/aiProvider';
+import { getAIConfig, tokenFieldFor, normalizeTemperature, buildDeepSeekThinking, injectThinkingGuidance, stripThinkTags, matchPartialTag } from '../../../../lib/aiProvider';
 import type { AIConfig } from '../../../../lib/aiProvider';
 import { withApiHandler } from '../../../../lib/withApiHandler';
 import { persistApiRequest, persistJsonResponse, persistSseResponse } from '../../../../lib/apiLog';
@@ -143,6 +143,7 @@ export default withApiHandler({ parseId: true }, {
         return serverError(res, aiCfg.error, aiCfg.code);
       }
   const { apiKey, url: upstreamUrl, model, provider, enableTemperature, tokenFieldOverride, temperature: cfgTemperature, maxTokens: cfgMaxTokens, truncationLimit } = aiCfg as AIConfig;
+  const isDeepSeekThinking = (aiCfg as AIConfig).provider === 'deepseek' && (aiCfg as AIConfig).deepseekThinking === 'enabled';
 
   // Determine temperature: optional per-request override, else from batched config
   const parsedOverride = typeof bodyTemperature === 'string' ? parseFloat(bodyTemperature) : (typeof bodyTemperature === 'number' ? bodyTemperature : NaN);
@@ -199,6 +200,9 @@ export default withApiHandler({ parseId: true }, {
       const truncationResult = truncateMessagesIfNeeded(allMessages, truncationLimit);
 
       injectTruncationNote(truncationResult);
+
+      // Inject DeepSeek thinking guidance into the first user message (ephemeral, not persisted)
+      injectThinkingGuidance(aiCfg as AIConfig, truncationResult.messages);
 
       // Use max_tokens from batched AI config
       const requestMaxTokens = cfgMaxTokens;
@@ -261,7 +265,10 @@ export default withApiHandler({ parseId: true }, {
   // Success path
   const dataParsed = (data && !data.__rawText) ? data : (() => { try { return JSON.parse(rawText); } catch { return {}; } })();
   // Non-streaming: handle response normally
-  const newContent = (dataParsed as any).choices?.[0]?.message?.content;
+  const newContent = (() => {
+    const raw = (dataParsed as any).choices?.[0]?.message?.content;
+    return raw && isDeepSeekThinking ? stripThinkTags(raw) : raw;
+  })();
 
         if (!newContent) {
           return serverError(res, 'No content received from API', 'UPSTREAM_NO_CONTENT');
@@ -318,7 +325,10 @@ export default withApiHandler({ parseId: true }, {
           });
         }
         // Success non-SSE while stream requested: create the variant directly
-        const newContent = (data && data.choices && data.choices[0]?.message?.content) ? data.choices[0].message.content : (data && data.content);
+        const newContent = (() => {
+          const raw = (data && data.choices && data.choices[0]?.message?.content) ? data.choices[0].message.content : (data && data.content);
+          return raw && isDeepSeekThinking ? stripThinkTags(raw) : raw;
+        })();
         if (!newContent) {
           return serverError(res, 'No content received from API', 'UPSTREAM_NO_CONTENT');
         }
@@ -355,9 +365,13 @@ export default withApiHandler({ parseId: true }, {
       }
       
   let assistantText = '';
+  let assistantThinkingText = '';   // Thinking/reasoning content for logs only
   const responseFrames: string[] = [];
       let clientDisconnected = false;
       let streamCompletedNaturally = false;
+      // DeepSeek <think> tag filtering state
+      let insideThinkTag = false;
+      let thinkTagBuffer = '';
       
       // Handle client disconnect
       req.on('close', () => {
@@ -410,12 +424,84 @@ export default withApiHandler({ parseId: true }, {
             try {
               const parsed = JSON.parse(payload);
               const delta = parsed.choices?.[0]?.delta?.content || '';
+              const reasoningDelta = parsed.choices?.[0]?.delta?.reasoning_content || '';
               responseFrames.push(payload);
               
-              if (delta && canWriteToResponse()) {
-                assistantText += delta;
-                // Send only the delta content to client
-                res.write(`data: ${JSON.stringify({ content: delta })}\n\n`);
+              // Handle reasoning_content (DeepSeek thinking via separate field)
+              if (reasoningDelta && isDeepSeekThinking) {
+                assistantThinkingText += reasoningDelta; // Keep in logs for download
+                if (!insideThinkTag) {
+                  insideThinkTag = true;
+                  if (canWriteToResponse()) {
+                    try { res.write(`data: ${JSON.stringify({ thinking: true })}\n\n`); } catch {}
+                  }
+                }
+              }
+
+              if (delta) {
+                // If we were in reasoning_content mode, signal thinking ended
+                if (insideThinkTag && isDeepSeekThinking && !reasoningDelta) {
+                  insideThinkTag = false;
+                  if (canWriteToResponse()) {
+                    try { res.write(`data: ${JSON.stringify({ thinking: false })}\n\n`); } catch {}
+                  }
+                }
+
+                // Filter <think> tags for DeepSeek thinking mode
+                let clientDelta = delta;
+                if (isDeepSeekThinking) {
+                  clientDelta = '';
+                  let text = thinkTagBuffer + delta;
+                  thinkTagBuffer = '';
+                  while (text.length > 0) {
+                    if (insideThinkTag) {
+                      const closeIdx = text.indexOf('</think>');
+                      if (closeIdx !== -1) {
+                        insideThinkTag = false;
+                        assistantThinkingText += text.slice(0, closeIdx);
+                        text = text.slice(closeIdx + 8);
+                        if (canWriteToResponse()) {
+                          try { res.write(`data: ${JSON.stringify({ thinking: false })}\n\n`); } catch {}
+                        }
+                      } else {
+                        const partialClose = matchPartialTag(text, '</think>');
+                        if (partialClose > 0) {
+                          assistantThinkingText += text.slice(0, -partialClose);
+                          thinkTagBuffer = text.slice(-partialClose);
+                        } else {
+                          assistantThinkingText += text;
+                        }
+                        text = '';
+                      }
+                    } else {
+                      const openIdx = text.indexOf('<think>');
+                      if (openIdx !== -1) {
+                        clientDelta += text.slice(0, openIdx);
+                        insideThinkTag = true;
+                        text = text.slice(openIdx + 7);
+                        if (canWriteToResponse()) {
+                          try { res.write(`data: ${JSON.stringify({ thinking: true })}\n\n`); } catch {}
+                        }
+                      } else {
+                        const partialOpen = matchPartialTag(text, '<think>');
+                        if (partialOpen > 0) {
+                          clientDelta += text.slice(0, -partialOpen);
+                          thinkTagBuffer = text.slice(-partialOpen);
+                        } else {
+                          clientDelta += text;
+                        }
+                        text = '';
+                      }
+                    }
+                  }
+                  assistantText += clientDelta;
+                } else {
+                  assistantText += delta;
+                }
+
+                if (clientDelta && canWriteToResponse()) {
+                  res.write(`data: ${JSON.stringify({ content: clientDelta })}\n\n`);
+                }
               }
             } catch {
               // Skip malformed JSON
@@ -444,6 +530,7 @@ export default withApiHandler({ parseId: true }, {
         frames: responseFrames,
         completed: streamCompletedNaturally && !clientDisconnected,
         assistantText,
+        assistantThinkingText,
       });
 
       // Handle variant saving/cleanup based on how the stream ended
@@ -461,13 +548,15 @@ export default withApiHandler({ parseId: true }, {
         }
       } else if (streamCompletedNaturally && assistantText && assistantText.length > 0) {
         // Stream completed successfully AND client didn't disconnect - save the variant
-  console.log(`[Variant] Stream completed naturally without client disconnect. Saving variant ${nextVersion} with ${assistantText.length} characters`);
+        // assistantText is already clean (thinking content stored separately)
+        const variantContent = assistantText;
+  console.log(`[Variant] Stream completed naturally without client disconnect. Saving variant ${nextVersion} with ${variantContent.length} characters`);
         
         try {
           await prisma.messageVersion.create({
             data: {
               messageId,
-              content: assistantText,
+              content: variantContent,
               version: nextVersion,
               isActive: false
             }

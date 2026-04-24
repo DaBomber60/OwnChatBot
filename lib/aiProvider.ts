@@ -27,6 +27,7 @@ export interface AIConfig {
   // DeepSeek thinking/reasoning mode
   deepseekThinking: 'disabled' | 'enabled';  // Default 'disabled'
   deepseekReasoningEffort: 'high' | 'max';   // Default 'high' (only used when thinking is enabled)
+  deepseekThinkingGuidance: string;          // Guidance text appended to first user message when thinking is enabled
 }
 
 export const DEFAULT_FALLBACK_URL = 'https://api.deepseek.com/chat/completions';
@@ -55,7 +56,7 @@ export async function getAIConfig(): Promise<AIConfig | { error: string; code: s
       'aiProvider', 'apiBaseUrl', 'modelName',
       'modelEnableTemperature', 'maxTokenFieldName',
       // DeepSeek thinking/reasoning mode
-      'deepseekThinking', 'deepseekReasoningEffort',
+      'deepseekThinking', 'deepseekReasoningEffort', 'deepseekThinkingGuidance',
       // Batched settings (previously separate queries)
       'temperature', 'maxTokens', 'maxCharacters', 'summaryPrompt'
     ] } }
@@ -109,6 +110,7 @@ export async function getAIConfig(): Promise<AIConfig | { error: string; code: s
   // DeepSeek thinking/reasoning settings
   const deepseekThinking = (map.deepseekThinking === 'enabled' ? 'enabled' : 'disabled') as 'disabled' | 'enabled';
   const deepseekReasoningEffort = (map.deepseekReasoningEffort === 'max' ? 'max' : 'high') as 'high' | 'max';
+  const deepseekThinkingGuidance = map.deepseekThinkingGuidance ?? DEFAULT_THINKING_GUIDANCE;
 
   return {
     apiKey, provider, url, model, enableTemperature, tokenFieldOverride,
@@ -118,6 +120,7 @@ export async function getAIConfig(): Promise<AIConfig | { error: string; code: s
     summaryPrompt: map.summaryPrompt || DEFAULT_SUMMARY_PROMPT,
     deepseekThinking,
     deepseekReasoningEffort,
+    deepseekThinkingGuidance,
   };
 }
 
@@ -163,7 +166,7 @@ export function normalizeTemperature(provider: AIProvider, model: string, reques
 
 const DEFAULT_TRUNCATION_LIMIT = 150000;
 const TRUNCATION_MIN = 30000;
-const TRUNCATION_MAX = 320000;
+const TRUNCATION_MAX = 2500000;
 
 /** Read the max-characters truncation limit from settings. Default: 150 000. Clamped [30 000, 320 000]. */
 export async function getTruncationLimit(): Promise<number> {
@@ -179,7 +182,7 @@ export async function getTruncationLimit(): Promise<number> {
 
 export const DEFAULT_MAX_TOKENS = 4096;
 export const MAX_TOKENS_MIN = 256;
-export const MAX_TOKENS_MAX = 8192;
+export const MAX_TOKENS_MAX = 256000;
 
 /** Clamp a max-tokens value to [min, 8192]. */
 export function clampMaxTokens(n: number, min = MAX_TOKENS_MIN): number {
@@ -204,7 +207,7 @@ export async function getMaxTokens(opts?: { defaultValue?: number; min?: number 
   return def;
 }
 
-export const DEFAULT_TEMPERATURE = 0.7;
+export const DEFAULT_TEMPERATURE = 1;
 
 /** Read the temperature setting from DB. Default: 0.7. */
 export async function getTemperature(): Promise<number> {
@@ -247,4 +250,46 @@ export function buildDeepSeekThinking(cfg: AIConfig): Record<string, unknown> {
     };
   }
   return { thinking: { type: 'disabled' } };
+}
+
+export const DEFAULT_THINKING_GUIDANCE = '【Thinking Mode Requirements】Within your thinking process (inside the <think> tags), please follow these rules: 1.State all analysis content directly as the external storyteller that you are, you control {{char}}, but you are not {{char}}. 2. Use analytical language, all thinking should be done from the position of a third-person storyteller. 3. Your thinking content should focus on plot direction analysis and reply content planning. Do not perform roleplay-style inner monologue performances within the thinking process.';
+
+/**
+ * If DeepSeek thinking is enabled, append the thinking guidance text to the
+ * first user message in the messages array (mutates in place).
+ * If the original first user message was truncated, appends to the earliest
+ * user message still present.
+ */
+export function injectThinkingGuidance(cfg: AIConfig, messages: Array<{ role: string; content: string }>): void {
+  if (cfg.provider !== 'deepseek' || cfg.deepseekThinking !== 'enabled') return;
+  const guidance = cfg.deepseekThinkingGuidance;
+  if (!guidance) return;
+  // Find the first user message that is not just a placeholder '.'
+  const firstUserIdx = messages.findIndex(m => m.role === 'user' && m.content.trim() !== '.');
+  if (firstUserIdx === -1) return;
+  messages[firstUserIdx] = {
+    ...messages[firstUserIdx],
+    content: messages[firstUserIdx].content + '\n\n' + guidance,
+  };
+}
+
+/**
+ * Strip `<think>...</think>` blocks from content, returning only the
+ * visible response text. Used for content saved to DB / displayed to users.
+ */
+export function stripThinkTags(content: string): string {
+  // Remove complete <think>...</think> blocks (including multiline)
+  let result = content.replace(/<think>[\s\S]*?<\/think>/g, '');
+  // Remove any trailing incomplete <think>... (no closing tag) — partial stream
+  result = result.replace(/<think>[\s\S]*$/, '');
+  // Trim leading whitespace left behind
+  return result.trimStart();
+}
+
+/** Check if `text` ends with a partial prefix of `tag`. Returns the length of the partial match, or 0. */
+export function matchPartialTag(text: string, tag: string): number {
+  for (let len = Math.min(tag.length - 1, text.length); len > 0; len--) {
+    if (text.endsWith(tag.slice(0, len))) return len;
+  }
+  return 0;
 }

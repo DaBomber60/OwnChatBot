@@ -6,6 +6,7 @@ import { useRouter } from 'next/router';
 import { logout } from '../lib/auth';
 import Head from 'next/head';
 import type { AIProvider } from '../types/models';
+import { DEFAULT_THINKING_GUIDANCE } from '../lib/aiProvider';
 
 // --- Settings reducer (single state object replaces 24 individual useState calls) ---
 
@@ -41,6 +42,7 @@ interface SettingsState {
   // DeepSeek thinking/reasoning
   deepseekThinking: 'disabled' | 'enabled';
   deepseekReasoningEffort: 'high' | 'max';
+  deepseekThinkingGuidance: string;
 }
 
 const initialSettingsState: SettingsState = {
@@ -54,7 +56,7 @@ const initialSettingsState: SettingsState = {
   stream: true,
   originalApiKey: '',
   defaultPromptId: null,
-  temperature: 0.7,
+  temperature: 1,
   maxCharacters: 150000,
   maxTokens: 4096,
   devMode: false,
@@ -71,6 +73,7 @@ const initialSettingsState: SettingsState = {
   apiFailureTimeout: 20,
   deepseekThinking: 'disabled',
   deepseekReasoningEffort: 'high',
+  deepseekThinkingGuidance: DEFAULT_THINKING_GUIDANCE,
 };
 
 type SettingsAction =
@@ -276,9 +279,9 @@ export default function SettingsPage() {
       // Default streaming to true if the setting has never been saved (undefined)
       payload.stream = dbSettings.stream === undefined ? true : dbSettings.stream === 'true';
       payload.defaultPromptId = dbSettings.defaultPromptId ? Number(dbSettings.defaultPromptId) : null;
-      payload.temperature = dbSettings.temperature ? parseFloat(dbSettings.temperature) : 0.7;
-      payload.maxCharacters = dbSettings.maxCharacters ? Math.max(30000, Math.min(320000, parseInt(dbSettings.maxCharacters))) : 150000;
-      payload.maxTokens = dbSettings.maxTokens ? Math.max(256, Math.min(8192, parseInt(dbSettings.maxTokens))) : 4096;
+      payload.temperature = dbSettings.temperature ? parseFloat(dbSettings.temperature) : 1;
+      payload.maxCharacters = dbSettings.maxCharacters ? Math.max(30000, Math.min(2500000, parseInt(dbSettings.maxCharacters))) : 150000;
+      payload.maxTokens = dbSettings.maxTokens ? Math.max(256, Math.min(256000, parseInt(dbSettings.maxTokens))) : 4096;
       payload.devMode = dbSettings.devMode === 'true';
       payload.summaryPrompt = dbSettings.summaryPrompt || 'Create a brief, focused summary (~100 words) of the roleplay between {{char}} and {{user}}. Include:\\n\\n- Key events and decisions\\n- Important emotional moments\\n- Location/time changes\\n\\nRules: Only summarize provided transcript. No speculation. Single paragraph format.';
       // Dynamic limits (fallback to defaults)
@@ -295,6 +298,7 @@ export default function SettingsPage() {
       // DeepSeek thinking/reasoning
       payload.deepseekThinking = dbSettings.deepseekThinking === 'enabled' ? 'enabled' : 'disabled';
       payload.deepseekReasoningEffort = dbSettings.deepseekReasoningEffort === 'max' ? 'max' : 'high';
+      payload.deepseekThinkingGuidance = dbSettings.deepseekThinkingGuidance ?? DEFAULT_THINKING_GUIDANCE;
 
       // Single dispatch triggers exactly ONE re-render instead of 24+
       dispatch({ type: 'LOAD_ALL', payload });
@@ -340,6 +344,7 @@ export default function SettingsPage() {
           apiFailureTimeout: String(state.apiFailureTimeout),
           deepseekThinking: state.deepseekThinking,
           deepseekReasoningEffort: state.deepseekReasoningEffort,
+          deepseekThinkingGuidance: state.deepseekThinkingGuidance,
         })
       });
       if (res.ok) {
@@ -858,6 +863,7 @@ export default function SettingsPage() {
               </select>
               <p className="text-xs text-secondary mt-1">Enable DeepSeek thinking/reasoning for more thorough responses (uses more tokens).</p>
               {state.deepseekThinking === 'enabled' && (
+                <>
                 <div className="mt-3">
                   <label className="form-label">Reasoning Effort</label>
                   <select
@@ -870,6 +876,18 @@ export default function SettingsPage() {
                   </select>
                   <p className="text-xs text-secondary mt-1">Controls how much reasoning effort the model applies.</p>
                 </div>
+                <div className="mt-3">
+                  <label className="form-label">Thinking Guidance</label>
+                  <textarea
+                    className="form-textarea"
+                    rows={4}
+                    value={state.deepseekThinkingGuidance}
+                    onChange={e => dispatch({ type: 'SET_FIELD', field: 'deepseekThinkingGuidance', value: e.target.value })}
+                    placeholder={DEFAULT_THINKING_GUIDANCE}
+                  />
+                  <p className="text-xs text-secondary mt-1">Guidance text appended to the first user message when thinking is enabled. This is invisible to the user and only sent to the model.</p>
+                </div>
+                </>
               )}
             </div>
           )}
@@ -1056,8 +1074,8 @@ export default function SettingsPage() {
             <input
               type="range"
               min="30000"
-              max="320000"
-              step="1000"
+              max="2500000"
+              step="10000"
               value={state.maxCharacters}
               onChange={e => dispatch({ type: 'SET_FIELD', field: 'maxCharacters', value: parseInt(e.target.value) })}
               className="form-range w-full"
@@ -1065,7 +1083,7 @@ export default function SettingsPage() {
             <div className="flex justify-between text-xs text-muted mt-1">
               <span>30,000</span>
               <span>150,000 (default)</span>
-              <span>320,000</span>
+              <span>2,500,000</span>
             </div>
           </div>
 
@@ -1076,7 +1094,7 @@ export default function SettingsPage() {
             <input
               type="range"
               min="256"
-              max="8192"
+              max="256000"
               step="128"
               value={state.maxTokens}
               onChange={e => dispatch({ type: 'SET_FIELD', field: 'maxTokens', value: parseInt(e.target.value) })}
@@ -1085,7 +1103,7 @@ export default function SettingsPage() {
             <div className="flex justify-between text-xs text-muted mt-1">
               <span>256</span>
               <span>4096 (default)</span>
-              <span>8192</span>
+              <span>256,000</span>
             </div>
           </div>
 

@@ -63,6 +63,7 @@ export default function ChatSessionPage() {
   const [loading, setLoading] = useState(false);
   const [devMode, setDevMode] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
+  const [isModelThinking, setIsModelThinking] = useState(false);
   const [justFinishedStreaming, setJustFinishedStreaming] = useState(false);
   const [skipNextMessageUpdate, setSkipNextMessageUpdate] = useState(false);
   const [editingMessageIndex, setEditingMessageIndex] = useState<number | null>(null);
@@ -532,6 +533,7 @@ export default function ChatSessionPage() {
         body: { ...(opts?.temperature != null ? { temperature: opts.temperature } : {}) },
         abortControllerRef: variantAbortController,
         skipSettingsInBody: true,
+        onThinking: (thinking) => setIsModelThinking(thinking),
         onStreamChunk: (accumulated) => {
           setVariantDisplayContent(prev => { const m = new Map(prev); m.set(messageId, accumulated); return m; });
           maybeStartStreamingFollow();
@@ -553,11 +555,13 @@ export default function ChatSessionPage() {
         onAbort: () => {
           revertVariantPlaceholder(messageId);
           setGeneratingVariant(null);
+          setIsModelThinking(false);
           stopStreamingFollow();
         },
       });
 
       if (result.wasAborted) return;
+      setIsModelThinking(false);
 
       // For streaming: fetch the real variant record to replace the placeholder
       if (result.wasStreaming) {
@@ -1770,6 +1774,7 @@ export default function ChatSessionPage() {
     
     setLoading(true);
     setIsStreaming(true);
+    setIsModelThinking(false);
     let originalContent = '';
     setMessages(prev => {
       const lastIdx = prev.findLastIndex(m => m.role === 'assistant');
@@ -1788,6 +1793,7 @@ export default function ChatSessionPage() {
         userMessage: '[SYSTEM NOTE: Ignore this message, reply as if you are extending the last message you sent as if your reply never ended - do not make an effort to send a message on behalf of the user unless the most recent message from you did include speaking on behalf of the user. Specifically do not start messages with `{{user}}: `, you should NEVER use that format in any message.]',
       },
       abortControllerRef: streamingAbortController,
+      onThinking: (thinking) => setIsModelThinking(thinking),
       onStreamChunk: (accumulated) => {
         streamingMessageRef.current = accumulated;
         setMessages(prev => {
@@ -1821,6 +1827,7 @@ export default function ChatSessionPage() {
       onAbort: () => {
         setLoading(false);
         setIsStreaming(false);
+        setIsModelThinking(false);
         setJustFinishedStreaming(true);
         streamingMessageRef.current = '';
         stopStreamingFollow();
@@ -1832,6 +1839,7 @@ export default function ChatSessionPage() {
     stopStreamingFollow();
     setLoading(false);
     setIsStreaming(false);
+    setIsModelThinking(false);
     setJustFinishedStreaming(true);
     setSkipNextMessageUpdate(true);
     streamingMessageRef.current = '';
@@ -1856,7 +1864,7 @@ export default function ChatSessionPage() {
       const totalChars = msgs.reduce((sum: number, m: any) => sum + (m?.content ? String(m.content).length : 0), 0);
       if (!Number.isFinite(totalChars) || totalChars <= 0) return '';
       const roundedUp = Math.ceil(totalChars / 10000) * 10000;
-      const recommended = Math.min(320000, roundedUp * 5);
+      const recommended = Math.min(2500000, roundedUp * 5);
       return `Request size: ${totalChars.toLocaleString()} characters.\nRecommendation: set Max Characters to ${recommended.toLocaleString()} and try again.`;
     } catch {
       return '';
@@ -2003,6 +2011,7 @@ export default function ChatSessionPage() {
     
     setLoading(true);
     setIsStreaming(true);
+    setIsModelThinking(false);
     streamingMessageRef.current = '';
     setMessages(prev => [...prev, { role: 'assistant', content: '' }]);
 
@@ -2016,6 +2025,7 @@ export default function ChatSessionPage() {
         retry: !!retryMessage,
       },
       abortControllerRef: streamingAbortController,
+      onThinking: (thinking) => setIsModelThinking(thinking),
       onStreamChunk: (accumulated) => {
         streamingMessageRef.current = accumulated;
         setMessages(prev => {
@@ -2043,7 +2053,7 @@ export default function ChatSessionPage() {
         const note = await buildRequestSizeNote();
         showError(note ? `${msg}\n\n${note}` : msg);
       },
-      onAbort: () => { setLoading(false); setIsStreaming(false); },
+      onAbort: () => { setLoading(false); setIsStreaming(false); setIsModelThinking(false); },
     });
 
     if (result.wasAborted) { stopStreamingFollow(); return; }
@@ -2078,6 +2088,7 @@ export default function ChatSessionPage() {
     stopStreamingFollow();
     setLoading(false);
     setIsStreaming(false);
+    setIsModelThinking(false);
     setJustFinishedStreaming(true);
     setSkipNextMessageUpdate(true);
     streamingMessageRef.current = '';
@@ -2351,14 +2362,20 @@ export default function ChatSessionPage() {
                   </div>
                 ) : (
                   <>
-                    <div 
-                      className="message-content" 
-                      dangerouslySetInnerHTML={{ __html: formatMessage(
-                        isUser && displayContent.includes(': ') ? 
-                          displayContent.replace(new RegExp(`^${session.persona.name}: `), '') : 
-                          displayContent
-                      ) }} 
-                    />
+                    {(() => {
+                      const isThinkingPlaceholder = !isUser && isLastAssistantMessage && !displayContent && (isModelThinking || loading || generatingVariant === messageId);
+                      const displayText = isThinkingPlaceholder
+                        ? `*${session.character.name} is thinking...*`
+                        : isUser && displayContent.includes(': ')
+                          ? displayContent.replace(new RegExp(`^${session.persona.name}: `), '')
+                          : displayContent;
+                      return (
+                        <div
+                          className={`message-content${isThinkingPlaceholder ? ' thinking-indicator' : ''}`}
+                          dangerouslySetInnerHTML={{ __html: formatMessage(displayText) }}
+                        />
+                      );
+                    })()}
                     <div className="chat-message-actions">
                       {isUser && !isEditing && (
                         <button className="delete-btn" onClick={() => deleteMessage(i)} title="Delete message">🗑️</button>

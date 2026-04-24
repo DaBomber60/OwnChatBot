@@ -863,6 +863,15 @@ p {
   font-style: italic;
 }
 
+/* Pulsing "thinking" indicator */
+@keyframes thinking-pulse {
+  0%, 100% { color: #888; }
+  50% { color: #ccc; }
+}
+.message-content.thinking-indicator em {
+  animation: thinking-pulse 1.5s ease-in-out infinite;
+}
+
 /* Styling for monospace code text in chat messages */
 .message-content code {
   font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Roboto Mono', 'Consolas', 'Courier New', monospace;

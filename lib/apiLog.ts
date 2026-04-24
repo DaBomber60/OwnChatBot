@@ -56,10 +56,11 @@ export async function persistSseResponse(
     frames: string[];
     completed: boolean;
     assistantText: string;
+    assistantThinkingText?: string;
   },
 ): Promise<void> {
   try {
-    const toStore = {
+    const toStore: Record<string, unknown> = {
       mode: 'sse',
       upstreamStatus: response.status,
       headers: extractHeaders(response),
@@ -67,6 +68,9 @@ export async function persistSseResponse(
       completed: opts.completed,
       assistantText: opts.assistantText,
     };
+    if (opts.assistantThinkingText) {
+      toStore.assistantThinkingText = opts.assistantThinkingText;
+    }
     await prisma.$executeRaw`UPDATE chat_sessions SET "lastApiResponse" = ${JSON.stringify(toStore)} WHERE id = ${sessionId}`;
   } catch (e) {
     console.error('Failed to persist lastApiResponse (sse)', e);

@@ -79,15 +79,15 @@ describe('clampMaxTokens', () => {
     expect(clampMaxTokens(-10)).toBe(256);
   });
 
-  it('clamps above maximum to 8192', () => {
-    expect(clampMaxTokens(99999)).toBe(8192);
-    expect(clampMaxTokens(10000)).toBe(8192);
+  it('clamps above maximum to 256000', () => {
+    expect(clampMaxTokens(999999)).toBe(256000);
+    expect(clampMaxTokens(300000)).toBe(256000);
   });
 
   it('returns the value when within range', () => {
     expect(clampMaxTokens(4096)).toBe(4096);
     expect(clampMaxTokens(256)).toBe(256);
-    expect(clampMaxTokens(8192)).toBe(8192);
+    expect(clampMaxTokens(256000)).toBe(256000);
   });
 
   it('respects custom min parameter', () => {

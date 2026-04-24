@@ -3,7 +3,7 @@ import prisma from '../../../lib/prisma';
 import { buildSystemPrompt } from '../../../lib/systemPrompt';
 import { truncateMessagesIfNeeded, injectTruncationNote } from '../../../lib/messageUtils';
 import { apiKeyNotConfigured, badRequest, notFound, serverError, tooManyRequests, payloadTooLarge } from '../../../lib/apiErrors';
-import { getAIConfig, tokenFieldFor, normalizeTemperature, DEFAULT_FALLBACK_URL, clampMaxTokens, buildDeepSeekThinking } from '../../../lib/aiProvider';
+import { getAIConfig, tokenFieldFor, normalizeTemperature, DEFAULT_FALLBACK_URL, clampMaxTokens, buildDeepSeekThinking, injectThinkingGuidance, stripThinkTags, matchPartialTag } from '../../../lib/aiProvider';
 import type { AIConfig } from '../../../lib/aiProvider';
 import { limiters, clientIp } from '../../../lib/rateLimit';
 import { enforceBodySize } from '../../../lib/bodyLimit';
@@ -32,6 +32,7 @@ export default withApiHandler({}, {
     return serverError(res, aiCfg.error, aiCfg.code);
   }
   const { apiKey, url: upstreamUrl, model, provider, enableTemperature, tokenFieldOverride, temperature: cfgTemperature, maxTokens: cfgMaxTokens, truncationLimit } = aiCfg as AIConfig;
+  const isDeepSeekThinking = (aiCfg as AIConfig).provider === 'deepseek' && (aiCfg as AIConfig).deepseekThinking === 'enabled';
   // Validate request body via Zod schema
   const parsed = validateBody(schemas.chatGenerate, req, res);
   if (!parsed) return;
@@ -132,6 +133,9 @@ export default withApiHandler({}, {
   }
   injectTruncationNote(truncationResult);
 
+  // Inject DeepSeek thinking guidance into the first user message (ephemeral, not persisted)
+  injectThinkingGuidance(aiCfg as AIConfig, truncationResult.messages);
+
   // Now, if this is a continuation request, append the ephemeral continuation directive as the LAST message.
   // This guarantees it's kept (not subject to truncation) and not prefixed with persona name.
   if (isContinuationPlaceholder(userMessage)) {
@@ -176,6 +180,8 @@ export default withApiHandler({}, {
 
   // Helper function to save assistant message (concatenate if last message is also assistant)
   const saveAssistantMessage = async (content: string) => {
+    if (!content.trim()) return; // nothing visible to save
+
     // Fetch the latest message (correct order desc) instead of earliest
     const lastMessage = await prisma.chatMessage.findFirst({
       where: { sessionId: sessionIdToUse },
@@ -274,7 +280,13 @@ export default withApiHandler({}, {
     }
     // save AI response
     if (data.choices && data.choices[0]?.message?.content) {
-      await saveAssistantMessage(data.choices[0].message.content);
+      // Strip <think> tags before saving to DB (non-streaming path)
+      const contentToSave = isDeepSeekThinking ? stripThinkTags(data.choices[0].message.content) : data.choices[0].message.content;
+      if (contentToSave.trim()) await saveAssistantMessage(contentToSave);
+      // Strip <think> tags from non-streaming response sent to client
+      if (isDeepSeekThinking) {
+        data.choices[0].message.content = contentToSave;
+      }
     } else if (data.error) {
       console.error('[Upstream][non-stream] Error payload:', data.error);
     } else if (data.__rawText) {
@@ -324,9 +336,13 @@ export default withApiHandler({}, {
     }
     // Optionally save content if present even in non-SSE reply
     if (data && data.choices && data.choices[0]?.message?.content) {
-      await saveAssistantMessage(data.choices[0].message.content);
+      const contentToSave = isDeepSeekThinking ? stripThinkTags(data.choices[0].message.content) : data.choices[0].message.content;
+      if (contentToSave.trim()) await saveAssistantMessage(contentToSave);
+      if (isDeepSeekThinking) data.choices[0].message.content = contentToSave;
     } else if (data && data.content) {
-      await saveAssistantMessage(data.content);
+      const contentToSave = isDeepSeekThinking ? stripThinkTags(data.content) : data.content;
+      if (contentToSave.trim()) await saveAssistantMessage(contentToSave);
+      if (isDeepSeekThinking) data.content = contentToSave;
     } else if (data && data.error) {
       console.error('[Upstream][non-SSE in stream mode] Error payload:', data.error);
     }
@@ -389,10 +405,14 @@ export default withApiHandler({}, {
   }
   
   let assistantText = '';
+  let assistantThinkingText = '';   // Thinking/reasoning content for logs only
   let streamCompleted = false;
   let messageSaved = false;            // Indicates content persisted (full or partial)
   let clientDisconnected = false;
   let partialSaveInitiated = false;    // Guard to prevent double partial save attempts
+  // DeepSeek <think> tag filtering state
+  let insideThinkTag = false;
+  let thinkTagBuffer = '';             // Buffer for partial tag detection at chunk boundaries
   // Optional capture of raw SSE payloads for debugging
   let sseCapture: string[] | null = DEBUG_CAPTURE ? [] : null;
   // Always capture frames for persistence
@@ -523,9 +543,28 @@ export default withApiHandler({}, {
         try {
           const parsed = JSON.parse(payload);
           const delta = parsed.choices?.[0]?.delta?.content || '';
+          const reasoningDelta = parsed.choices?.[0]?.delta?.reasoning_content || '';
           responseFrames.push(payload);
+
+          // Handle reasoning_content (DeepSeek thinking via separate field)
+          if (reasoningDelta && isDeepSeekThinking) {
+            assistantThinkingText += reasoningDelta; // Keep in logs for download
+            if (!insideThinkTag) {
+              insideThinkTag = true;
+              if (canWriteToResponse()) {
+                try { res.write(`data: ${JSON.stringify({ thinking: true })}\n\n`); } catch {}
+              }
+            }
+          }
+
           if (delta) {
-            assistantText += delta;
+            // If we were in reasoning_content mode, signal thinking ended
+            if (insideThinkTag && isDeepSeekThinking && !reasoningDelta) {
+              insideThinkTag = false;
+              if (canWriteToResponse()) {
+                try { res.write(`data: ${JSON.stringify({ thinking: false })}\n\n`); } catch {}
+              }
+            }
             // Throttle-persist a snapshot of streaming response for debugging/download
             if (Date.now() - lastPersistTs > 1500) {
               lastPersistTs = Date.now();
@@ -533,17 +572,76 @@ export default withApiHandler({}, {
                 frames: responseFrames.slice(-100),
                 completed: false,
                 assistantText,
+                assistantThinkingText,
               });
             }
-            if (canWriteToResponse()) {
+
+            // Filter <think> tags for DeepSeek thinking mode
+            let clientDelta = delta;
+            if (isDeepSeekThinking) {
+              clientDelta = '';
+              let text = thinkTagBuffer + delta;
+              thinkTagBuffer = '';
+              while (text.length > 0) {
+                if (insideThinkTag) {
+                  const closeIdx = text.indexOf('</think>');
+                  if (closeIdx !== -1) {
+                    insideThinkTag = false;
+                    assistantThinkingText += text.slice(0, closeIdx);
+                    text = text.slice(closeIdx + 8);
+                    // Signal thinking ended
+                    if (canWriteToResponse()) {
+                      try { res.write(`data: ${JSON.stringify({ thinking: false })}\n\n`); } catch {}
+                    }
+                  } else {
+                    // Check if text ends with a partial </think> tag
+                    const partialClose = matchPartialTag(text, '</think>');
+                    if (partialClose > 0) {
+                      assistantThinkingText += text.slice(0, -partialClose);
+                      thinkTagBuffer = text.slice(-partialClose);
+                    } else {
+                      assistantThinkingText += text;
+                    }
+                    text = '';
+                  }
+                } else {
+                  const openIdx = text.indexOf('<think>');
+                  if (openIdx !== -1) {
+                    // Emit content before the tag
+                    clientDelta += text.slice(0, openIdx);
+                    insideThinkTag = true;
+                    text = text.slice(openIdx + 7);
+                    // Signal thinking started
+                    if (canWriteToResponse()) {
+                      try { res.write(`data: ${JSON.stringify({ thinking: true })}\n\n`); } catch {}
+                    }
+                  } else {
+                    // Check if text ends with a partial <think> tag
+                    const partialOpen = matchPartialTag(text, '<think>');
+                    if (partialOpen > 0) {
+                      clientDelta += text.slice(0, -partialOpen);
+                      thinkTagBuffer = text.slice(-partialOpen);
+                    } else {
+                      clientDelta += text;
+                    }
+                    text = '';
+                  }
+                }
+              }
+              assistantText += clientDelta;
+            } else {
+              assistantText += delta;
+            }
+
+            if (clientDelta && canWriteToResponse()) {
               try {
-                res.write(`data: ${JSON.stringify({ content: delta })}\n\n`);
+                res.write(`data: ${JSON.stringify({ content: clientDelta })}\n\n`);
               } catch (error) {
                 console.log('Error writing to response, marking client as disconnected:', (error as Error).message);
                 clientDisconnected = true;
                 break;
               }
-            } else {
+            } else if (!clientDelta && !canWriteToResponse()) {
               clientDisconnected = true;
               break;
             }
@@ -623,6 +721,7 @@ export default withApiHandler({}, {
     frames: responseFrames,
     completed: streamCompleted && !clientDisconnected,
     assistantText,
+    assistantThinkingText,
   });
 
   // Only end response if it's still writable

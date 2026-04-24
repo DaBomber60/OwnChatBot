@@ -9,6 +9,7 @@
 export async function readSSEStream(
   body: ReadableStream<Uint8Array>,
   onContent: (accumulated: string, delta: string) => void,
+  onThinking?: (isThinking: boolean) => void,
 ): Promise<string> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
@@ -29,6 +30,11 @@ export async function readSSEStream(
 
         try {
           const parsed = JSON.parse(payload);
+          // Handle thinking state frames
+          if (typeof parsed.thinking === 'boolean') {
+            if (onThinking) onThinking(parsed.thinking);
+            continue;
+          }
           const content: string = parsed.content || '';
           if (content) {
             accumulated += content;
@@ -76,6 +82,8 @@ export interface StreamingRequestOpts {
   onNonStreamResult: (data: any) => void;
   /** Called after a successful stream/non-stream completion (before mutate delay). */
   onComplete?: () => void | Promise<void>;
+  /** Called when the model enters/exits thinking mode (DeepSeek). */
+  onThinking?: (isThinking: boolean) => void;
 
   // --- Error handling ---
   /** Called when an error should be shown to the user. */
@@ -117,6 +125,7 @@ export async function performStreamingRequest(opts: StreamingRequestOpts): Promi
     url, body, abortControllerRef,
     onStreamChunk, onNonStreamResult, onComplete,
     onError, onAbort, onPartialStreamError,
+    onThinking,
     skipSettingsInBody,
   } = opts;
 
@@ -196,7 +205,7 @@ export async function performStreamingRequest(opts: StreamingRequestOpts): Promi
           clearTimeout(firstContentTimer);
         }
         onStreamChunk(accumulated);
-      });
+      }, onThinking);
       clearTimeout(firstContentTimer);
       if (onComplete) await onComplete();
     } catch (err: any) {
