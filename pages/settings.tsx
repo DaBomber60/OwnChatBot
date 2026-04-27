@@ -483,6 +483,43 @@ export default function SettingsPage() {
     }
   };
 
+  const handleExport7z = async () => {
+    setExportLoading(true);
+    setImportStatus('idle');
+    setImportMessage('');
+    
+    try {
+      const response = await fetch('/api/database/export?format=7z');
+      if (response.ok) {
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        
+        const contentDisposition = response.headers.get('Content-Disposition');
+        const filenameMatch = contentDisposition?.match(/filename="(.+)"/);
+        const filename = filenameMatch ? filenameMatch[1] : `ownchatbot-export-${new Date().toISOString().split('T')[0]}.7z`;
+        
+        a.download = filename || `ownchatbot-export-${new Date().toISOString().split('T')[0]}.7z`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        window.URL.revokeObjectURL(url);
+      } else {
+        const error = await response.json();
+        setImportStatus('error');
+        setImportMessage(`Export failed: ${error.error || 'Unknown error'}`);
+        setTimeout(() => setImportStatus('idle'), 5000);
+      }
+    } catch (error) {
+      setImportStatus('error');
+      setImportMessage('Network error during export. Please try again.');
+      setTimeout(() => setImportStatus('idle'), 5000);
+    } finally {
+      setExportLoading(false);
+    }
+  };
+
   const handleImportDatabase = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -494,10 +531,11 @@ export default function SettingsPage() {
 
     const isZipFile = file.name.toLowerCase().endsWith('.zip');
     const isJsonFile = file.name.toLowerCase().endsWith('.json');
+    const is7zFile = file.name.toLowerCase().endsWith('.7z');
 
-    if (!isZipFile && !isJsonFile) {
+    if (!isZipFile && !isJsonFile && !is7zFile) {
       setImportStatus('error');
-      setImportMessage('Please select a valid .zip or .json export file.');
+      setImportMessage('Please select a valid .zip, .7z, or .json export file.');
       setTimeout(() => setImportStatus('idle'), 5000);
       return;
     }
@@ -1281,7 +1319,7 @@ export default function SettingsPage() {
             <div>
               <h3 className="text-lg font-semibold mb-3">📤 Export Database</h3>
               <p className="text-sm text-secondary mb-4">
-                Download a complete backup of your database as a compressed ZIP file including all characters, personas, chat sessions, messages, and settings.
+                Download a complete backup of your database as a compressed file including all characters, personas, chat sessions, messages, and settings.
               </p>
               <div className="space-y-3">
                 <button
@@ -1295,7 +1333,22 @@ export default function SettingsPage() {
                       Exporting ZIP...
                     </span>
                   ) : (
-                    'Export Database'
+                    'Export as ZIP'
+                  )}
+                </button>
+                <button
+                  className={`btn btn-secondary w-full text-sm ${exportLoading ? 'opacity-50' : ''}`}
+                  onClick={handleExport7z}
+                  disabled={exportLoading}
+                  title="Export using 7z compression (LZMA2) for significantly smaller file size"
+                >
+                  {exportLoading ? (
+                    <span className="flex items-center justify-center gap-2">
+                      <div className="status-dot status-loading"></div>
+                      Exporting 7z...
+                    </span>
+                  ) : (
+                    'Export as 7z (Smaller)'
                   )}
                 </button>
                 {state.devMode && (
@@ -1322,7 +1375,7 @@ export default function SettingsPage() {
             <div className={`transition-opacity duration-300 ${importStatus === 'importing' ? 'opacity-75' : ''}`}>
               <h3 className="text-lg font-semibold mb-3">📥 Import Database</h3>
               <p className="text-sm text-secondary mb-4">
-                Import data from a database export file (.zip or .json). Existing data will be preserved - only new records will be added. Includes complete chat history. Supports files up to 500MB.
+                Import data from a database export file (.zip, .7z, or .json). Existing data will be preserved - only new records will be added. Includes complete chat history. Supports files up to 500MB.
               </p>
               <button
                 className={`btn btn-secondary w-full ${importStatus === 'importing' ? 'opacity-50' : ''}`}
@@ -1343,12 +1396,12 @@ export default function SettingsPage() {
               <input
                 ref={fileInputRef}
                 type="file"
-                accept=".zip,.json"
+                accept=".zip,.json,.7z"
                 onChange={handleImportDatabase}
                 style={{ display: 'none' }}
               />
               <p className="text-xs text-muted mt-2">
-                Supports .zip (recommended) and .json files. Large files may take several minutes to process.
+                Supports .zip, .7z, and .json files. Large files may take several minutes to process.
               </p>
             </div>
           </div>
@@ -1397,7 +1450,7 @@ export default function SettingsPage() {
           <div className="mt-6 p-4 bg-warning/10 border border-warning/20 rounded-lg">
             <h4 className="text-warning font-semibold mb-2">⚠️ Important Notes:</h4>
             <ul className="text-sm text-secondary space-y-1 list-disc list-inside">
-              <li><strong>Export:</strong> Creates a compressed ZIP backup of your entire OwnChatBot</li>
+              <li><strong>Export:</strong> Creates a compressed ZIP or 7z backup of your entire OwnChatBot</li>
               <li><strong>Duplicates:</strong> Records with the same name/identifier will be skipped to prevent conflicts</li>
               <li><strong>Settings:</strong> New settings are imported, existing ones are updated with new values</li>
               <li><strong>Chat History:</strong> Messages and their versions are fully preserved during import</li>
