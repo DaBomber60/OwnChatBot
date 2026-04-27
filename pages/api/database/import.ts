@@ -7,6 +7,7 @@ import JSZip from 'jszip';
 import { limiters, clientIp } from '../../../lib/rateLimit';
 import { badRequest, serverError, tooManyRequests } from '../../../lib/apiErrors';
 import { withApiHandler } from '../../../lib/withApiHandler';
+import { extractFrom7z, is7zAvailable } from '../../../lib/sevenZip';
 
 // Disable Next.js body parser for file uploads and increase size limits
 export const config = {
@@ -78,10 +79,11 @@ export default withApiHandler({}, {
     const fileName = uploadedFile.originalFilename || uploadedFile.newFilename || '';
     const isZipFile = fileName.toLowerCase().endsWith('.zip');
     const isJsonFile = fileName.toLowerCase().endsWith('.json');
+    const is7zFile = fileName.toLowerCase().endsWith('.7z');
 
-    if (!isZipFile && !isJsonFile) {
+    if (!isZipFile && !isJsonFile && !is7zFile) {
       return badRequest(res, 'Invalid file type', 'INVALID_FILE_TYPE', {
-        details: 'Please upload a .zip or .json export file'
+        details: 'Please upload a .zip, .7z, or .json export file'
       });
     }
 
@@ -106,6 +108,31 @@ export default withApiHandler({}, {
       } catch (zipError) {
         return badRequest(res, 'Failed to read zip file', 'ZIP_READ_FAILED', {
           details: zipError instanceof Error ? zipError.message : 'Could not extract zip contents'
+        });
+      }
+    } else if (is7zFile) {
+      // Handle 7z file
+      if (!(await is7zAvailable())) {
+        return badRequest(res, '7z extraction is not available on this server', 'SEVEN_ZIP_UNAVAILABLE', {
+          details: 'The server does not have 7-Zip installed. Please convert to .zip and try again.'
+        });
+      }
+      const extractDir = path.join(uploadDir, '7z-extract');
+      try {
+        await extractFrom7z(uploadedFile.filepath, extractDir);
+        const dbJsonPath = path.join(extractDir, 'database.json');
+        try {
+          await fs.access(dbJsonPath);
+        } catch {
+          return badRequest(res, 'Invalid 7z file format', 'INVALID_7Z', {
+            details: '7z archive must contain database.json'
+          });
+        }
+        fileContent = await fs.readFile(dbJsonPath, 'utf-8');
+      } catch (szError) {
+        if ((szError as any)?.message?.includes('INVALID_7Z')) throw szError;
+        return badRequest(res, 'Failed to read 7z file', 'SEVEN_ZIP_READ_FAILED', {
+          details: szError instanceof Error ? szError.message : 'Could not extract 7z contents'
         });
       }
     } else {

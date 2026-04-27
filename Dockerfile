@@ -81,7 +81,7 @@ WORKDIR /app
 # npm/npx are NOT needed at runtime — prisma binary is invoked directly via PATH.
 # Removing npm eliminates its transitive CVEs (tar, @isaacs/brace-expansion, diff).
 RUN set -eux; \
-    apk add --no-cache netcat-openbsd openssl su-exec; \
+    apk add --no-cache netcat-openbsd openssl su-exec p7zip; \
     apk upgrade --no-cache busybox; \
     if apk version -l '<' busybox=1.37.0-r20 | grep -q busybox; then \
         echo "BusyBox upgrade did not reach required version (>=1.37.0-r20)" >&2; \

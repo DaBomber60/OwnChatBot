@@ -1,8 +1,12 @@
 import prisma from '../../../lib/prisma';
 import JSZip from 'jszip';
+import { promises as fs } from 'fs';
+import path from 'path';
+import os from 'os';
 import { limiters, clientIp } from '../../../lib/rateLimit';
 import { tooManyRequests, serverError } from '../../../lib/apiErrors';
 import { withApiHandler } from '../../../lib/withApiHandler';
+import { compressTo7z, is7zAvailable } from '../../../lib/sevenZip';
 
 export default withApiHandler({}, {
   GET: async (req, res) => {
@@ -12,9 +16,10 @@ export default withApiHandler({}, {
       return tooManyRequests(res, 'Database export rate limit exceeded', 'RATE_LIMITED', rl.retryAfterSeconds);
     }
 
-  // Check if legacy JSON format is requested
+  // Check requested format (zip default, json legacy, 7z for better compression)
   const format = req.query.format as string;
   const isJsonFormat = format === 'json';
+  const is7zFormat = format === '7z';
 
   try {
     // Export all data from all tables
@@ -94,21 +99,8 @@ export default withApiHandler({}, {
     // Set headers for file download
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
     
-    if (isJsonFormat) {
-      // Legacy JSON format
-      const filename = `ownchatbot-export-${timestamp}.json`;
-      res.setHeader('Content-Type', 'application/json');
-      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-      return res.status(200).json(exportData);
-    } else {
-      // Default ZIP format
-      const zip = new JSZip();
-      
-      // Add the main data file (compact JSON to reduce memory usage)
-      zip.file('database.json', JSON.stringify(exportData));
-      
-      // Add a readme file explaining the export
-      const readmeContent = `OwnChatBot Database Export
+    // Shared readme content for archive formats
+    const readmeContent = `OwnChatBot Database Export
 Generated: ${new Date().toISOString()}
 Format Version: ${exportData.version}
 
@@ -123,7 +115,46 @@ ${Object.entries(exportData.metadata.totalRecords)
 
 For support or questions, visit: https://github.com/DaBomber60/OwnChatBot
 `;
+
+    if (isJsonFormat) {
+      // Legacy JSON format
+      const filename = `ownchatbot-export-${timestamp}.json`;
+      res.setHeader('Content-Type', 'application/json');
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      return res.status(200).json(exportData);
+    } else if (is7zFormat) {
+      // 7z format (LZMA2 — significantly smaller than ZIP)
+      if (!(await is7zAvailable())) {
+        return serverError(res, '7z compression is not available on this server. Use ZIP export instead.');
+      }
+      const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'hcb-export-7z-'));
+      try {
+        const jsonPath = path.join(tmpDir, 'database.json');
+        const readmePath = path.join(tmpDir, 'README.txt');
+        const archivePath = path.join(tmpDir, 'export.7z');
+
+        await Promise.all([
+          fs.writeFile(jsonPath, JSON.stringify(exportData)),
+          fs.writeFile(readmePath, readmeContent),
+        ]);
+
+        await compressTo7z([jsonPath, readmePath], archivePath);
+        const archiveBuffer = await fs.readFile(archivePath);
+
+        const filename = `ownchatbot-export-${timestamp}.7z`;
+        res.setHeader('Content-Type', 'application/x-7z-compressed');
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+        res.setHeader('Content-Length', archiveBuffer.length.toString());
+        return res.status(200).send(archiveBuffer);
+      } finally {
+        fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+      }
+    } else {
+      // Default ZIP format
+      const zip = new JSZip();
       
+      // Add the main data file (compact JSON to reduce memory usage)
+      zip.file('database.json', JSON.stringify(exportData));
       zip.file('README.txt', readmeContent);
       
       // Generate zip file
