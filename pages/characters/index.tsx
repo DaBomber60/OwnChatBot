@@ -16,7 +16,7 @@ import {
 import {
   SortableContext,
   sortableKeyboardCoordinates,
-  verticalListSortingStrategy,
+  rectSortingStrategy,
 } from '@dnd-kit/sortable';
 import {
   useSortable,
@@ -73,12 +73,16 @@ function SortableCharacterCard({
   setEditFirstMessage,
   editExampleDialogue,
   setEditExampleDialogue,
+  editGroupId,
+  setEditGroupId,
+  groups,
   openMenuId,
   setOpenMenuId,
   confirmDeleteId,
   setConfirmDeleteId,
   onClone,
   onDelete,
+  onMove,
   mutate,
   closeMenu,
   disableDrag = false
@@ -102,16 +106,21 @@ function SortableCharacterCard({
   setEditFirstMessage: (message: string) => void;
   editExampleDialogue: string;
   setEditExampleDialogue: (dialogue: string) => void;
+  editGroupId: number | null;
+  setEditGroupId: (id: number | null) => void;
+  groups: CharacterGroup[];
   openMenuId: number | string | null;
   setOpenMenuId: (id: number | string | null) => void;
   confirmDeleteId: number | null;
   setConfirmDeleteId: (id: number | null) => void;
   onClone: (character: Character) => void;
   onDelete: (id: number) => void;
+  onMove: (characterId: number, groupId: number | null) => void;
   mutate: () => void;
   closeMenu: () => void;
   disableDrag?: boolean;
 }) {
+  const [showMoveSubmenu, setShowMoveSubmenu] = useState(false);
   const {
     attributes,
     listeners,
@@ -131,7 +140,13 @@ function SortableCharacterCard({
   };
 
   const toggleMenu = (characterId: number) => {
-    setOpenMenuId(openMenuId === characterId ? null : characterId);
+    if (openMenuId === characterId) {
+      setShowMoveSubmenu(false);
+      setOpenMenuId(null);
+    } else {
+      setShowMoveSubmenu(false);
+      setOpenMenuId(characterId);
+    }
   };
 
   return (
@@ -210,39 +225,92 @@ function SortableCharacterCard({
             entityId={character.id}
             isOpen={openMenuId === character.id}
             onToggle={() => toggleMenu(character.id)}
-            onClose={closeMenu}
+            onClose={() => { setShowMoveSubmenu(false); closeMenu(); }}
           >
-            <DropdownMenuItem
-              icon="✏️"
-              label="Edit Character"
-              onClick={() => {
-                setEditingId(character.id);
-                setEditName(character.name);
-                setEditProfileName(character.profileName || '');
-                setEditBio(character.bio || '');
-                setEditScenario(character.scenario || '');
-                setEditPersonality(character.personality || '');
-                setEditFirstMessage(character.firstMessage || '');
-                setEditExampleDialogue(character.exampleDialogue || '');
-                closeMenu();
-              }}
-            />
-            <DropdownMenuItem
-              icon="📋"
-              label="Clone Character"
-              onClick={() => onClone(character)}
-            />
-            <DropdownMenuDivider />
-            <ConfirmDeleteItem
-              label="Delete Character"
-              isConfirming={confirmDeleteId === character.id}
-              onRequestDelete={() => setConfirmDeleteId(character.id)}
-              onConfirm={() => onDelete(character.id)}
-              onCancel={() => {
-                setConfirmDeleteId(null);
-                closeMenu();
-              }}
-            />
+            {showMoveSubmenu ? (
+              <>
+                <DropdownMenuItem
+                  icon="←"
+                  label="Back"
+                  onClick={() => setShowMoveSubmenu(false)}
+                />
+                <DropdownMenuDivider />
+                {(character.groupId ?? null) !== null && (
+                  <DropdownMenuItem
+                    icon="✕"
+                    label="Ungroup"
+                    onClick={() => {
+                      onMove(character.id, null);
+                      setShowMoveSubmenu(false);
+                      closeMenu();
+                    }}
+                  />
+                )}
+                {groups.filter(g => g.id !== character.groupId).length === 0 && (character.groupId ?? null) === null ? (
+                  <DropdownMenuItem
+                    icon="ℹ️"
+                    label="No other groups"
+                    onClick={() => {}}
+                    disabled
+                  />
+                ) : (
+                  groups
+                    .filter(g => g.id !== character.groupId)
+                    .map(g => (
+                      <DropdownMenuItem
+                        key={g.id}
+                        icon="●"
+                        label={g.name}
+                        onClick={() => {
+                          onMove(character.id, g.id);
+                          setShowMoveSubmenu(false);
+                          closeMenu();
+                        }}
+                      />
+                    ))
+                )}
+              </>
+            ) : (
+              <>
+                <DropdownMenuItem
+                  icon="✏️"
+                  label="Edit Character"
+                  onClick={() => {
+                    setEditingId(character.id);
+                    setEditName(character.name);
+                    setEditProfileName(character.profileName || '');
+                    setEditBio(character.bio || '');
+                    setEditScenario(character.scenario || '');
+                    setEditPersonality(character.personality || '');
+                    setEditFirstMessage(character.firstMessage || '');
+                    setEditExampleDialogue(character.exampleDialogue || '');
+                    setEditGroupId(character.groupId ?? null);
+                    closeMenu();
+                  }}
+                />
+                <DropdownMenuItem
+                  icon="📂"
+                  label="Move to group…"
+                  onClick={() => setShowMoveSubmenu(true)}
+                />
+                <DropdownMenuItem
+                  icon="📋"
+                  label="Clone Character"
+                  onClick={() => onClone(character)}
+                />
+                <DropdownMenuDivider />
+                <ConfirmDeleteItem
+                  label="Delete Character"
+                  isConfirming={confirmDeleteId === character.id}
+                  onRequestDelete={() => setConfirmDeleteId(character.id)}
+                  onConfirm={() => onDelete(character.id)}
+                  onCancel={() => {
+                    setConfirmDeleteId(null);
+                    closeMenu();
+                  }}
+                />
+              </>
+            )}
           </DropdownMenu>
         </div>
       </div>
@@ -261,11 +329,12 @@ function SortableCharacterCard({
                   // Send empty strings instead of null; backend schema normalizes
                   profileName: editProfileName || '',
                   bio: editBio || '',
-                  scenario: editScenario, personality: editPersonality, 
-                  firstMessage: editFirstMessage, exampleDialogue: editExampleDialogue
+                  scenario: editScenario, personality: editPersonality,
+                  firstMessage: editFirstMessage, exampleDialogue: editExampleDialogue,
+                  groupId: editGroupId
                 })
               });
-              setEditingId(null); 
+              setEditingId(null);
               mutate();
             }}>
               <div className="grid grid-cols-1 gap-2">
@@ -297,6 +366,20 @@ function SortableCharacterCard({
                     rows={2}
                   />
                   <small className="text-xs text-muted mt-1">Personal notes about this character - not sent to AI</small>
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Group</label>
+                  <select
+                    className="form-input"
+                    value={editGroupId ?? ''}
+                    onChange={e => setEditGroupId(e.target.value ? parseInt(e.target.value) : null)}
+                  >
+                    <option value="">No Group</option>
+                    {groups.map(group => (
+                      <option key={group.id} value={group.id}>{group.name}</option>
+                    ))}
+                  </select>
+                  <small className="text-xs text-muted mt-1">Move this character to a different group, or remove it from its group.</small>
                 </div>
                 <div className="form-group">
                   <label className="form-label">Scenario</label>
@@ -441,6 +524,7 @@ export default function CharactersPage() {
   const [editPersonality, setEditPersonality] = useState('');
   const [editFirstMessage, setEditFirstMessage] = useState('');
   const [editExampleDialogue, setEditExampleDialogue] = useState('');
+  const [editGroupId, setEditGroupId] = useState<number | null>(null);
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
   const [openMenuId, setOpenMenuId] = useState<number | string | null>(null);
@@ -681,6 +765,7 @@ export default function CharactersPage() {
     setPersonality(character.personality || '');
     setFirstMessage(character.firstMessage || '');
     setExampleDialogue(character.exampleDialogue || '');
+    setSelectedGroupId(character.groupId ?? null);
     
     // Open the create form and close the menu
     setIsAdding(true);
@@ -783,75 +868,178 @@ export default function CharactersPage() {
     document.body.style.touchAction = 'none';
   };
 
-  const handleDragEnd = async (event: DragEndEvent) => {
-    const { active, over } = event;
-    
-    // Re-enable scrolling
+  // Restore body styles disabled in handleDragStart. Used by both drag end and cancel.
+  const restoreBodyScroll = () => {
     document.body.style.overflow = '';
     document.body.style.touchAction = '';
+  };
 
-    if (!over || active.id === over.id) {
-      // Clear activeId immediately if no valid drop
+  const handleDragCancel = () => {
+    restoreBodyScroll();
+    setActiveId(null);
+    setIsDragging(false);
+  };
+
+  // Build the per-list arrays (by groupId, with `null` key for ungrouped) sorted by sortOrder.
+  // Returned arrays are independent copies safe to mutate.
+  const buildLists = (source: Character[]): Map<number | null, Character[]> => {
+    const map = new Map<number | null, Character[]>();
+    for (const c of source) {
+      const key: number | null = c.groupId ?? null;
+      let list = map.get(key);
+      if (!list) { list = []; map.set(key, list); }
+      list.push(c);
+    }
+    for (const list of map.values()) {
+      list.sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0));
+    }
+    return map;
+  };
+
+  // Resolve the destination groupId from a droppable / sortable id.
+  // Returns null for ungrouped, otherwise the group id. Returns `undefined` if unparseable.
+  const resolveTargetGroup = (overId: string): number | null | undefined => {
+    if (overId === 'ungrouped') return null;
+    const groupMatch = overId.match(/^group-(\d+)(?:-content)?$/);
+    if (groupMatch && groupMatch[1]) return parseInt(groupMatch[1]);
+    if (overId.startsWith('character-')) {
+      const targetCharId = parseInt(overId.replace('character-', ''));
+      const targetChar = chars?.find(c => c.id === targetCharId);
+      if (!targetChar) return undefined;
+      return targetChar.groupId ?? null;
+    }
+    return undefined;
+  };
+
+  // Shared helper used by both drag-drop and the "Move to group…" menu.
+  // Sends a batch payload and optimistically updates the SWR cache so the UI doesn't snap back.
+  const applyMove = async (
+    characterId: number,
+    destGroupId: number | null,
+    destIndex?: number
+  ) => {
+    if (!chars) return;
+    const character = chars.find(c => c.id === characterId);
+    if (!character) return;
+    const sourceGroupId: number | null = character.groupId ?? null;
+
+    const lists = buildLists(chars);
+    const sourceList = lists.get(sourceGroupId) ?? [];
+    const destListExisting = lists.get(destGroupId) ?? [];
+
+    const sourceIndex = sourceList.findIndex(c => c.id === characterId);
+    if (sourceIndex === -1) return;
+
+    let newSourceList = sourceList.slice();
+    let newDestList: Character[];
+
+    if (sourceGroupId === destGroupId) {
+      // Same-list move: remove and reinsert.
+      newSourceList.splice(sourceIndex, 1);
+      const insertIdx = destIndex === undefined
+        ? newSourceList.length
+        : Math.max(0, Math.min(destIndex, newSourceList.length));
+      newSourceList.splice(insertIdx, 0, { ...character, groupId: destGroupId });
+      newDestList = newSourceList;
+    } else {
+      newSourceList.splice(sourceIndex, 1);
+      newDestList = destListExisting.slice();
+      const insertIdx = destIndex === undefined
+        ? newDestList.length
+        : Math.max(0, Math.min(destIndex, newDestList.length));
+      newDestList.splice(insertIdx, 0, { ...character, groupId: destGroupId });
+    }
+
+    // Build the batch payload: every character whose sortOrder/groupId changed.
+    const batch: { id: number; groupId: number | null; sortOrder: number }[] = [];
+    newDestList.forEach((c, i) => {
+      batch.push({ id: c.id, groupId: destGroupId, sortOrder: i });
+    });
+    if (sourceGroupId !== destGroupId) {
+      newSourceList.forEach((c, i) => {
+        batch.push({ id: c.id, groupId: sourceGroupId, sortOrder: i });
+      });
+    }
+
+    // Apply optimistically: rebuild a flat array of characters with updated fields.
+    const updatedById = new Map<number, Character>();
+    newDestList.forEach((c, i) => updatedById.set(c.id, { ...c, groupId: destGroupId, sortOrder: i }));
+    if (sourceGroupId !== destGroupId) {
+      newSourceList.forEach((c, i) => updatedById.set(c.id, { ...c, groupId: sourceGroupId, sortOrder: i }));
+    }
+    const optimistic = chars.map(c => updatedById.get(c.id) ?? c);
+
+    try {
+      await mutate(
+        async () => {
+          const res = await fetch('/api/characters/move', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ batch })
+          });
+          if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.error || 'Failed to move character');
+          }
+          return optimistic;
+        },
+        {
+          optimisticData: optimistic,
+          rollbackOnError: true,
+          revalidate: true,
+          populateCache: false,
+        }
+      );
+      mutateGroups();
+    } catch (error: any) {
+      console.error('Error moving character:', error);
+      alert('Error moving character: ' + (error?.message || 'Unknown error'));
+    }
+  };
+
+  const handleDragEnd = async (event: DragEndEvent) => {
+    const { active, over } = event;
+    restoreBodyScroll();
+
+    const finishDrag = () => {
       setActiveId(null);
       setIsDragging(false);
+    };
+
+    if (!over) {
+      finishDrag();
       return;
     }
 
     const characterId = parseInt((active.id as string).replace('character-', ''));
-    let newGroupId: number | null = null;
+    const overId = over.id as string;
 
-    // Determine the target group
-    if (over.id !== 'ungrouped') {
-      if ((over.id as string).startsWith('group-')) {
-        // Extract group ID from either 'group-X' or 'group-X-content'
-        const groupIdMatch = (over.id as string).match(/^group-(\d+)/);
-        if (groupIdMatch && groupIdMatch[1]) {
-          newGroupId = parseInt(groupIdMatch[1]);
-        }
-      } else if ((over.id as string).startsWith('character-')) {
-        // Dropped on another character, find its group
-        const targetCharacterId = parseInt((over.id as string).replace('character-', ''));
-        const targetCharacter = chars?.find(c => c.id === targetCharacterId);
-        newGroupId = targetCharacter?.groupId || null;
-      }
+    // Determine destination group.
+    const destGroupId = resolveTargetGroup(overId);
+    if (destGroupId === undefined) {
+      finishDrag();
+      return;
     }
 
-    try {
-      const res = await fetch('/api/characters/move', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          characterId,
-          groupId: newGroupId
-        })
-      });
-
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        console.error('Failed to move character', err);
-        alert('Error moving character: ' + (err.error || 'Unknown error'));
-        // Clear drag state on error
-        setActiveId(null);
-        setIsDragging(false);
-        return;
-      }
-
-      // Refresh both characters and groups
-      await Promise.all([mutate(), mutateGroups()]);
-      
-      // Small delay to let the UI update before clearing drag state
-      setTimeout(() => {
-        setActiveId(null);
-        setIsDragging(false);
-      }, 50);
-
-    } catch (error) {
-      console.error('Error moving character:', error);
-      alert('Error moving character');
-      // Clear drag state on error
-      setActiveId(null);
-      setIsDragging(false);
+    // Determine destination index. If dropped on a character, insert at that character's slot;
+    // otherwise (dropped on a group/ungrouped container), append to the end of that list.
+    let destIndex: number | undefined;
+    if (overId.startsWith('character-') && active.id !== over.id) {
+      const lists = buildLists(chars || []);
+      const destList = lists.get(destGroupId) ?? [];
+      const targetCharId = parseInt(overId.replace('character-', ''));
+      destIndex = destList.findIndex(c => c.id === targetCharId);
+      if (destIndex === -1) destIndex = destList.length;
     }
+
+    // No-op: same character dropped on itself.
+    if (active.id === over.id) {
+      finishDrag();
+      return;
+    }
+
+    await applyMove(characterId, destGroupId, destIndex);
+    finishDrag();
   };
 
   // Organize characters by groups
@@ -1248,6 +1436,7 @@ export default function CharactersPage() {
         collisionDetection={closestCenter}
         onDragStart={handleDragStart}
         onDragEnd={handleDragEnd}
+        onDragCancel={handleDragCancel}
       >
         {(() => {
           const query = searchQuery.trim().toLowerCase();
@@ -1279,7 +1468,7 @@ export default function CharactersPage() {
                 {filtered.length === 0 ? (
                   <div className="text-center py-8 text-muted">No characters match your search.</div>
                 ) : (
-                  <SortableContext items={filtered.map(c => `character-${c.id}`)} strategy={verticalListSortingStrategy}>
+                  <SortableContext items={filtered.map(c => `character-${c.id}`)} strategy={rectSortingStrategy}>
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                       {filtered.map((character) => (
                         <SortableCharacterCard
@@ -1303,6 +1492,9 @@ export default function CharactersPage() {
                           setEditFirstMessage={setEditFirstMessage}
                           editExampleDialogue={editExampleDialogue}
                           setEditExampleDialogue={setEditExampleDialogue}
+                          editGroupId={editGroupId}
+                          setEditGroupId={setEditGroupId}
+                          groups={groups}
                           openMenuId={openMenuId}
                           setOpenMenuId={setOpenMenuId}
                           confirmDeleteId={confirmDeleteId}
@@ -1314,6 +1506,7 @@ export default function CharactersPage() {
                             mutate();
                             closeMenu();
                           }}
+                          onMove={applyMove}
                           mutate={mutate}
                           closeMenu={closeMenu}
                           disableDrag={true}
@@ -1454,7 +1647,7 @@ export default function CharactersPage() {
                       <p className="text-sm">Drag characters here to add them to this group.</p>
                     </div>
                   ) : (
-                    <SortableContext items={groupCharacters.map(c => `character-${c.id}`)} strategy={verticalListSortingStrategy}>
+                    <SortableContext items={groupCharacters.map(c => `character-${c.id}`)} strategy={rectSortingStrategy}>
                       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                         {groupCharacters.map((character) => (
                           <SortableCharacterCard
@@ -1478,6 +1671,9 @@ export default function CharactersPage() {
                             setEditFirstMessage={setEditFirstMessage}
                             editExampleDialogue={editExampleDialogue}
                             setEditExampleDialogue={setEditExampleDialogue}
+                            editGroupId={editGroupId}
+                            setEditGroupId={setEditGroupId}
+                            groups={groups}
                             openMenuId={openMenuId}
                             setOpenMenuId={setOpenMenuId}
                             confirmDeleteId={confirmDeleteId}
@@ -1489,6 +1685,7 @@ export default function CharactersPage() {
                               mutate();
                               closeMenu();
                             }}
+                            onMove={applyMove}
                             mutate={mutate}
                             closeMenu={closeMenu}
                           />
@@ -1610,7 +1807,7 @@ export default function CharactersPage() {
                     <p className="text-sm">Create character groups above, then drag characters here to ungroup them.</p>
                   </div>
                 ) : (
-                  <SortableContext items={ungrouped.map(c => `character-${c.id}`)} strategy={verticalListSortingStrategy}>
+                  <SortableContext items={ungrouped.map(c => `character-${c.id}`)} strategy={rectSortingStrategy}>
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                       {ungrouped.map((character) => (
                         <SortableCharacterCard
@@ -1634,6 +1831,9 @@ export default function CharactersPage() {
                           setEditFirstMessage={setEditFirstMessage}
                           editExampleDialogue={editExampleDialogue}
                           setEditExampleDialogue={setEditExampleDialogue}
+                          editGroupId={editGroupId}
+                          setEditGroupId={setEditGroupId}
+                          groups={groups}
                           openMenuId={openMenuId}
                           setOpenMenuId={setOpenMenuId}
                           confirmDeleteId={confirmDeleteId}
@@ -1645,6 +1845,7 @@ export default function CharactersPage() {
                             mutate();
                             closeMenu();
                           }}
+                          onMove={applyMove}
                           mutate={mutate}
                           closeMenu={closeMenu}
                         />

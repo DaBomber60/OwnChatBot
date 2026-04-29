@@ -1,5 +1,5 @@
 import prisma from '../../../lib/prisma';
-import { conflict, notFound, serverError } from '../../../lib/apiErrors';
+import { badRequest, conflict, notFound, serverError } from '../../../lib/apiErrors';
 import { schemas, validateBody } from '../../../lib/validate';
 import { withApiHandler } from '../../../lib/withApiHandler';
 
@@ -7,11 +7,20 @@ export default withApiHandler({ parseId: true }, {
   PUT: async (req, res, { id }) => {
     const body = validateBody(schemas.updateCharacter, req, res);
     if (!body) return;
-    const { name, profileName, bio, scenario, personality, firstMessage, exampleDialogue } = body as any;
+    const { name, profileName, bio, scenario, personality, firstMessage, exampleDialogue, groupId } = body as any;
     const normalizedProfileName = (profileName !== undefined && profileName !== null && profileName.toString().trim().length > 0)
       ? profileName.toString().trim()
       : null;
+    // groupId is undefined when not present in the payload (don't touch group),
+    // null when the client wants to ungroup, or a positive int to assign a group.
+    const groupIdProvided = Object.prototype.hasOwnProperty.call(body, 'groupId');
     try {
+      if (groupIdProvided && typeof groupId === 'number') {
+        const groupExists = await prisma.characterGroup.findUnique({ where: { id: groupId } });
+        if (!groupExists) {
+          return badRequest(res, 'Specified group does not exist', 'CHARACTER_GROUP_NOT_FOUND');
+        }
+      }
       if (normalizedProfileName === null) {
         // Ensure another character (not this one) does not already have same name with null profile
         const existing = await prisma.character.findFirst({ where: { name: name, profileName: null, NOT: { id } } });
@@ -33,7 +42,8 @@ export default withApiHandler({ parseId: true }, {
           firstMessage: firstMessage || "You didn't enter a first message for this character :(",
           exampleDialogue: exampleDialogue || '',
           ...(profileName !== undefined && { profileName: normalizedProfileName }),
-          ...(bio !== undefined && { bio })
+          ...(bio !== undefined && { bio }),
+          ...(groupIdProvided && { groupId: groupId ?? null })
         }
       });
       return res.status(200).json(updated);
