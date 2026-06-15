@@ -5,7 +5,7 @@
 #  - Produce a single artifact directory then one COPY into final image
 #  - Use BuildKit cache mounts for faster npm ci + build
 
-FROM node:24.15.0-alpine3.22 AS build
+FROM node:24.16.0-alpine3.24 AS build
 ARG APP_VERSION=0.0.0-untagged
 ENV NEXT_PUBLIC_APP_VERSION=${APP_VERSION} \
     APP_VERSION=${APP_VERSION}
@@ -71,7 +71,7 @@ RUN set -eux; \
     cp docker-entrypoint.sh /out/docker-entrypoint.sh; \
     cp healthcheck.js /out/healthcheck.js
 
-FROM node:24.15.0-alpine3.22 AS runner
+FROM node:24.16.0-alpine3.24 AS runner
 ARG APP_VERSION=0.0.0-untagged
 ENV NEXT_PUBLIC_APP_VERSION=${APP_VERSION} \
     APP_VERSION=${APP_VERSION}
