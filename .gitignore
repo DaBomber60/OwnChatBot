@@ -93,6 +93,26 @@ desktop.ini
 ###############################
 ssl/
 data/
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+
+###############################
+# Security scan output (Docker Scout, SBOMs, SARIF)
+###############################
+scout-report.md
+*.sarif
+*.sarif.json
+sbom.json
+trivy-results.*
+
+###############################
+# Local Docker / Compose overrides
+###############################
+docker-compose.override.yml
+docker-compose.*.local.yml
 
 ###############################
 # DO NOT IGNORE: package-lock.json (commit for reproducible builds)
