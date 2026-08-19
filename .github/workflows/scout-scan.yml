@@ -1,0 +1,121 @@
+name: Docker Scout Security Scan
+
+on:
+  # Weekly drift check: upstream advisories land without any change to this repo.
+  schedule:
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+  # Re-scan straight after a release is published.
+  workflow_run:
+    workflows: ["Build & Publish Docker Image"]
+    types: [completed]
+  pull_request:
+    paths:
+      - 'Dockerfile'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/scout-scan.yml'
+
+env:
+  IMAGE_NAME: ${{ secrets.DOCKERHUB_USERNAME }}/ownchatbot
+
+permissions:
+  contents: read
+
+jobs:
+  scan-published:
+    name: Scan published image
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Scan for fixable CVEs
+        id: scout
+        uses: docker/scout-action@v1
+        with:
+          command: cves
+          image: registry://${{ env.IMAGE_NAME }}:latest
+          platform: linux/amd64
+          only-fixed: true
+          only-severities: critical,high
+          sarif-file: scout-results.sarif
+          summary: true
+          # Fail the run so the scheduled job sends a notification on drift.
+          exit-code: true
+
+      - name: Upload SARIF to code scanning
+        if: always() && hashFiles('scout-results.sarif') != ''
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: scout-results.sarif
+          category: docker-scout
+
+      - name: Base image recommendations
+        if: failure()
+        uses: docker/scout-action@v1
+        with:
+          command: recommendations
+          image: registry://${{ env.IMAGE_NAME }}:latest
+          platform: linux/amd64
+
+  scan-pr:
+    name: Scan PR build
+    # Fork PRs cannot read secrets, so the Docker Hub login would fail.
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build image for scanning
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: ownchatbot:pr-${{ github.event.pull_request.number }}
+          build-args: |
+            APP_VERSION=0.0.0-pr.${{ github.event.pull_request.number }}
+          cache-from: type=gha,scope=ownchatbot-pr
+          cache-to: type=gha,mode=min,scope=ownchatbot-pr
+          provenance: false
+
+      - name: Compare against published latest
+        uses: docker/scout-action@v1
+        with:
+          command: compare
+          image: ownchatbot:pr-${{ github.event.pull_request.number }}
+          to: registry://${{ env.IMAGE_NAME }}:latest
+          platform: linux/amd64
+          only-fixed: true
+          only-severities: critical,high
+          write-comment: true
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          summary: true
+          # Fail only when the PR adds vulnerabilities that latest does not have.
+          exit-on: vulnerability

@@ -103,7 +103,8 @@ export const schemas = {
     scenario: z.string().max(CHARACTER_LIMITS.scenario).optional(),
     personality: z.string().max(CHARACTER_LIMITS.personality).optional(),
     firstMessage: z.string().max(CHARACTER_LIMITS.firstMessage).optional(),
-    exampleDialogue: z.string().max(CHARACTER_LIMITS.exampleDialogue).optional()
+    exampleDialogue: z.string().max(CHARACTER_LIMITS.exampleDialogue).optional(),
+    groupId: z.number().int().positive().nullable().optional()
   }),
   upsertSettings: z.record(z.string().regex(/^[A-Za-z0-9_\-]+$/), z.union([z.string(), z.number(), z.boolean()])).refine((obj: Record<string, unknown>) => Object.keys(obj).length > 0, 'At least one setting required'),
   createUserPrompt: z.object({
