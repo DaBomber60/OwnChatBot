@@ -18,6 +18,8 @@ export interface SSERelayOptions {
   canWrite: () => boolean;
   /** Called with every raw upstream payload string (for debug capture). */
   onFrame?: (payload: string) => void;
+  /** Called after every successful read from upstream; use it to reset an idle timeout. */
+  onChunk?: (byteLength: number) => void;
   /** Snapshot hook, invoked at most once per `progressIntervalMs` while content streams. */
   onProgress?: (state: SSERelayState) => void | Promise<void>;
   progressIntervalMs?: number;
@@ -57,7 +59,7 @@ export interface SSERelayResult extends SSERelayState {
 export async function relayUpstreamSSE(opts: SSERelayOptions): Promise<SSERelayResult> {
   const {
     reader, res, thinkingEnabled, canWrite,
-    onFrame, onProgress, onReadError,
+    onFrame, onChunk, onProgress, onReadError,
     progressIntervalMs = 1500,
     logLabel = '[Stream]',
   } = opts;
@@ -153,6 +155,8 @@ export async function relayUpstreamSSE(opts: SSERelayOptions): Promise<SSERelayR
 
     const { done, value } = readResult;
     if (done) break;
+
+    if (onChunk) onChunk(value?.byteLength || 0);
 
     if (!canWrite()) {
       console.log(`${logLabel} Client disconnected, stopping stream processing`);

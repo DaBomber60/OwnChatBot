@@ -1,4 +1,8 @@
-import { tokenFieldFor, normalizeTemperature, clampMaxTokens, DEFAULT_FALLBACK_URL } from '../lib/aiProvider';
+import {
+  tokenFieldFor, normalizeTemperature, clampMaxTokens, DEFAULT_FALLBACK_URL,
+  clampApiFailureTimeout, failureTimeoutMs,
+  DEFAULT_API_FAILURE_TIMEOUT, API_FAILURE_TIMEOUT_MIN, API_FAILURE_TIMEOUT_MAX, STREAM_TIMEOUT_MULTIPLIER,
+} from '../lib/aiProvider';
 import type { AIProvider } from '../lib/aiProvider';
 
 // ---------------------------------------------------------------------------
@@ -102,5 +106,44 @@ describe('clampMaxTokens', () => {
 describe('DEFAULT_FALLBACK_URL', () => {
   it('is the DeepSeek chat completions endpoint', () => {
     expect(DEFAULT_FALLBACK_URL).toBe('https://api.deepseek.com/chat/completions');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// API failure timeout
+// ---------------------------------------------------------------------------
+describe('clampApiFailureTimeout', () => {
+  it('allows the full supported range', () => {
+    expect(API_FAILURE_TIMEOUT_MIN).toBe(5);
+    expect(API_FAILURE_TIMEOUT_MAX).toBe(240);
+    expect(clampApiFailureTimeout(5)).toBe(5);
+    expect(clampApiFailureTimeout(240)).toBe(240);
+    expect(clampApiFailureTimeout(120)).toBe(120);
+  });
+
+  it('clamps out-of-range values', () => {
+    expect(clampApiFailureTimeout(1)).toBe(5);
+    expect(clampApiFailureTimeout(9999)).toBe(240);
+  });
+
+  it('falls back to the default for NaN', () => {
+    expect(clampApiFailureTimeout(NaN)).toBe(DEFAULT_API_FAILURE_TIMEOUT);
+  });
+});
+
+describe('failureTimeoutMs', () => {
+  it('uses the raw value for non-streaming requests', () => {
+    expect(failureTimeoutMs(20, false)).toBe(20000);
+  });
+
+  it('doubles the window for streaming requests', () => {
+    expect(STREAM_TIMEOUT_MULTIPLIER).toBe(2);
+    expect(failureTimeoutMs(20, true)).toBe(40000);
+    expect(failureTimeoutMs(240, true)).toBe(480000);
+  });
+
+  it('clamps before converting to milliseconds', () => {
+    expect(failureTimeoutMs(9999, false)).toBe(240000);
+    expect(failureTimeoutMs(0, false)).toBe(5000);
   });
 });

@@ -154,6 +154,24 @@ describe('readSSEStream', () => {
     const result = await readSSEStream(stream, () => {});
     expect(result).toBe('caf\u00e9 \u2014 \ud83d\ude80');
   });
+
+  it('cancels the stream on [DONE] so the connection is closed', async () => {
+    const cancel = jest.fn();
+    const encoder = new TextEncoder();
+    let sent = false;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (sent) return; // never closes on its own
+        sent = true;
+        controller.enqueue(encoder.encode('data: {"content":"hi"}\n\ndata: [DONE]\n\n'));
+      },
+      cancel,
+    });
+
+    const result = await readSSEStream(stream, () => {});
+    expect(result).toBe('hi');
+    expect(cancel).toHaveBeenCalled();
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -7,6 +7,7 @@ import { notFound, serverError } from './apiErrors';
 import { buildSystemPrompt, replacePlaceholders } from './systemPrompt';
 import { truncateMessagesIfNeeded, injectTruncationNote } from './messageUtils';
 import { callUpstreamAI } from './upstreamAI';
+import { failureTimeoutMs } from './aiProvider';
 import { resolveAIConfig, buildUpstreamBody, type PromptMessage } from './aiRequest';
 
 export interface SummaryRunResult {
@@ -92,7 +93,20 @@ export async function runSummary(
   injectTruncationNote(truncationResult);
 
   const body = buildUpstreamBody(cfg, { messages: truncationResult.messages, stream: false });
-  const upstream = await callUpstreamAI({ url: cfg.url, apiKey: cfg.apiKey, body });
+  const upstream = await callUpstreamAI({
+    url: cfg.url,
+    apiKey: cfg.apiKey,
+    body,
+    signal: AbortSignal.timeout(failureTimeoutMs(cfg.apiFailureTimeout, false)),
+  }).catch((err: any) => {
+    if (err?.name === 'TimeoutError' || err?.name === 'AbortError') return null;
+    throw err;
+  });
+
+  if (!upstream) {
+    serverError(res, `Summary request timed out after ${cfg.apiFailureTimeout}s`, 'UPSTREAM_TIMEOUT');
+    return null;
+  }
 
   if (!upstream.ok) {
     serverError(res, `API request failed: ${upstream.rawText || 'Unknown error'}`, 'UPSTREAM_API_ERROR');

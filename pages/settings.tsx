@@ -6,7 +6,7 @@ import { useRouter } from 'next/router';
 import { logout } from '../lib/auth';
 import Head from 'next/head';
 import type { AIProvider } from '../types/models';
-import { DEFAULT_THINKING_GUIDANCE } from '../lib/aiProvider';
+import { DEFAULT_THINKING_GUIDANCE, DEFAULT_API_FAILURE_TIMEOUT, clampApiFailureTimeout } from '../lib/aiProvider';
 
 // --- Settings reducer (single state object replaces 24 individual useState calls) ---
 
@@ -294,7 +294,7 @@ export default function SettingsPage() {
       payload.limitNotes = dbSettings.limit_notes ? parseInt(dbSettings.limit_notes) : 10000;
       payload.limitGenerateDescription = dbSettings.limit_generateDescription ? parseInt(dbSettings.limit_generateDescription) : 3000;
       payload.limitMessageContent = dbSettings.limit_messageContent ? parseInt(dbSettings.limit_messageContent) : 8000;
-      payload.apiFailureTimeout = dbSettings.apiFailureTimeout ? Math.max(5, Math.min(120, parseInt(dbSettings.apiFailureTimeout))) : 20;
+      payload.apiFailureTimeout = dbSettings.apiFailureTimeout ? clampApiFailureTimeout(parseInt(dbSettings.apiFailureTimeout)) : DEFAULT_API_FAILURE_TIMEOUT;
       // DeepSeek thinking/reasoning
       payload.deepseekThinking = dbSettings.deepseekThinking === 'enabled' ? 'enabled' : 'disabled';
       payload.deepseekReasoningEffort = dbSettings.deepseekReasoningEffort === 'max' ? 'max' : 'high';
@@ -1114,7 +1114,7 @@ export default function SettingsPage() {
             <input
               type="range"
               min="5"
-              max="120"
+              max="240"
               step="5"
               value={state.apiFailureTimeout}
               onChange={e => dispatch({ type: 'SET_FIELD', field: 'apiFailureTimeout', value: parseInt(e.target.value) })}
@@ -1123,10 +1123,11 @@ export default function SettingsPage() {
             <div className="flex justify-between text-xs text-muted mt-1">
               <span>5s</span>
               <span>20s (default)</span>
-              <span>120s</span>
+              <span>240s</span>
             </div>
             <p className="text-xs text-secondary mt-1">
-              If no response arrives within this time, the request is cancelled and an error is shown.
+              If nothing arrives within this time, the request is cancelled and an error is shown.
+              Streamed replies allow twice this long between chunks.
             </p>
           </div>
 

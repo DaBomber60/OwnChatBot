@@ -1,7 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import prisma from '../../../lib/prisma';
 import { badRequest, notFound, serverError, tooManyRequests } from '../../../lib/apiErrors';
-import { DEFAULT_FALLBACK_URL, clampMaxTokens, stripThinkTags } from '../../../lib/aiProvider';
+import { DEFAULT_FALLBACK_URL, clampMaxTokens, stripThinkTags, failureTimeoutMs, UPSTREAM_TIMEOUT_GRACE_MS } from '../../../lib/aiProvider';
 import {
   resolveAIConfig, isThinkingEnabled, buildUpstreamBody, buildConversationPrompt,
   persistRequestWithMeta, loadUserPromptBody, parseUpstreamBody, forwardUpstreamError,
@@ -174,15 +174,29 @@ export default withApiHandler({}, {
     });
   };
 
-  // call API (add abort + timeout for streaming robustness - Item 12)
+  // Upstream abort + inactivity timeout. The timer is re-armed on every chunk so
+  // long replies are fine, but a stalled provider is dropped promptly.
+  // A small grace period lets the browser's own stall timer fire first so the user
+  // sees a proper error instead of a silently truncated reply.
   const abortController = new AbortController();
-  const STREAM_TIMEOUT_MS = parseInt(process.env.STREAM_TIMEOUT_MS || '90000', 10); // 90s default
-  const streamTimeout = setTimeout(() => {
-    if (!abortController.signal.aborted) {
-  console.log(`[Timeout] Aborting upstream fetch after ${STREAM_TIMEOUT_MS}ms timeout`);
-      abortController.abort();
-    }
-  }, STREAM_TIMEOUT_MS);
+  const envTimeout = parseInt(process.env.STREAM_TIMEOUT_MS || '', 10);
+  const IDLE_TIMEOUT_MS = !isNaN(envTimeout)
+    ? envTimeout
+    : failureTimeoutMs(aiCfg.apiFailureTimeout, stream) + (stream ? UPSTREAM_TIMEOUT_GRACE_MS : 0);
+  let idleTimer: NodeJS.Timeout | null = null;
+  const clearIdleTimeout = () => {
+    if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
+  };
+  const armIdleTimeout = () => {
+    clearIdleTimeout();
+    idleTimer = setTimeout(() => {
+      if (!abortController.signal.aborted) {
+        console.log(`[Timeout] Aborting upstream fetch after ${IDLE_TIMEOUT_MS}ms without activity`);
+        abortController.abort();
+      }
+    }, IDLE_TIMEOUT_MS);
+  };
+  armIdleTimeout();
 
   let apiRes: Response;
   try {
@@ -196,6 +210,7 @@ export default withApiHandler({}, {
       signal: abortController.signal
     });
   } catch (err) {
+    clearIdleTimeout();
     if ((err as any)?.name === 'AbortError') {
       return serverError(res, 'Upstream model request aborted', 'UPSTREAM_ABORTED');
     }
@@ -203,6 +218,7 @@ export default withApiHandler({}, {
   }
 
   if (!stream) {
+    clearIdleTimeout();
     // Capture entire body text for debug, then parse JSON
     const rawText = await apiRes.text();
     if (DEBUG_CAPTURE) {
@@ -246,6 +262,7 @@ export default withApiHandler({}, {
   const upstreamCT = apiRes.headers.get('content-type') || '';
   const upstreamIsSSE = upstreamCT.includes('text/event-stream');
   if (!upstreamIsSSE) {
+    clearIdleTimeout();
     // Upstream did not return SSE; capture and forward as non-stream error/response
     const rawText = await apiRes.text();
     if (DEBUG_CAPTURE) {
@@ -414,6 +431,7 @@ export default withApiHandler({}, {
         responseFrames.push(payload);
         if (sseCapture) sseCapture.push(payload);
       },
+      onChunk: () => armIdleTimeout(),
       onProgress: async (s) => {
         await persistSseResponse(sessionIdToUse, apiRes, {
           frames: s.frames.slice(-100),
@@ -430,6 +448,7 @@ export default withApiHandler({}, {
       },
     });
     stopHeartbeat();
+    clearIdleTimeout();
     assistantText = relay.assistantText;
     assistantThinkingText = relay.assistantThinkingText;
     if (relay.sawDone) streamCompleted = true;
@@ -486,8 +505,12 @@ export default withApiHandler({}, {
   }
   
   // Cleanup timeout
-  clearTimeout(streamTimeout);
+  clearIdleTimeout();
   stopHeartbeat();
+
+  // Tear down the upstream connection so the provider can't keep sending after we're done
+  abortUpstream('stream finished');
+  try { await reader.cancel(); } catch {}
 
   // Persist last API response for SSE (frames and summary)
   await persistSseResponse(sessionIdToUse, apiRes, {

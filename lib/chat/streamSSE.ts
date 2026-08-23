@@ -64,7 +64,9 @@ export async function readSSEStream(
       }
     }
   } finally {
-    // Ensure reader is released even if caller catches AbortError upstream
+    // Cancel first so the underlying HTTP body is closed when we stop early (e.g. [DONE]),
+    // otherwise the connection can stay open and keep receiving data.
+    try { await reader.cancel(); } catch {}
     try { reader.releaseLock(); } catch {}
   }
 
@@ -82,6 +84,7 @@ export function isSSEResponse(res: Response): boolean {
 
 import type React from 'react';
 import { fetchChatSettings, type ChatSettings, PROVIDER_DISPLAY_NAMES } from './chatSettings';
+import { failureTimeoutMs, STREAM_TIMEOUT_MULTIPLIER } from '../aiProvider';
 import { safeJson, extractErrorFromResponse, sanitizeErrorMessage, extractUsefulError } from './errorUtils';
 
 /** Options for performStreamingRequest. Each caller provides its specific callbacks. */
@@ -170,7 +173,7 @@ export async function performStreamingRequest(opts: StreamingRequestOpts): Promi
       };
 
   // 4. Fetch
-  const timeoutMs = (settings.apiFailureTimeout || 20) * 1000;
+  const timeoutMs = failureTimeoutMs(settings.apiFailureTimeout, false);
   let fetchTimedOut = false;
   const res = await (async () => {
     try {
@@ -205,34 +208,47 @@ export async function performStreamingRequest(opts: StreamingRequestOpts): Promi
 
   // 6. SSE streaming path
   if (streamSetting && res.body && isSSEResponse(res)) {
-    // First-content timeout: abort if no content arrives within the configured limit
-    const timeoutMs = (settings.apiFailureTimeout || 20) * 1000;
+    // Stall detection: `apiFailureTimeout` to produce the first content, then a
+    // rolling window of twice that between chunks for the rest of the stream.
+    const firstContentMs = failureTimeoutMs(settings.apiFailureTimeout, false);
+    const idleMs = failureTimeoutMs(settings.apiFailureTimeout, true);
     let firstContentReceived = false;
     let timedOutByUs = false;
-    const firstContentTimer = setTimeout(() => {
-      if (!firstContentReceived && abortController) {
-        timedOutByUs = true;
-        abortController.abort();
-      }
-    }, timeoutMs);
+    let stallTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const abortForTimeout = () => {
+      timedOutByUs = true;
+      // Aborting tears down the connection so the provider can't deliver a late response
+      abortController?.abort();
+    };
+    const armStallTimer = (ms: number) => {
+      if (stallTimer) clearTimeout(stallTimer);
+      stallTimer = setTimeout(abortForTimeout, ms);
+    };
+    const clearStallTimer = () => {
+      if (stallTimer) { clearTimeout(stallTimer); stallTimer = null; }
+    };
+    armStallTimer(firstContentMs);
 
     try {
       streamedContent = await readSSEStream(res.body, (accumulated) => {
-        if (!firstContentReceived) {
-          firstContentReceived = true;
-          clearTimeout(firstContentTimer);
-        }
+        firstContentReceived = true;
+        armStallTimer(idleMs);
         onStreamChunk(accumulated);
       }, onThinking);
-      clearTimeout(firstContentTimer);
+      clearStallTimer();
       if (onComplete) await onComplete();
     } catch (err: any) {
-      clearTimeout(firstContentTimer);
+      clearStallTimer();
       if (err.name === 'AbortError') {
         if (timedOutByUs) {
-          // API failure timeout — show provider-specific error
           const providerName = PROVIDER_DISPLAY_NAMES[settings.aiProvider] || settings.aiProvider;
-          onError(`OwnChatBot is working, but the ${providerName} API is down.\n\nNo response was received within ${settings.apiFailureTimeout} seconds. You can adjust this timeout in Settings.`);
+          if (firstContentReceived) {
+            // Content had started, so surface it as a stalled stream rather than "API is down"
+            onError(`The ${providerName} API stopped responding part-way through the reply.\n\nNo new content arrived for ${settings.apiFailureTimeout * STREAM_TIMEOUT_MULTIPLIER} seconds, so the request was cancelled. You can adjust this timeout in Settings.`);
+          } else {
+            onError(`OwnChatBot is working, but the ${providerName} API is down.\n\nNo response was received within ${settings.apiFailureTimeout} seconds. You can adjust this timeout in Settings.`);
+          }
           return { settings, streamedContent: '', wasStreaming: true, wasAborted: false };
         }
         wasAborted = true;

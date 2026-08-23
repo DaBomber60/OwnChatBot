@@ -1,7 +1,10 @@
-import { DEFAULT_TEMPERATURE, DEFAULT_MAX_TOKENS, MAX_TOKENS_MIN, MAX_TOKENS_MAX } from '../aiProvider';
+import {
+  DEFAULT_TEMPERATURE, DEFAULT_MAX_TOKENS, MAX_TOKENS_MIN, MAX_TOKENS_MAX,
+  DEFAULT_API_FAILURE_TIMEOUT, clampApiFailureTimeout,
+} from '../aiProvider';
 import type { AIProvider } from '../../types/models';
 
-export const DEFAULT_API_FAILURE_TIMEOUT = 20;
+export { DEFAULT_API_FAILURE_TIMEOUT };
 
 /** Parsed chat settings from the /api/settings endpoint. */
 export interface ChatSettings {
@@ -31,7 +34,7 @@ export async function fetchChatSettings(): Promise<ChatSettings> {
     defaultPromptId: s.defaultPromptId ? Number(s.defaultPromptId) : undefined,
     temperature: s.temperature ? parseFloat(s.temperature) : DEFAULT_TEMPERATURE,
     maxTokens: s.maxTokens ? Math.max(MAX_TOKENS_MIN, Math.min(MAX_TOKENS_MAX, parseInt(s.maxTokens))) : DEFAULT_MAX_TOKENS,
-    apiFailureTimeout: s.apiFailureTimeout ? Math.max(5, Math.min(120, parseInt(s.apiFailureTimeout))) : DEFAULT_API_FAILURE_TIMEOUT,
+    apiFailureTimeout: s.apiFailureTimeout ? clampApiFailureTimeout(parseInt(s.apiFailureTimeout)) : DEFAULT_API_FAILURE_TIMEOUT,
     aiProvider: (s.aiProvider as AIProvider) || 'deepseek',
   };
 }

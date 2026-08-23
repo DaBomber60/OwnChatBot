@@ -25,6 +25,7 @@ export interface AIConfig {
   maxTokens: number;          // Default 4096, clamped [256, 8192]
   truncationLimit: number;    // Default 150000, clamped [30000, 320000]
   summaryPrompt: string;      // Default long prompt
+  apiFailureTimeout: number;  // Seconds of inactivity before giving up. Default 20, clamped [5, 240]
   // DeepSeek thinking/reasoning mode
   deepseekThinking: 'disabled' | 'enabled';  // Default 'disabled'
   deepseekReasoningEffort: 'high' | 'max';   // Default 'high' (only used when thinking is enabled)
@@ -59,7 +60,7 @@ export async function getAIConfig(): Promise<AIConfig | { error: string; code: s
       // DeepSeek thinking/reasoning mode
       'deepseekThinking', 'deepseekReasoningEffort', 'deepseekThinkingGuidance',
       // Batched settings (previously separate queries)
-      'temperature', 'maxTokens', 'maxCharacters', 'summaryPrompt'
+      'temperature', 'maxTokens', 'maxCharacters', 'summaryPrompt', 'apiFailureTimeout'
     ] } }
   });
   const map: RawSettingsMap = {};
@@ -119,6 +120,7 @@ export async function getAIConfig(): Promise<AIConfig | { error: string; code: s
     maxTokens: !isNaN(maxTokensRaw) ? clampMaxTokens(maxTokensRaw) : DEFAULT_MAX_TOKENS,
     truncationLimit: !isNaN(maxCharsRaw) ? Math.max(TRUNCATION_MIN, Math.min(TRUNCATION_MAX, maxCharsRaw)) : DEFAULT_TRUNCATION_LIMIT,
     summaryPrompt: map.summaryPrompt || DEFAULT_SUMMARY_PROMPT,
+    apiFailureTimeout: clampApiFailureTimeout(map.apiFailureTimeout ? parseInt(map.apiFailureTimeout, 10) : NaN),
     deepseekThinking,
     deepseekReasoningEffort,
     deepseekThinkingGuidance,
@@ -184,6 +186,32 @@ export async function getTruncationLimit(): Promise<number> {
 export const DEFAULT_MAX_TOKENS = 4096;
 export const MAX_TOKENS_MIN = 256;
 export const MAX_TOKENS_MAX = 256000;
+
+// ---------------------------------------------------------------------------
+// API failure timeout
+// ---------------------------------------------------------------------------
+
+export const DEFAULT_API_FAILURE_TIMEOUT = 20;
+export const API_FAILURE_TIMEOUT_MIN = 5;
+export const API_FAILURE_TIMEOUT_MAX = 240;
+/** Streamed replies arrive in pieces, so they get twice the stall allowance. */
+export const STREAM_TIMEOUT_MULTIPLIER = 2;
+/** Extra server-side slack so the browser's stall timer reports the timeout first. */
+export const UPSTREAM_TIMEOUT_GRACE_MS = 5000;
+
+/** Clamp an API failure timeout (seconds) to the supported range. */
+export function clampApiFailureTimeout(n: number): number {
+  if (isNaN(n)) return DEFAULT_API_FAILURE_TIMEOUT;
+  return Math.max(API_FAILURE_TIMEOUT_MIN, Math.min(API_FAILURE_TIMEOUT_MAX, n));
+}
+
+/**
+ * Milliseconds of inactivity before a request is considered failed.
+ * Streaming uses `STREAM_TIMEOUT_MULTIPLIER` times the configured value.
+ */
+export function failureTimeoutMs(seconds: number, streaming: boolean): number {
+  return clampApiFailureTimeout(seconds) * 1000 * (streaming ? STREAM_TIMEOUT_MULTIPLIER : 1);
+}
 
 /** Clamp a max-tokens value to [min, 8192]. */
 export function clampMaxTokens(n: number, min = MAX_TOKENS_MIN): number {
