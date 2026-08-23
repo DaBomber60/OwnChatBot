@@ -28,6 +28,14 @@ export const TOP_LOAD_THRESHOLD_PX = 120;
 /** Hold duration on the variant button before the temperature popover opens. */
 export const VARIANT_LONG_PRESS_MS = 450;
 
+/** Typewriter reveal: slowest the text is ever revealed. */
+export const REVEAL_MIN_CHARS_PER_SEC = 120;
+/** Any backlog is drained within this window, so the display never lags further behind. */
+export const REVEAL_CATCHUP_MS = 250;
+
+/** Duration of the eased scroll-to-bottom used for non-streamed replies. */
+export const SMOOTH_SCROLL_MS = 280;
+
 /** Resolves the edit textarea's max height against the current viewport. */
 export function editTextareaMaxHeight(): number {
   const viewportMax = typeof window !== 'undefined'

@@ -41,18 +41,12 @@
   border-radius: var(--radius-xl);
   position: relative;
   box-shadow: var(--shadow-sm);
-  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  transition: box-shadow 0.2s ease;
   overflow: visible; /* remove internal scrollbars per message */
 }
 
 .chat-message:hover {
-  transform: translateY(-1px);
   box-shadow: var(--shadow-md);
-}
-
-/* Disable hover effects when editing */
-.chat-message.editing:hover {
-  transform: none;
 }
 
 .chat-message.user {

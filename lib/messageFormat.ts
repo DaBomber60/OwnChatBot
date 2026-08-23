@@ -9,9 +9,12 @@ const ALLOWED_TAGS = [
 ];
 const ALLOWED_ATTR = ['href', 'target', 'rel', 'class'];
 
+// Instantiating DOMPurify is expensive and this runs per message per render.
+let purifier: ReturnType<typeof createDOMPurify> | null = null;
+
 export function sanitizeMessage(input: string): string {
-  const DOMPurify = createDOMPurify();
-  return DOMPurify.sanitize(input ?? '', {
+  if (!purifier) purifier = createDOMPurify();
+  return purifier.sanitize(input ?? '', {
     ALLOWED_TAGS,
     ALLOWED_ATTR,
     FORBID_TAGS: ['img', 'script', 'style'],

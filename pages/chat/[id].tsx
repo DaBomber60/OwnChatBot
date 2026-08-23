@@ -9,6 +9,7 @@ import { useNotes } from '../../hooks/chat/useNotes';
 import { useSummary } from '../../hooks/chat/useSummary';
 import { useChatScroll } from '../../hooks/chat/useChatScroll';
 import { useChatViewport } from '../../hooks/chat/useChatViewport';
+import { useStreamReveal } from '../../hooks/chat/useStreamReveal';
 import { ChatHeader } from '../../components/chat/ChatHeader';
 import { ChatInput } from '../../components/chat/ChatInput';
 import { SummaryModal } from '../../components/chat/SummaryModal';
@@ -31,10 +32,17 @@ import type { ChatMessage, Message, MessageVersion, SessionData } from '../../ty
 const INITIAL_PAGE_SIZE = 20; // messages for initial load
 const SCROLL_PAGE_SIZE = 60; // messages to load per top-scroll fetch
 
+// The whole list re-renders on every reveal frame, so formatting is memoised by content.
+const FORMAT_CACHE_LIMIT = 400;
+const formatCache = new Map<string, string>();
+
 // Utility to format message content with newlines, italics, bold, and monospace code
 function formatMessage(content: string) {
   // Handle empty content
   if (!content) return '';
+
+  const cached = formatCache.get(content);
+  if (cached !== undefined) return cached;
   
   // Replace horizontal dividers first (before other formatting)
   // Handle --- and ___ as horizontal dividers (either standalone or on their own line)
@@ -56,7 +64,13 @@ function formatMessage(content: string) {
   
   // Wrap the entire content in a div structure for better iOS compatibility
   // Sanitize via DOMPurify to prevent XSS from user/AI-injected HTML
-  return sanitizeMessage(`<div>${html}</div>`);
+  const result = sanitizeMessage(`<div>${html}</div>`);
+  if (formatCache.size >= FORMAT_CACHE_LIMIT) {
+    const oldest = formatCache.keys().next().value;
+    if (oldest !== undefined) formatCache.delete(oldest);
+  }
+  formatCache.set(content, result);
+  return result;
 }
 
 export default function ChatSessionPage() {
@@ -131,7 +145,8 @@ export default function ChatSessionPage() {
   const { showSummaryModal, setShowSummaryModal, summaryContent, setSummaryContent, savingSummary, generatingSummary, updatingSummary, saveSummary, generateSummary, updateSummary, canUpdateSummary } = summary;
 
   const scroll = useChatScroll({ containerRef, messages, isStreaming, generatingVariant, editingMessageIndex });
-  const { scrollToBottom, startStreamingFollow, stopStreamingFollow, maybeStartStreamingFollow, handleScrollToLatestClick, showScrollToLatest, setShowScrollToLatest, userPinnedBottomRef, skipNextScroll, forceNextSmoothRef } = scroll;
+  const { smoothScrollToBottom, isProgrammaticScroll, stopStreamingFollow, maybeStartStreamingFollow, handleScrollToLatestClick, showScrollToLatest, setShowScrollToLatest, userPinnedBottomRef, skipNextScroll } = scroll;
+  const reveal = useStreamReveal();
 
   const { headerHeight, isWideScreen, isNarrowScreen } = useChatViewport({
     headerRef,
@@ -327,6 +342,8 @@ export default function ChatSessionPage() {
       // During editing, only update refs silently – avoid any setState that would trigger
       // a React re-render (which causes the browser to fight with text-selection scrolling).
       if (editingMessageIndex !== null) return;
+      // Our own follow/smooth-scroll frames must not be mistaken for the user scrolling away
+      if (isProgrammaticScroll()) return;
 
       const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
       userPinnedBottomRef.current = distanceFromBottom < BOTTOM_PIN_THRESHOLD_PX;
@@ -339,13 +356,14 @@ export default function ChatSessionPage() {
     el.addEventListener('scroll', handleScroll, { passive: true });
     handleScroll();
     return () => el.removeEventListener('scroll', handleScroll as any);
-  }, [hasSession, loadOlderMessages, editingMessageIndex, setShowScrollToLatest, userPinnedBottomRef]);
+  }, [hasSession, loadOlderMessages, editingMessageIndex, setShowScrollToLatest, userPinnedBottomRef, isProgrammaticScroll]);
 
   // Function to stop streaming (both chat and variant generation)
   const stopStreaming = useCallback(() => {
     if (streamingAbortController.current) {
       streamingAbortController.current.abort();
       streamingAbortController.current = null;
+      reveal.flush();
       setIsStreaming(false);
   stopStreamingFollow();
       setLoading(false);
@@ -565,7 +583,12 @@ export default function ChatSessionPage() {
         setVariantDisplayContent(prev => { const m = new Map(prev); m.set(messageId, ''); return m; });
       });
       
-      setTimeout(() => scrollToBottom(false), 5);
+      smoothScrollToBottom(true);
+
+      reveal.start((text) => {
+        setVariantDisplayContent(prev => { const m = new Map(prev); m.set(messageId, text); return m; });
+        maybeStartStreamingFollow();
+      });
 
       const result = await performStreamingRequest({
         url: `/api/messages/${messageId}/variants`,
@@ -574,30 +597,34 @@ export default function ChatSessionPage() {
         skipSettingsInBody: true,
         onThinking: (thinking) => setIsModelThinking(thinking),
         onStreamChunk: (accumulated) => {
-          setVariantDisplayContent(prev => { const m = new Map(prev); m.set(messageId, accumulated); return m; });
-          maybeStartStreamingFollow();
+          reveal.push(accumulated);
         },
         onNonStreamResult: (data) => {
           // Non-streaming: `data` is the variant record itself
           replacePlaceholderWithReal(data);
           setVariantDisplayContent(prev => { const m = new Map(prev); m.set(messageId, data.content); return m; });
+          smoothScrollToBottom();
         },
         onComplete: async () => {
           await maybeShowTruncationWarning();
           await maybeShowMaxTokensCutoff();
         },
         onError: (msg) => {
+          reveal.reset();
           setApiErrorMessage(msg);
           setShowErrorModal(true);
           revertVariantPlaceholder(messageId);
         },
         onAbort: () => {
+          reveal.reset();
           revertVariantPlaceholder(messageId);
           setGeneratingVariant(null);
           setIsModelThinking(false);
           stopStreamingFollow();
         },
       });
+
+      reveal.flush();
 
       if (result.wasAborted) return;
       setIsModelThinking(false);
@@ -799,7 +826,7 @@ export default function ChatSessionPage() {
     // Scroll to show the updated content after a brief delay (but not during edit mode)
     setTimeout(() => {
       if (editingMessageIndex === null) {
-        scrollToBottom(false);
+        smoothScrollToBottom();
       }
     }, 50);
   };
@@ -1734,6 +1761,18 @@ export default function ChatSessionPage() {
       return [...prev, { role: 'assistant', content: '' }];
     });
     streamingMessageRef.current = '';
+    smoothScrollToBottom(true);
+    reveal.start((text) => {
+      setMessages(prev => {
+        const copy = [...prev];
+        const lastIdx = copy.findLastIndex(m => m.role === 'assistant');
+        if (lastIdx !== -1 && copy[lastIdx]) {
+          copy[lastIdx]!.content = text ? originalContent + '\n\n' + text : originalContent;
+        }
+        return copy;
+      });
+      maybeStartStreamingFollow();
+    });
 
     const result = await performStreamingRequest({
       url: '/api/chat',
@@ -1745,15 +1784,7 @@ export default function ChatSessionPage() {
       onThinking: (thinking) => setIsModelThinking(thinking),
       onStreamChunk: (accumulated) => {
         streamingMessageRef.current = accumulated;
-        setMessages(prev => {
-          const copy = [...prev];
-          const lastIdx = copy.findLastIndex(m => m.role === 'assistant');
-          if (lastIdx !== -1 && copy[lastIdx]) {
-            copy[lastIdx]!.content = accumulated ? originalContent + '\n\n' + accumulated : originalContent;
-          }
-          return copy;
-        });
-        maybeStartStreamingFollow();
+        reveal.push(accumulated);
       },
       onNonStreamResult: (data) => {
         const content = data?.choices?.[0]?.message?.content;
@@ -1767,6 +1798,7 @@ export default function ChatSessionPage() {
             }
             return [...prev, { role: 'assistant', content }];
           });
+          smoothScrollToBottom();
         } else if (data?.error) {
           setApiErrorMessage(sanitizeErrorMessage(extractUsefulError(String(data.error))));
           setShowErrorModal(true);
@@ -1774,6 +1806,7 @@ export default function ChatSessionPage() {
       },
       onError: (msg) => { setApiErrorMessage(msg); setShowErrorModal(true); },
       onAbort: () => {
+        reveal.flush();
         setLoading(false);
         setIsStreaming(false);
         setIsModelThinking(false);
@@ -1782,6 +1815,8 @@ export default function ChatSessionPage() {
         stopStreamingFollow();
       },
     });
+
+    reveal.flush();
 
     if (result.wasAborted) return; // onAbort already cleaned up
 
@@ -1793,7 +1828,7 @@ export default function ChatSessionPage() {
     setSkipNextMessageUpdate(true);
     streamingMessageRef.current = '';
     
-    setTimeout(() => { if (editingMessageIndex === null) scrollToBottom(false); }, 100);
+    setTimeout(() => { if (editingMessageIndex === null) smoothScrollToBottom(); }, 100);
     setTimeout(async () => {
       skipNextScroll.current = true;
       await mutateWithVariantPreservation();
@@ -1963,6 +1998,17 @@ export default function ChatSessionPage() {
     setIsModelThinking(false);
     streamingMessageRef.current = '';
     setMessages(prev => [...prev, { role: 'assistant', content: '' }]);
+    // A long user message can push the reply off-screen, so glide down before it starts
+    smoothScrollToBottom(true);
+    reveal.start((text) => {
+      setMessages(prev => {
+        const copy = [...prev];
+        const last = copy[copy.length - 1];
+        if (last && last.role === 'assistant') last.content = text;
+        return copy;
+      });
+      maybeStartStreamingFollow();
+    });
 
     const showError = (msg: string) => { setApiErrorMessage(msg); setShowErrorModal(true); };
 
@@ -1977,13 +2023,7 @@ export default function ChatSessionPage() {
       onThinking: (thinking) => setIsModelThinking(thinking),
       onStreamChunk: (accumulated) => {
         streamingMessageRef.current = accumulated;
-        setMessages(prev => {
-          const copy = [...prev];
-          const last = copy[copy.length - 1];
-          if (last && last.role === 'assistant') last.content = accumulated;
-          return copy;
-        });
-        maybeStartStreamingFollow();
+        reveal.push(accumulated);
       },
       onNonStreamResult: (data) => {
         const content = data?.choices?.[0]?.message?.content || data?.content;
@@ -1994,6 +2034,7 @@ export default function ChatSessionPage() {
             if (last && last.role === 'assistant') { last.content = content; return copy; }
             return [...prev, { role: 'assistant', content }];
           });
+          smoothScrollToBottom();
         } else if (data?.error) {
           showError(sanitizeErrorMessage(extractUsefulError(data.error?.message || JSON.stringify(data.error))));
         }
@@ -2002,8 +2043,10 @@ export default function ChatSessionPage() {
         const note = await buildRequestSizeNote();
         showError(note ? `${msg}\n\n${note}` : msg);
       },
-      onAbort: () => { setLoading(false); setIsStreaming(false); setIsModelThinking(false); },
+      onAbort: () => { reveal.flush(); setLoading(false); setIsStreaming(false); setIsModelThinking(false); },
     });
+
+    reveal.flush();
 
     if (result.wasAborted) { stopStreamingFollow(); return; }
 
@@ -2044,7 +2087,7 @@ export default function ChatSessionPage() {
     shouldRestoreInputRef.current = false;
     preStreamLastMessageIdRef.current = null;
     
-    setTimeout(() => { if (editingMessageIndex === null) scrollToBottom(false); }, 100);
+    setTimeout(() => { if (editingMessageIndex === null) smoothScrollToBottom(); }, 100);
     
     // Delay database reload based on streaming/retry state
     const mutateDelay = result.wasStreaming ? (retryMessage ? 1500 : 1000) : (retryMessage ? 500 : 0);

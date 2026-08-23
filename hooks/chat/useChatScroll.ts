@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect, useLayoutEffect, useRef } from 'react';
+import { SMOOTH_SCROLL_MS } from '../../lib/chat/layout';
 import type { ChatMessage } from '../../types/models';
 
 export interface UseChatScrollOpts {
@@ -10,16 +11,16 @@ export interface UseChatScrollOpts {
 }
 
 export interface UseChatScrollReturn {
-  /** Scroll to the bottom of the chat container */
-  scrollToBottom: (immediate?: boolean) => void;
-  /** Start rAF-based streaming follow loop */
-  startStreamingFollow: () => void;
   /** Stop rAF-based streaming follow loop */
   stopStreamingFollow: () => void;
   /** Conditionally start streaming follow if pinned and streaming */
   maybeStartStreamingFollow: () => void;
   /** Handler for the "jump-to-latest" button */
   handleScrollToLatestClick: () => void;
+  /** Eased scroll to the bottom over SMOOTH_SCROLL_MS. Pass true to scroll even when unpinned. */
+  smoothScrollToBottom: (force?: boolean) => void;
+  /** True if the latest scroll event came from our own animation rather than the user. */
+  isProgrammaticScroll: () => boolean;
   /** Whether to show the jump-to-latest button */
   showScrollToLatest: boolean;
   /** Setter for showScrollToLatest (used by scroll listener) */
@@ -28,10 +29,6 @@ export interface UseChatScrollReturn {
   userPinnedBottomRef: React.MutableRefObject<boolean>;
   /** Ref to skip next scroll-to-bottom from the messages-change effect */
   skipNextScroll: React.MutableRefObject<boolean>;
-  /** Ref to force smooth scroll on next call */
-  forceNextSmoothRef: React.MutableRefObject<boolean>;
-  /** Ref tracking previous scroll height for bottom-anchoring */
-  prevScrollHeightRef: React.MutableRefObject<number>;
 }
 
 /**
@@ -51,13 +48,17 @@ export function useChatScroll({
   // Refs
   const userPinnedBottomRef = useRef(true);
   const skipNextScroll = useRef(false);
-  const forceNextSmoothRef = useRef(false);
   const initialScrollDoneRef = useRef(false);
   const lastScrollTime = useRef(0);
   const scrollTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const prevScrollHeightRef = useRef(0);
   const streamingFollowActiveRef = useRef(false);
   const streamingFollowRafRef = useRef<number | null>(null);
+  // Last scrollTop we set ourselves, so the page's scroll listener can tell our
+  // animation frames apart from a real user scroll and not un-pin the view.
+  const lastProgrammaticTopRef = useRef(-1);
+  const smoothScrollRafRef = useRef<number | null>(null);
+  const reducedMotionRef = useRef(false);
   // Mirror state into refs so rAF closures see current values
   const isStreamingRef = useRef(isStreaming);
   const generatingVariantRef = useRef(generatingVariant);
@@ -65,6 +66,26 @@ export function useChatScroll({
   useEffect(() => { isStreamingRef.current = isStreaming; }, [isStreaming]);
   useEffect(() => { generatingVariantRef.current = generatingVariant; }, [generatingVariant]);
   useEffect(() => { editingMessageIndexRef.current = editingMessageIndex; }, [editingMessageIndex]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) return;
+    const mq = window.matchMedia('(prefers-reduced-motion: reduce)');
+    reducedMotionRef.current = mq.matches;
+    const onChange = () => { reducedMotionRef.current = mq.matches; };
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  }, []);
+
+  const setScrollTop = useCallback((el: HTMLElement, top: number) => {
+    el.scrollTop = top;
+    lastProgrammaticTopRef.current = el.scrollTop; // read back: the browser clamps
+  }, []);
+
+  const isProgrammaticScroll = useCallback(() => {
+    const el = containerRef.current;
+    if (!el) return false;
+    return Math.abs(el.scrollTop - lastProgrammaticTopRef.current) < 2;
+  }, [containerRef]);
 
   // --- Streaming follow (rAF loop) ---
 
@@ -94,13 +115,20 @@ export function useChatScroll({
         stopStreamingFollow();
         return;
       }
+      // Let an in-flight glide finish before taking over the scroll position
+      if (smoothScrollRafRef.current !== null) {
+        streamingFollowRafRef.current = requestAnimationFrame(step);
+        return;
+      }
+      // Snap to the bottom each frame: the typewriter reveal already grows the content a
+      // character at a time, so easing on top of it just lags the text you're reading.
       const target = container.scrollHeight - container.clientHeight;
-      container.scrollTop = target;
+      if (container.scrollTop !== target) setScrollTop(container, target);
       streamingFollowRafRef.current = requestAnimationFrame(step);
     };
     streamingFollowActiveRef.current = true;
     streamingFollowRafRef.current = requestAnimationFrame(step);
-  }, [containerRef, stopStreamingFollow]);
+  }, [containerRef, stopStreamingFollow, setScrollTop]);
 
   const maybeStartStreamingFollow = useCallback(() => {
     if (editingMessageIndex !== null) return;
@@ -114,6 +142,9 @@ export function useChatScroll({
   const scrollToBottom = useCallback((immediate = false) => {
     if (!containerRef.current) return;
     if (editingMessageIndex !== null) return;
+    // A glide or the follow loop already owns the scroll position; a hard snap would cut it short
+    if (smoothScrollRafRef.current !== null && !immediate) return;
+    if (streamingFollowActiveRef.current && !immediate) return;
     if (!userPinnedBottomRef.current && !immediate) {
       // Drop a throttled scroll queued before the user scrolled away
       if (scrollTimeoutRef.current) {
@@ -130,13 +161,11 @@ export function useChatScroll({
       scrollTimeoutRef.current = null;
     }
     const forceAuto = !initialScrollDoneRef.current;
-    const wantSmooth = !immediate && !isStreaming && (forceNextSmoothRef.current || !forceAuto);
-    if (immediate || !isStreaming || forceNextSmoothRef.current) {
+    if (immediate || !isStreaming) {
       containerRef.current.scrollTo({
         top: containerRef.current.scrollHeight,
-        behavior: (immediate || forceAuto) ? 'auto' : wantSmooth ? 'smooth' : 'auto',
+        behavior: (immediate || forceAuto) ? 'auto' : 'smooth',
       });
-      if (forceNextSmoothRef.current) forceNextSmoothRef.current = false;
       lastScrollTime.current = now;
     } else if (timeSinceLastScroll > 100) {
       containerRef.current.scrollTo({ top: containerRef.current.scrollHeight, behavior: 'auto' });
@@ -159,10 +188,10 @@ export function useChatScroll({
     if (!containerRef.current) return;
     if (messages.length === 0) return;
     try {
-      containerRef.current.scrollTop = containerRef.current.scrollHeight;
+      setScrollTop(containerRef.current, containerRef.current.scrollHeight);
       initialScrollDoneRef.current = true;
     } catch {}
-  }, [containerRef, messages.length]);
+  }, [containerRef, messages.length, setScrollTop]);
 
   // --- Bottom-anchoring: compensate for height growth during streaming ---
   useLayoutEffect(() => {
@@ -180,13 +209,13 @@ export function useChatScroll({
       const growth = cur - prev;
       const beforeDist = cur - growth - el.scrollTop - el.clientHeight;
       if (beforeDist < 4) {
-        el.scrollTop = cur - el.clientHeight;
+        setScrollTop(el, cur - el.clientHeight);
       } else {
-        el.scrollTop = el.scrollTop + growth;
+        setScrollTop(el, el.scrollTop + growth);
       }
     }
     prevScrollHeightRef.current = cur;
-  }, [containerRef, messages, editingMessageIndex]);
+  }, [containerRef, messages, editingMessageIndex, setScrollTop]);
 
   // --- Scroll to bottom on message change ---
   useEffect(() => {
@@ -195,16 +224,53 @@ export function useChatScroll({
     scrollToBottom();
   }, [messages, scrollToBottom, editingMessageIndex]);
 
+  // --- Eased scroll to bottom (used when a non-streamed reply lands) ---
+  const smoothScrollToBottom = useCallback((force = false) => {
+    const el = containerRef.current;
+    if (!el) return;
+    if (editingMessageIndexRef.current !== null) return;
+    if (!force && !userPinnedBottomRef.current) return;
+
+    if (smoothScrollRafRef.current !== null) {
+      cancelAnimationFrame(smoothScrollRafRef.current);
+      smoothScrollRafRef.current = null;
+    }
+    userPinnedBottomRef.current = true;
+    setShowScrollToLatest(false);
+
+    if (reducedMotionRef.current) {
+      setScrollTop(el, el.scrollHeight - el.clientHeight);
+      return;
+    }
+
+    const from = el.scrollTop;
+    const startedAt = performance.now();
+    const tick = (now: number) => {
+      const node = containerRef.current;
+      if (!node) { smoothScrollRafRef.current = null; return; }
+      const t = Math.min(1, (now - startedAt) / SMOOTH_SCROLL_MS);
+      const eased = 1 - Math.pow(1 - t, 3);
+      // Re-read the target each frame: the message is still settling into layout
+      const to = node.scrollHeight - node.clientHeight;
+      setScrollTop(node, from + (to - from) * eased);
+      smoothScrollRafRef.current = t < 1 ? requestAnimationFrame(tick) : null;
+    };
+    smoothScrollRafRef.current = requestAnimationFrame(tick);
+  }, [containerRef, setScrollTop]);
+
   // --- Scroll-to-latest button handler ---
   const handleScrollToLatestClick = useCallback(() => {
     userPinnedBottomRef.current = true;
-    forceNextSmoothRef.current = true;
-    scrollToBottom(false);
-  }, [scrollToBottom]);
+    smoothScrollToBottom(true);
+  }, [smoothScrollToBottom]);
+
+  useEffect(() => () => {
+    if (smoothScrollRafRef.current !== null) cancelAnimationFrame(smoothScrollRafRef.current);
+  }, []);
 
   return {
-    scrollToBottom,
-    startStreamingFollow,
+    smoothScrollToBottom,
+    isProgrammaticScroll,
     stopStreamingFollow,
     maybeStartStreamingFollow,
     handleScrollToLatestClick,
@@ -212,7 +278,5 @@ export function useChatScroll({
     setShowScrollToLatest,
     userPinnedBottomRef,
     skipNextScroll,
-    forceNextSmoothRef,
-    prevScrollHeightRef,
   };
 }
