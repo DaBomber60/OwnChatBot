@@ -122,3 +122,4 @@ docker-compose.*.local.yml
 # Temporary files
 tmp/
 temp/
+*.7z
