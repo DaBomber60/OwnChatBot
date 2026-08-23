@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
 import { flushSync } from 'react-dom';
 import { useRouter } from 'next/router';
 import useSWR from 'swr';
@@ -99,6 +99,13 @@ export default function ChatSessionPage() {
   const streamingAbortController = useRef<AbortController | null>(null);
   const variantAbortController = useRef<AbortController | null>(null);
   const oldestMessageIdRef = useRef<number | null>(null); // cursor for loading older pages
+  // Synchronous mirrors of loadingMore/hasMore: scroll events fire faster than React re-renders,
+  // so state alone lets several duplicate page fetches start before the first one flips the flag.
+  const loadingMoreRef = useRef(false);
+  const hasMoreRef = useRef(false);
+  // Scroll offsets captured just before a prepend, consumed by the restore layout effect.
+  const pendingRestoreRef = useRef<{ scrollTop: number; scrollHeight: number } | null>(null);
+  const messagesRef = useRef<ChatMessage[]>([]);
   // Track last sent user input so we can restore it if streaming is aborted early
   const lastSentInputRef = useRef<string>('');
   const shouldRestoreInputRef = useRef<boolean>(false);
@@ -210,12 +217,17 @@ export default function ChatSessionPage() {
     initialVariantBumpDoneRef.current.clear();
     initialVariantResolvedRef.current.clear();
     initialHydrationDoneRef.current = false;
+    oldestMessageIdRef.current = null;
+    pendingRestoreRef.current = null;
+    hasMoreRef.current = false;
+    loadingMoreRef.current = false;
   }, [id]);
 
   // Fetch and prepend older messages using beforeId cursor
   const loadOlderMessages = useCallback(async () => {
-    if (!id || loadingMore || !hasMore) return;
+    if (!id || loadingMoreRef.current || !hasMoreRef.current) return;
     const beforeId = oldestMessageIdRef.current;
+    loadingMoreRef.current = true;
     setLoadingMore(true);
     try {
       const url = beforeId
@@ -233,6 +245,7 @@ export default function ChatSessionPage() {
         const cur = oldestMessageIdRef.current;
         oldestMessageIdRef.current = cur == null ? newOldest : Math.min(cur, newOldest);
       }
+      hasMoreRef.current = !!page.hasMore;
       setHasMore(!!page.hasMore);
       // Process raw messages into ChatMessage[] (skip continuation placeholders and combine local within this chunk)
       const CONTINUE_MESSAGE = '[SYSTEM NOTE: Ignore this message, reply as if you are extending the last message you sent as if your reply never ended - do not make an effort to send a message on behalf of the user unless the most recent message from you did include speaking on behalf of the user. Specifically do not start messages with `{{user}}: `, you should NEVER use that format in any message.]';
@@ -262,35 +275,52 @@ export default function ChatSessionPage() {
         olderProcessed.push({ role: m.role as 'user' | 'assistant', content: m.content, messageId: m.id });
       }
       // Prepend and preserve scroll position (with de-duplication by messageId)
+      const existingIds = new Set<number>();
+      for (const pm of messagesRef.current) {
+        if (pm.messageId != null) existingIds.add(pm.messageId);
+      }
+      const deduped = olderProcessed.filter(m => m.messageId == null || !existingIds.has(m.messageId));
+      // Decide before updating: an anchor captured for a no-op update would go stale and
+      // then be applied to some later, unrelated change.
+      if (deduped.length === 0) return;
+
       const el = containerRef.current;
-      const prevScrollHeight = el ? el.scrollHeight : 0;
-      const prevScrollTop = el ? el.scrollTop : 0;
+      if (el) pendingRestoreRef.current = { scrollTop: el.scrollTop, scrollHeight: el.scrollHeight };
+      skipNextScroll.current = true; // a prepend must never trigger the scroll-to-bottom effect
       setMessages(prev => {
-        const existingIds = new Set<number>();
+        const ids = new Set<number>();
         for (const pm of prev) {
-          if (pm.messageId != null) existingIds.add(pm.messageId);
+          if (pm.messageId != null) ids.add(pm.messageId);
         }
-        const deduped = olderProcessed.filter(m => m.messageId == null || !existingIds.has(m.messageId));
-        if (deduped.length === 0) return prev; // no changes
-        return [...deduped, ...prev];
-      });
-      // After DOM updates, adjust scrollTop by growth delta to keep view stable
-      requestAnimationFrame(() => {
-        const el2 = containerRef.current;
-        if (!el2) return;
-        const newScrollHeight = el2.scrollHeight;
-        const growth = newScrollHeight - prevScrollHeight;
-        // Keep viewport anchored at the same visible message
-        el2.scrollTop = prevScrollTop + growth;
+        const fresh = deduped.filter(m => m.messageId == null || !ids.has(m.messageId));
+        return fresh.length ? [...fresh, ...prev] : prev;
       });
     } catch (e) {
       console.error(e);
     } finally {
+      loadingMoreRef.current = false;
       setLoadingMore(false);
     }
-  }, [id, hasMore, loadingMore]);
+  }, [id, skipNextScroll]);
 
-  // Lazy-load older messages on near-top scroll, and toggle scroll-to-latest button
+  // Re-anchor the viewport after older messages are prepended. This must run in the layout
+  // phase: a requestAnimationFrame callback can fire before React commits, in which case the
+  // measured growth is 0 and the list visibly jumps by a full page.
+  useLayoutEffect(() => {
+    messagesRef.current = messages;
+    const anchor = pendingRestoreRef.current;
+    if (!anchor) return;
+    pendingRestoreRef.current = null;
+    const el = containerRef.current;
+    if (!el) return;
+    const growth = el.scrollHeight - anchor.scrollHeight;
+    if (growth > 0) el.scrollTop = anchor.scrollTop + growth;
+  }, [messages]);
+
+  // Lazy-load older messages on near-top scroll, and toggle scroll-to-latest button.
+  // `hasSession` is a dependency because the container is only rendered once the session
+  // resolves — without it this effect bails on a null ref and never re-runs.
+  const hasSession = !!session;
   useEffect(() => {
     const el = containerRef.current; if (!el) return;
     const handleScroll = () => {
@@ -302,14 +332,14 @@ export default function ChatSessionPage() {
       userPinnedBottomRef.current = distanceFromBottom < BOTTOM_PIN_THRESHOLD_PX;
       setShowScrollToLatest(!userPinnedBottomRef.current);
       // Near the top? Load older messages if available (but not while editing)
-      if (el.scrollTop < TOP_LOAD_THRESHOLD_PX && hasMore && !loadingMore) {
+      if (el.scrollTop < TOP_LOAD_THRESHOLD_PX) {
         loadOlderMessages();
       }
     };
     el.addEventListener('scroll', handleScroll, { passive: true });
     handleScroll();
     return () => el.removeEventListener('scroll', handleScroll as any);
-  }, [hasMore, loadingMore, loadOlderMessages, editingMessageIndex]);
+  }, [hasSession, loadOlderMessages, editingMessageIndex, setShowScrollToLatest, userPinnedBottomRef]);
 
   // Function to stop streaming (both chat and variant generation)
   const stopStreaming = useCallback(() => {
@@ -916,7 +946,10 @@ export default function ChatSessionPage() {
   useEffect(() => {
     if (!session || isStreaming || justFinishedStreaming || generatingVariant !== null) return;
     // Capture hasMore and oldest cursor from current page
-    if (typeof session.hasMore !== 'undefined') setHasMore(!!session.hasMore);
+    if (typeof session.hasMore !== 'undefined') {
+      hasMoreRef.current = !!session.hasMore;
+      setHasMore(!!session.hasMore);
+    }
     if (session.messages && session.messages.length > 0) {
       const firstId = session.messages[0]!.id;
       const cur = oldestMessageIdRef.current;

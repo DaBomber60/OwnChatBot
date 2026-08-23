@@ -19,7 +19,7 @@ export default withApiHandler({ parseId: true }, {
           persona: true,
           character: true,
           messages: {
-            orderBy: { createdAt: 'asc' },
+            orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
             include: { versions: { orderBy: { version: 'asc' } } }
           }
         }
@@ -41,21 +41,30 @@ export default withApiHandler({ parseId: true }, {
 
     // We paginate by createdAt (stable) using an optional beforeId cursor.
     // Strategy: query (limit + 1) ordered desc, then reverse to asc for client display; hasMore derived from extra record.
-    let cursorCreatedAt: Date | undefined = undefined;
+    // createdAt alone is not unique (a send and its reply can land in the same millisecond), so the
+    // cursor and ordering are compound on (createdAt, id) to avoid skipping or repeating rows.
+    let cursor: { createdAt: Date; id: number } | undefined = undefined;
     if (beforeId) {
       const cursorMessage = await prisma.chatMessage.findUnique({ where: { id: beforeId }, select: { createdAt: true, sessionId: true } });
       if (!cursorMessage || cursorMessage.sessionId !== id) {
         return badRequest(res, 'Invalid beforeId cursor', 'INVALID_CURSOR');
       }
-      cursorCreatedAt = cursorMessage.createdAt;
+      cursor = { createdAt: cursorMessage.createdAt, id: beforeId };
     }
 
     const pageMessagesDesc = await prisma.chatMessage.findMany({
       where: {
         sessionId: id,
-        ...(cursorCreatedAt ? { createdAt: { lt: cursorCreatedAt } } : {})
+        ...(cursor
+          ? {
+            OR: [
+              { createdAt: { lt: cursor.createdAt } },
+              { createdAt: cursor.createdAt, id: { lt: cursor.id } },
+            ],
+          }
+          : {})
       },
-      orderBy: { createdAt: 'desc' },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: limit + 1, // fetch one extra to detect more
       include: { versions: { orderBy: { version: 'asc' } } }
     });

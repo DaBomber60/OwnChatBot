@@ -28,6 +28,8 @@
   z-index: 1;
   /* iOS momentum & better keyboard interplay */
   -webkit-overflow-scrolling: touch;
+  /* We re-anchor manually after prepending older messages; let the browser not also try */
+  overflow-anchor: none;
 }
 
 .chat-message {

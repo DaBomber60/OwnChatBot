@@ -74,6 +74,10 @@ export function useChatScroll({
       cancelAnimationFrame(streamingFollowRafRef.current);
       streamingFollowRafRef.current = null;
     }
+    if (scrollTimeoutRef.current) {
+      clearTimeout(scrollTimeoutRef.current);
+      scrollTimeoutRef.current = null;
+    }
   }, []);
 
   const startStreamingFollow = useCallback(() => {
@@ -110,7 +114,14 @@ export function useChatScroll({
   const scrollToBottom = useCallback((immediate = false) => {
     if (!containerRef.current) return;
     if (editingMessageIndex !== null) return;
-    if (!userPinnedBottomRef.current && !immediate) return;
+    if (!userPinnedBottomRef.current && !immediate) {
+      // Drop a throttled scroll queued before the user scrolled away
+      if (scrollTimeoutRef.current) {
+        clearTimeout(scrollTimeoutRef.current);
+        scrollTimeoutRef.current = null;
+      }
+      return;
+    }
 
     const now = Date.now();
     const timeSinceLastScroll = now - lastScrollTime.current;
@@ -132,7 +143,8 @@ export function useChatScroll({
       lastScrollTime.current = now;
     } else {
       scrollTimeoutRef.current = setTimeout(() => {
-        if (containerRef.current) {
+        // Re-check: the user may have scrolled up while this was queued
+        if (containerRef.current && userPinnedBottomRef.current && editingMessageIndexRef.current === null) {
           containerRef.current.scrollTo({ top: containerRef.current.scrollHeight, behavior: 'auto' });
           lastScrollTime.current = Date.now();
         }
