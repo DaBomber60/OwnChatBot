@@ -208,6 +208,20 @@ describe('parseChatData chat message handling', () => {
     expect(data.characterData.firstMessage).toBe('Hello there!');
   });
 
+  it('captures all chat messages when no "." placeholder is present', () => {
+    const system =
+      '<ownchatbot_importer>Bot personality.<scenario>Scene.</scenario>';
+    const { data } = parseChatData({
+      messages: [
+        { role: 'system', content: system },
+        { role: 'assistant', content: 'Hello there!' },
+        { role: 'user', content: 'Alice: Hi!' },
+      ],
+    });
+    expect(data.chatMessages).toHaveLength(2);
+    expect(data.characterData.firstMessage).toBe('Hello there!');
+  });
+
   it('detects persona name from last user message with colon format', () => {
     const system =
       '<ownchatbot_importer>Bot personality.<scenario>Scene.</scenario>';

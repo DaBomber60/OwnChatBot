@@ -14,35 +14,53 @@ export async function readSSEStream(
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let accumulated = '';
+  // Holds the trailing partial line between reads; network chunks split mid-frame.
+  let buffer = '';
   let done = false;
+
+  /** Processes one complete SSE line. Returns true if the stream is finished ([DONE]). */
+  const handleLine = (rawLine: string): boolean => {
+    if (!rawLine.startsWith('data:')) return false;
+    const payload = rawLine.slice(5).trim();
+    if (payload === '[DONE]') return true;
+
+    try {
+      const parsed = JSON.parse(payload);
+      // Handle thinking state frames
+      if (typeof parsed.thinking === 'boolean') {
+        if (onThinking) onThinking(parsed.thinking);
+        return false;
+      }
+      const content: string = parsed.content || '';
+      if (content) {
+        accumulated += content;
+        onContent(accumulated, content);
+      }
+    } catch {
+      // Skip malformed JSON frames
+    }
+    return false;
+  };
 
   try {
     while (!done) {
       const { value, done: doneReading } = await reader.read();
-      if (doneReading) { done = true; break; }
+      if (doneReading) {
+        // Flush any bytes held by the decoder, then process a final unterminated line
+        buffer += decoder.decode();
+        if (buffer) handleLine(buffer);
+        buffer = '';
+        break;
+      }
 
-      const chunk = decoder.decode(value, { stream: true });
-      const lines = chunk.split(/\r?\n/).filter(l => l.startsWith('data: '));
+      buffer += decoder.decode(value, { stream: true });
+
+      const lines = buffer.split(/\r?\n/);
+      // Last element is either '' (chunk ended on a newline) or an incomplete line
+      buffer = lines.pop() ?? '';
 
       for (const line of lines) {
-        const payload = line.replace(/^data: /, '').trim();
-        if (payload === '[DONE]') { done = true; break; }
-
-        try {
-          const parsed = JSON.parse(payload);
-          // Handle thinking state frames
-          if (typeof parsed.thinking === 'boolean') {
-            if (onThinking) onThinking(parsed.thinking);
-            continue;
-          }
-          const content: string = parsed.content || '';
-          if (content) {
-            accumulated += content;
-            onContent(accumulated, content);
-          }
-        } catch {
-          // Skip malformed JSON frames
-        }
+        if (handleLine(line)) { done = true; buffer = ''; break; }
       }
     }
   } finally {

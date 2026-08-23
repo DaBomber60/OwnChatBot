@@ -1,15 +1,17 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import prisma from '../../../../lib/prisma';
-import { buildSystemPrompt } from '../../../../lib/systemPrompt';
-import { truncateMessagesIfNeeded, injectTruncationNote } from '../../../../lib/messageUtils';
-import { apiKeyNotConfigured, badRequest, conflict, notFound, serverError, validationError, tooManyRequests } from '../../../../lib/apiErrors';
+import { badRequest, conflict, notFound, serverError, tooManyRequests, validationError } from '../../../../lib/apiErrors';
 import { limiters, clientIp } from '../../../../lib/rateLimit';
 import { enforceBodySize } from '../../../../lib/bodyLimit';
 import { schemas, validateBody } from '../../../../lib/validate';
-import { getAIConfig, tokenFieldFor, normalizeTemperature, buildDeepSeekThinking, injectThinkingGuidance, stripThinkTags, matchPartialTag } from '../../../../lib/aiProvider';
-import type { AIConfig } from '../../../../lib/aiProvider';
+import {
+  resolveAIConfig, isThinkingEnabled, buildUpstreamBody, buildConversationPrompt,
+  persistRequestWithMeta, loadUserPromptBody, parseUpstreamBody, forwardUpstreamError,
+  extractUpstreamContent,
+} from '../../../../lib/aiRequest';
+import { relayUpstreamSSE } from '../../../../lib/sseRelay';
 import { withApiHandler } from '../../../../lib/withApiHandler';
-import { persistApiRequest, persistJsonResponse, persistSseResponse } from '../../../../lib/apiLog';
+import { persistJsonResponse, persistSseResponse } from '../../../../lib/apiLog';
 
 export default withApiHandler({ parseId: true }, {
   GET: async (req: NextApiRequest, res: NextApiResponse, { id: messageId }) => {
@@ -137,17 +139,14 @@ export default withApiHandler({ parseId: true }, {
         console.error(`[Variant] Failed to find available version after ${maxRetries} attempts`);
         return serverError(res, 'Failed to allocate variant version due to concurrency', 'VARIANT_VERSION_ALLOC_FAILED');
       }
-      const aiCfg = await getAIConfig();
-      if ('error' in aiCfg) {
-        if (aiCfg.code === 'NO_API_KEY') return apiKeyNotConfigured(res);
-        return serverError(res, aiCfg.error, aiCfg.code);
-      }
-  const { apiKey, url: upstreamUrl, model, provider, enableTemperature, tokenFieldOverride, temperature: cfgTemperature, maxTokens: cfgMaxTokens, truncationLimit } = aiCfg as AIConfig;
-  const isDeepSeekThinking = (aiCfg as AIConfig).provider === 'deepseek' && (aiCfg as AIConfig).deepseekThinking === 'enabled';
+      const aiCfg = await resolveAIConfig(res);
+      if (!aiCfg) return;
+      const { apiKey, url: upstreamUrl, truncationLimit } = aiCfg;
+      const isDeepSeekThinking = isThinkingEnabled(aiCfg);
 
-  // Determine temperature: optional per-request override, else from batched config
-  const parsedOverride = typeof bodyTemperature === 'string' ? parseFloat(bodyTemperature) : (typeof bodyTemperature === 'number' ? bodyTemperature : NaN);
-  const temperature = isNaN(parsedOverride) ? cfgTemperature : Math.max(0, Math.min(2, parsedOverride));
+      // Determine temperature: optional per-request override, else from batched config
+      const parsedOverride = typeof bodyTemperature === 'string' ? parseFloat(bodyTemperature) : (typeof bodyTemperature === 'number' ? bodyTemperature : NaN);
+      const temperature = isNaN(parsedOverride) ? aiCfg.temperature : Math.max(0, Math.min(2, parsedOverride));
 
       // Build the conversation context (messages before this one) - fetch full history explicitly
   const previousMessages = await prisma.chatMessage.findMany({
@@ -156,79 +155,26 @@ export default withApiHandler({ parseId: true }, {
       });
   console.log(`[Variant] Variant context size (prior messages): ${previousMessages.length}`);
       
-      // Get user prompt if available
-      const userPromptSetting = await prisma.setting.findUnique({
-        where: { key: 'defaultPromptId' }
-      });
-      
-      let userPromptBody = '';
-      if (userPromptSetting?.value) {
-        const userPrompt = await prisma.userPrompt.findUnique({
-          where: { id: parseInt(userPromptSetting.value) }
-        });
-        userPromptBody = userPrompt?.body || '';
-      }
-
-      // Build system prompt
+      const userPromptBody = await loadUserPromptBody();
       const { persona, character } = message.session;
 
-      const systemContent = buildSystemPrompt(persona, character, {
-        summary: message.session.summary || undefined,
-        userPromptBody: userPromptBody || undefined,
+      const prompt = buildConversationPrompt({
+        cfg: aiCfg,
+        persona,
+        character,
+        history: previousMessages,
+        summary: message.session.summary,
+        userPromptBody,
       });
 
-      // Format previous messages with persona name prefix for user messages (same as main chat API)
-      const formattedPreviousMessages = previousMessages.map((m: { role: string; content: string; }) => {
-        if (m.role === 'user') {
-          // Add persona name prefix if not already present
-          const content = m.content.startsWith(`${persona.name}: `) 
-            ? m.content 
-            : `${persona.name}: ${m.content}`;
-          return { role: m.role, content };
-        }
-        return { role: m.role, content: m.content };
-      });
-
-      // Prepare messages array
-      const allMessages = [
-        { role: 'system', content: systemContent },
-        { role: 'user', content: '.' },
-        ...formattedPreviousMessages
-      ];
-
-      // Truncate messages if needed to stay under token limits (from batched AI config)
-      const truncationResult = truncateMessagesIfNeeded(allMessages, truncationLimit);
-
-      injectTruncationNote(truncationResult);
-
-      // Inject DeepSeek thinking guidance into the first user message (ephemeral, not persisted)
-      injectThinkingGuidance(aiCfg as AIConfig, truncationResult.messages);
-
-      // Use max_tokens from batched AI config
-      const requestMaxTokens = cfgMaxTokens;
-
-      // Prepare API request with ordering: model, temperature, stream, max_tokens, messages
-  const tokenField = tokenFieldFor(provider, model, tokenFieldOverride);
-  const normTemp = normalizeTemperature(provider, model, temperature, enableTemperature);
-      const requestBody: any = {
-        model,
-        ...(normTemp !== undefined ? { temperature: normTemp } : {}),
+      const requestBody = buildUpstreamBody(aiCfg, {
+        messages: prompt.messages,
         stream,
-        ...(requestMaxTokens ? { [tokenField]: requestMaxTokens } : {}),
-        ...buildDeepSeekThinking(aiCfg as AIConfig),
-        messages: truncationResult.messages
-      };
-
-      // Store the variant request payload in the database for download (include __meta like main chat API)
-      await persistApiRequest(message.session.id, {
-        ...requestBody,
-        __meta: {
-          wasTruncated: !!truncationResult.wasTruncated,
-          sentCount: Array.isArray(truncationResult.messages) ? truncationResult.messages.length : 0,
-          baseCount: Array.isArray(allMessages) ? allMessages.length : 0,
-          truncationLimit
-        }
+        temperature,
       });
+
+      // Store the variant request payload in the database for download
+      await persistRequestWithMeta(message.session.id, requestBody, prompt, truncationLimit);
 
       // Call upstream API
       const response = await fetch(upstreamUrl, {
@@ -243,32 +189,14 @@ export default withApiHandler({ parseId: true }, {
       if (!stream) {
         // Non-stream: capture entire body first for better error reporting
         const rawText = await response.text();
-        let data: any;
-        try { data = JSON.parse(rawText); } catch { data = { __rawText: rawText }; }
+        const data = parseUpstreamBody(rawText);
         // Persist last API response payload for download (store raw and parsed)
         await persistJsonResponse(message.session.id, response, rawText, data && !data.__rawText ? data : undefined);
         // If upstream failed, return structured error with original message
         if (response.status >= 400) {
-          const errPayload = (data && !data.__rawText) ? data : { message: rawText };
-          const errorMsg = (errPayload as any)?.error?.message || (errPayload as any)?.message || 'Upstream request failed';
-          console.warn(`[Variant][non-stream] Upstream failed: ${response.status} ${errorMsg}`);
-          return res.status(response.status).json({
-            error: {
-              message: errorMsg,
-              upstreamStatus: response.status,
-              type: (errPayload as any)?.type,
-              code: (errPayload as any)?.code
-            },
-            upstream: errPayload
-          });
+          return forwardUpstreamError(res, response.status, data, rawText, '[Variant][non-stream]');
         }
-  // Success path
-  const dataParsed = (data && !data.__rawText) ? data : (() => { try { return JSON.parse(rawText); } catch { return {}; } })();
-  // Non-streaming: handle response normally
-  const newContent = (() => {
-    const raw = (dataParsed as any).choices?.[0]?.message?.content;
-    return raw && isDeepSeekThinking ? stripThinkTags(raw) : raw;
-  })();
+        const newContent = extractUpstreamContent(data, isDeepSeekThinking);
 
         if (!newContent) {
           return serverError(res, 'No content received from API', 'UPSTREAM_NO_CONTENT');
@@ -308,27 +236,14 @@ export default withApiHandler({ parseId: true }, {
       const upstreamIsSSE = upstreamCT.includes('text/event-stream');
       if (!upstreamIsSSE) {
         const rawText = await response.text();
-        let data: any; try { data = JSON.parse(rawText); } catch { data = { __rawText: rawText }; }
+        const data = parseUpstreamBody(rawText);
         // Persist last API response payload for download (non-SSE in stream mode)
         await persistJsonResponse(message.session.id, response, rawText, data && !data.__rawText ? data : undefined);
         if (response.status >= 400) {
-          const errorMsg = (data as any)?.error?.message || (data as any)?.message || 'Upstream request failed';
-          console.warn(`[Variant][stream-mode] Upstream failed (non-SSE): ${response.status} ${errorMsg}`);
-          return res.status(response.status).json({
-            error: {
-              message: errorMsg,
-              upstreamStatus: response.status,
-              type: (data as any)?.type,
-              code: (data as any)?.code
-            },
-            upstream: data
-          });
+          return forwardUpstreamError(res, response.status, data, rawText, '[Variant][stream-mode non-SSE]');
         }
         // Success non-SSE while stream requested: create the variant directly
-        const newContent = (() => {
-          const raw = (data && data.choices && data.choices[0]?.message?.content) ? data.choices[0].message.content : (data && data.content);
-          return raw && isDeepSeekThinking ? stripThinkTags(raw) : raw;
-        })();
+        const newContent = extractUpstreamContent(data, isDeepSeekThinking);
         if (!newContent) {
           return serverError(res, 'No content received from API', 'UPSTREAM_NO_CONTENT');
         }
@@ -366,12 +281,9 @@ export default withApiHandler({ parseId: true }, {
       
   let assistantText = '';
   let assistantThinkingText = '';   // Thinking/reasoning content for logs only
-  const responseFrames: string[] = [];
+  let responseFrames: string[] = [];
       let clientDisconnected = false;
       let streamCompletedNaturally = false;
-      // DeepSeek <think> tag filtering state
-      let insideThinkTag = false;
-      let thinkTagBuffer = '';
       
       // Handle client disconnect
       req.on('close', () => {
@@ -394,131 +306,19 @@ export default withApiHandler({ parseId: true }, {
       };
       
       try {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          
-          // Check if client is still connected before processing each chunk
-          if (clientDisconnected || !canWriteToResponse()) {
-            console.log(`[Variant] Client disconnected, stopping variant stream processing. Content accumulated: ${assistantText.length} chars`);
-            break;
-          }
-          
-          const chunk = new TextDecoder().decode(value);
-          const lines = chunk.split(/\r?\n/).filter(l => l.startsWith('data: '));
-          
-          for (const line of lines) {
-            const payload = line.replace(/^data: /, '').trim();
-            
-            if (payload === '[DONE]') {
-              // Only mark as completed naturally if client is still connected
-              if (!clientDisconnected && canWriteToResponse()) {
-                streamCompletedNaturally = true;
-                res.write('data: [DONE]\n\n');
-              } else {
-                console.log(`[Variant] Received [DONE] but client already disconnected - not marking as naturally completed`);
-              }
-              break;
-            }
-            
-            try {
-              const parsed = JSON.parse(payload);
-              const delta = parsed.choices?.[0]?.delta?.content || '';
-              const reasoningDelta = parsed.choices?.[0]?.delta?.reasoning_content || '';
-              responseFrames.push(payload);
-              
-              // Handle reasoning_content (DeepSeek thinking via separate field)
-              if (reasoningDelta && isDeepSeekThinking) {
-                assistantThinkingText += reasoningDelta; // Keep in logs for download
-                if (!insideThinkTag) {
-                  insideThinkTag = true;
-                  if (canWriteToResponse()) {
-                    try { res.write(`data: ${JSON.stringify({ thinking: true })}\n\n`); } catch {}
-                  }
-                }
-              }
-
-              if (delta) {
-                // If we were in reasoning_content mode, signal thinking ended
-                if (insideThinkTag && isDeepSeekThinking && !reasoningDelta) {
-                  insideThinkTag = false;
-                  if (canWriteToResponse()) {
-                    try { res.write(`data: ${JSON.stringify({ thinking: false })}\n\n`); } catch {}
-                  }
-                }
-
-                // Filter <think> tags for DeepSeek thinking mode
-                let clientDelta = delta;
-                if (isDeepSeekThinking) {
-                  clientDelta = '';
-                  let text = thinkTagBuffer + delta;
-                  thinkTagBuffer = '';
-                  while (text.length > 0) {
-                    if (insideThinkTag) {
-                      const closeIdx = text.indexOf('</think>');
-                      if (closeIdx !== -1) {
-                        insideThinkTag = false;
-                        assistantThinkingText += text.slice(0, closeIdx);
-                        text = text.slice(closeIdx + 8);
-                        if (canWriteToResponse()) {
-                          try { res.write(`data: ${JSON.stringify({ thinking: false })}\n\n`); } catch {}
-                        }
-                      } else {
-                        const partialClose = matchPartialTag(text, '</think>');
-                        if (partialClose > 0) {
-                          assistantThinkingText += text.slice(0, -partialClose);
-                          thinkTagBuffer = text.slice(-partialClose);
-                        } else {
-                          assistantThinkingText += text;
-                        }
-                        text = '';
-                      }
-                    } else {
-                      const openIdx = text.indexOf('<think>');
-                      if (openIdx !== -1) {
-                        clientDelta += text.slice(0, openIdx);
-                        insideThinkTag = true;
-                        text = text.slice(openIdx + 7);
-                        if (canWriteToResponse()) {
-                          try { res.write(`data: ${JSON.stringify({ thinking: true })}\n\n`); } catch {}
-                        }
-                      } else {
-                        const partialOpen = matchPartialTag(text, '<think>');
-                        if (partialOpen > 0) {
-                          clientDelta += text.slice(0, -partialOpen);
-                          thinkTagBuffer = text.slice(-partialOpen);
-                        } else {
-                          clientDelta += text;
-                        }
-                        text = '';
-                      }
-                    }
-                  }
-                  assistantText += clientDelta;
-                } else {
-                  assistantText += delta;
-                }
-
-                if (clientDelta && canWriteToResponse()) {
-                  res.write(`data: ${JSON.stringify({ content: clientDelta })}\n\n`);
-                }
-              }
-            } catch {
-              // Skip malformed JSON
-            }
-            
-            // Check for client disconnection after each write
-            if (clientDisconnected || !canWriteToResponse()) {
-              console.log(`[Variant] Client disconnection detected during streaming loop. Breaking...`);
-              break;
-            }
-          }
-          
-          // Break outer loop if client disconnected
-          if (clientDisconnected || !canWriteToResponse()) {
-            break;
-          }
-        }
+        const relay = await relayUpstreamSSE({
+          reader,
+          res,
+          thinkingEnabled: isDeepSeekThinking,
+          canWrite: canWriteToResponse,
+          logLabel: '[Variant]',
+        });
+        assistantText = relay.assistantText;
+        assistantThinkingText = relay.assistantThinkingText;
+        responseFrames = relay.frames;
+        if (relay.writeFailed) clientDisconnected = true;
+        // Only count as a natural completion if [DONE] arrived while the client was still attached
+        streamCompletedNaturally = relay.sawDone && !clientDisconnected;
       } catch (error) {
   console.error(`[Variant] Streaming error during variant generation:`, error);
         // Mark as not completed naturally due to error

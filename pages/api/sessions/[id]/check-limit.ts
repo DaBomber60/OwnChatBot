@@ -43,7 +43,6 @@ export default withApiHandler({ parseId: true }, {
     // Calculate total character count as it would be sent to API
     const allMessages = [
       { role: 'system', content: systemContent },
-      { role: 'user', content: '.' },
       ...formattedHistory
     ];
 

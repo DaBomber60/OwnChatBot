@@ -8,6 +8,7 @@
 //
 // NOTE: The existing schema is flexible (z.record) so no migration needed.
 import prisma from './prisma';
+import { replacePlaceholders } from './systemPrompt';
 
 import type { AIProvider } from '../types/models';
 export type { AIProvider };
@@ -259,12 +260,18 @@ export const DEFAULT_THINKING_GUIDANCE = '【Thinking Mode Requirements】Within
  * first user message in the messages array (mutates in place).
  * If the original first user message was truncated, appends to the earliest
  * user message still present.
+ * `names` enables `{{user}}` / `{{char}}` placeholder replacement in the guidance text.
  */
-export function injectThinkingGuidance(cfg: AIConfig, messages: Array<{ role: string; content: string }>): void {
+export function injectThinkingGuidance(
+  cfg: AIConfig,
+  messages: Array<{ role: string; content: string }>,
+  names?: { personaName: string; charName: string }
+): void {
   if (cfg.provider !== 'deepseek' || cfg.deepseekThinking !== 'enabled') return;
-  const guidance = cfg.deepseekThinkingGuidance;
-  if (!guidance) return;
-  // Find the first user message that is not just a placeholder '.'
+  const raw = cfg.deepseekThinkingGuidance;
+  if (!raw) return;
+  const guidance = names ? replacePlaceholders(raw, names.personaName, names.charName) : raw;
+  // Find the first user message that is not just a legacy placeholder '.'
   const firstUserIdx = messages.findIndex(m => m.role === 'user' && m.content.trim() !== '.');
   const msg = messages[firstUserIdx];
   if (firstUserIdx === -1 || !msg) return;

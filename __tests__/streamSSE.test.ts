@@ -112,6 +112,48 @@ describe('readSSEStream', () => {
     });
     expect(accValues).toEqual(['A', 'AB']);
   });
+
+  it('reassembles a frame split across chunk boundaries', async () => {
+    const stream = sseStream(
+      'data: {"conte',
+      'nt":"Hello"}\n\ndata: {"content":" wo',
+      'rld"}\n\n',
+      'data: [DONE]\n\n',
+    );
+    const result = await readSSEStream(stream, () => {});
+    expect(result).toBe('Hello world');
+  });
+
+  it('does not drop frames when chunks split on the newline', async () => {
+    const stream = sseStream(
+      'data: {"content":"A"}\n',
+      '\ndata: {"content":"B"}\n\n',
+    );
+    const result = await readSSEStream(stream, () => {});
+    expect(result).toBe('AB');
+  });
+
+  it('emits a final frame that is not newline-terminated', async () => {
+    const stream = sseStream('data: {"content":"tail"}');
+    const result = await readSSEStream(stream, () => {});
+    expect(result).toBe('tail');
+  });
+
+  it('preserves multi-byte characters split across chunk boundaries', async () => {
+    const encoder = new TextEncoder();
+    const bytes = encoder.encode('data: {"content":"caf\u00e9 \u2014 \ud83d\ude80"}\n\n');
+    // Split mid-way through the multi-byte sequences
+    const chunks = [bytes.slice(0, 22), bytes.slice(22, 30), bytes.slice(30)];
+    let i = 0;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (i < chunks.length) { controller.enqueue(chunks[i]!); i++; }
+        else controller.close();
+      },
+    });
+    const result = await readSSEStream(stream, () => {});
+    expect(result).toBe('caf\u00e9 \u2014 \ud83d\ude80');
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -1,15 +1,17 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import prisma from '../../../lib/prisma';
-import { buildSystemPrompt } from '../../../lib/systemPrompt';
-import { truncateMessagesIfNeeded, injectTruncationNote } from '../../../lib/messageUtils';
-import { apiKeyNotConfigured, badRequest, notFound, serverError, tooManyRequests, payloadTooLarge } from '../../../lib/apiErrors';
-import { getAIConfig, tokenFieldFor, normalizeTemperature, DEFAULT_FALLBACK_URL, clampMaxTokens, buildDeepSeekThinking, injectThinkingGuidance, stripThinkTags, matchPartialTag } from '../../../lib/aiProvider';
-import type { AIConfig } from '../../../lib/aiProvider';
+import { badRequest, notFound, serverError, tooManyRequests } from '../../../lib/apiErrors';
+import { DEFAULT_FALLBACK_URL, clampMaxTokens, stripThinkTags } from '../../../lib/aiProvider';
+import {
+  resolveAIConfig, isThinkingEnabled, buildUpstreamBody, buildConversationPrompt,
+  persistRequestWithMeta, loadUserPromptBody, parseUpstreamBody, forwardUpstreamError,
+} from '../../../lib/aiRequest';
+import { relayUpstreamSSE } from '../../../lib/sseRelay';
 import { limiters, clientIp } from '../../../lib/rateLimit';
 import { enforceBodySize } from '../../../lib/bodyLimit';
 import { schemas, validateBody } from '../../../lib/validate';
 import { withApiHandler } from '../../../lib/withApiHandler';
-import { persistApiRequest, persistJsonResponse, persistSseResponse } from '../../../lib/apiLog';
+import { persistJsonResponse, persistSseResponse } from '../../../lib/apiLog';
 const CONTINUE_PREFIX = '[SYSTEM NOTE: Ignore this message';
 const isContinuationPlaceholder = (msg?: string) => !!msg && msg.startsWith(CONTINUE_PREFIX);
 
@@ -26,13 +28,10 @@ export default withApiHandler({}, {
   // Enforce max JSON body size (e.g., 1MB) for chat generation inputs
   if (!enforceBodySize(req as any, res, 1 * 1024 * 1024)) return;
   // Resolve AI provider configuration (api key, base URL, model)
-  const aiCfg = await getAIConfig();
-  if ('error' in aiCfg) {
-    if (aiCfg.code === 'NO_API_KEY') return apiKeyNotConfigured(res);
-    return serverError(res, aiCfg.error, aiCfg.code);
-  }
-  const { apiKey, url: upstreamUrl, model, provider, enableTemperature, tokenFieldOverride, temperature: cfgTemperature, maxTokens: cfgMaxTokens, truncationLimit } = aiCfg as AIConfig;
-  const isDeepSeekThinking = (aiCfg as AIConfig).provider === 'deepseek' && (aiCfg as AIConfig).deepseekThinking === 'enabled';
+  const aiCfg = await resolveAIConfig(res);
+  if (!aiCfg) return;
+  const { apiKey, url: upstreamUrl, truncationLimit } = aiCfg;
+  const isDeepSeekThinking = isThinkingEnabled(aiCfg);
   // Validate request body via Zod schema
   const parsed = validateBody(schemas.chatGenerate, req, res);
   if (!parsed) return;
@@ -79,17 +78,7 @@ export default withApiHandler({}, {
   const { persona, character } = session;
 
   // fetch global user prompt if provided
-  let userPromptBody = '';
-  if (userPromptId) {
-    const up = await prisma.userPrompt.findUnique({ where: { id: userPromptId } });
-    userPromptBody = up?.body || '';
-  }
-
-  // Build system prompt via shared helper (handles placeholder replacement internally)
-  const systemContent = buildSystemPrompt(persona, character, {
-    summary: session.summary || undefined,
-    userPromptBody: userPromptBody || undefined,
-  });
+  const userPromptBody = userPromptId ? await loadUserPromptBody(userPromptId) : '';
 
   // fetch full message history from DB
   const historyRaw = await prisma.chatMessage.findMany({
@@ -99,48 +88,26 @@ export default withApiHandler({}, {
   // Filter out any persisted continuation placeholders from older sessions
   const history = historyRaw.filter((m: { role: string; content: string; }) => !(m.role === 'user' && isContinuationPlaceholder(m.content)));
   console.log(`[History] Loaded full DB history: ${history.length} messages for session ${sessionIdToUse}`);
-  
-  // Format history with persona name prefix for user messages
-  const formattedHistory = history.map((m: { role: string; content: string; }) => {
-    if (m.role === 'user') {
-      // Add persona name prefix if not already present
-      const content = m.content.startsWith(`${persona.name}: `) 
-        ? m.content 
-        : `${persona.name}: ${m.content}`;
-      return { role: m.role, content };
-    }
-    return { role: m.role, content: m.content };
+
+  // System prompt + persona-prefixed history, truncated, with thinking guidance applied.
+  // The continuation directive is appended AFTER truncation so it can never be dropped.
+  const prompt = buildConversationPrompt({
+    cfg: aiCfg,
+    persona,
+    character,
+    history,
+    summary: session.summary,
+    userPromptBody,
   });
-
-  // Prepare base messages (system + history + minimal placeholder user dot if needed for API contract)
-  // We'll append the continuation directive AFTER truncation to ensure it's never dropped.
-  const baseMessages = [
-    { role: 'system', content: systemContent },
-    // Provide a minimal user '.' only if there are zero user messages in history to satisfy some model expectations.
-    // If there is at least one user message in formattedHistory we skip adding '.'.
-  ...(formattedHistory.some((m: { role: string; content: string; }) => m.role === 'user') ? [] : [{ role: 'user', content: '.' }]),
-    ...formattedHistory
-  ];
-
-  const totalCharsPre = baseMessages.reduce((sum, msg) => sum + msg.content.length, 0);
-  console.log(`[Truncation] Before truncation (without continuation directive): ${baseMessages.length} messages, ${totalCharsPre} total characters`);
-
-  // Truncation limit from batched AI config (fallback 150k)
-  const truncationResult = truncateMessagesIfNeeded(baseMessages, truncationLimit);
-  console.log(`[Truncation] After truncation (still without continuation directive): ${truncationResult.messages.length} messages`);
-  if (truncationResult.wasTruncated) {
-    console.log(`[Truncation] Truncated ${truncationResult.removedCount} messages`);
+  if (prompt.wasTruncated) {
+    console.log(`[Truncation] Removed ${prompt.removedCount} messages (${prompt.baseMessages.length} -> ${prompt.messages.length})`);
   }
-  injectTruncationNote(truncationResult);
-
-  // Inject DeepSeek thinking guidance into the first user message (ephemeral, not persisted)
-  injectThinkingGuidance(aiCfg as AIConfig, truncationResult.messages);
 
   // Now, if this is a continuation request, append the ephemeral continuation directive as the LAST message.
   // This guarantees it's kept (not subject to truncation) and not prefixed with persona name.
   if (isContinuationPlaceholder(userMessage)) {
   console.log('[Continuation] Continuation request detected. Appending ephemeral continuation user message AFTER truncation.');
-    truncationResult.messages.push({ role: 'user', content: userMessage });
+    prompt.messages.push({ role: 'user', content: userMessage });
   }
 
   // Compute max_tokens: use per-request override from body, else batched config value
@@ -149,31 +116,19 @@ export default withApiHandler({}, {
     computedMaxTokens = clampMaxTokens(maxTokens);
   } else if (typeof maxTokens === 'string') {
     const parsed = parseInt(maxTokens, 10);
-    computedMaxTokens = isNaN(parsed) ? cfgMaxTokens : clampMaxTokens(parsed);
+    computedMaxTokens = isNaN(parsed) ? aiCfg.maxTokens : clampMaxTokens(parsed);
   } else {
-    computedMaxTokens = cfgMaxTokens;
+    computedMaxTokens = aiCfg.maxTokens;
   }
 
-  const tokenField = tokenFieldFor(provider, model, tokenFieldOverride);
-  const normTemp = normalizeTemperature(provider, model, temperature, enableTemperature);
-  const body: Record<string, unknown> = {
-    model,
-    ...(normTemp !== undefined ? { temperature: normTemp } : {}),
+  const body = buildUpstreamBody(aiCfg, {
+    messages: prompt.messages,
     stream,
-    ...(computedMaxTokens ? { [tokenField]: computedMaxTokens } : {}),
-    ...buildDeepSeekThinking(aiCfg as AIConfig),
-    messages: truncationResult.messages
-  };
-
-  await persistApiRequest(sessionIdToUse, {
-    ...body,
-    __meta: {
-      wasTruncated: !!truncationResult.wasTruncated,
-      sentCount: Array.isArray(truncationResult.messages) ? truncationResult.messages.length : 0,
-      baseCount: Array.isArray(baseMessages) ? baseMessages.length : 0,
-      truncationLimit
-    }
+    temperature,
+    maxTokens: computedMaxTokens,
   });
+
+  await persistRequestWithMeta(sessionIdToUse, body, prompt, truncationLimit);
 
   // (Removed verbose full JSON debug logging per user request)
   const DEBUG_CAPTURE = process.env.DEBUG_CHAT_CAPTURE === 'true' || process.env.DEBUG_FULL_CHAT_LOG === 'true';
@@ -253,30 +208,12 @@ export default withApiHandler({}, {
     if (DEBUG_CAPTURE) {
       console.log('[Upstream][non-stream] Raw body:', rawText);
     }
-    let data: any;
-    try {
-      data = JSON.parse(rawText);
-    } catch (e) {
-      console.error('[Upstream][non-stream] Failed to parse JSON, forwarding raw text');
-      data = { __rawText: rawText };
-    }
+    const data = parseUpstreamBody(rawText);
     // Persist last API response payload for download (store raw and parsed)
     await persistJsonResponse(sessionIdToUse, apiRes, rawText, data && !data.__rawText ? data : undefined);
     // If upstream failed, return a structured error
-  if (apiRes.status >= 400) {
-      const errPayload = (data && !data.__rawText) ? data : { message: rawText };
-      const errorMsg = (errPayload as any)?.error?.message || (errPayload as any)?.message || 'Upstream request failed';
-      // Condensed one-liner for quick scanning
-      console.warn(`[Stream] Stream did not complete: ${apiRes.status} ${errorMsg}`);
-      return res.status(apiRes.status).json({
-        error: {
-          message: errorMsg,
-          upstreamStatus: apiRes.status,
-          type: (errPayload as any)?.type,
-          code: (errPayload as any)?.code
-        },
-        upstream: errPayload
-      });
+    if (apiRes.status >= 400) {
+      return forwardUpstreamError(res, apiRes.status, data, rawText, '[Chat][non-stream]');
     }
     // save AI response
     if (data.choices && data.choices[0]?.message?.content) {
@@ -320,19 +257,8 @@ export default withApiHandler({}, {
     // Persist last API response payload for download
     await persistJsonResponse(sessionIdToUse, apiRes, rawText, data && !data.__rawText ? data : undefined);
     // If upstream failed, return structured error
-  if (apiRes.status >= 400) {
-      const errorMsg = (data as any)?.error?.message || (data as any)?.message || 'Upstream request failed';
-      // Condensed one-liner for quick scanning
-      console.warn(`[Stream] Stream did not complete: ${apiRes.status} ${errorMsg}`);
-      return res.status(apiRes.status).json({
-        error: {
-          message: errorMsg,
-          upstreamStatus: apiRes.status,
-          type: (data as any)?.type,
-          code: (data as any)?.code
-        },
-        upstream: data
-      });
+    if (apiRes.status >= 400) {
+      return forwardUpstreamError(res, apiRes.status, data, rawText, '[Chat][stream-mode non-SSE]');
     }
     // Optionally save content if present even in non-SSE reply
     if (data && data.choices && data.choices[0]?.message?.content) {
@@ -410,14 +336,10 @@ export default withApiHandler({}, {
   let messageSaved = false;            // Indicates content persisted (full or partial)
   let clientDisconnected = false;
   let partialSaveInitiated = false;    // Guard to prevent double partial save attempts
-  // DeepSeek <think> tag filtering state
-  let insideThinkTag = false;
-  let thinkTagBuffer = '';             // Buffer for partial tag detection at chunk boundaries
   // Optional capture of raw SSE payloads for debugging
-  let sseCapture: string[] | null = DEBUG_CAPTURE ? [] : null;
+  const sseCapture: string[] | null = DEBUG_CAPTURE ? [] : null;
   // Always capture frames for persistence
   const responseFrames: string[] = [];
-  let lastPersistTs = Date.now();
 
   // Helper function to save partial message (idempotent)
   const savePartialMessage = async (reason: string) => {
@@ -482,192 +404,43 @@ export default withApiHandler({}, {
   };
   
   try {
-    // Buffer for partial JSON frames (Item 12)
-    let sseBuffer = '';
-    const textDecoder = new TextDecoder();
-    let totalBytes = 0;
-    let totalChunks = 0;
-
-    while (true) {
-      let readResult: ReadableStreamReadResult<Uint8Array>;
-      try {
-        readResult = await reader.read();
-      } catch (err) {
-        if ((err as any)?.name === 'AbortError') {
-      console.log('[Stream] Reader aborted');
-          stopHeartbeat();
-          break;
-        }
-        // Non-abort read error: save what we have and stop
-        await savePartialMessage('reader error');
-        stopHeartbeat();
-        throw err;
-      }
-      const { done, value } = readResult;
-      if (done) {
-        // Upstream finished (may or may not have sent [DONE])
-        stopHeartbeat();
-        break;
-      }
-
-      if (clientDisconnected || !canWriteToResponse()) {
-  console.log('[Stream] Client disconnected, stopping stream processing');
-        break;
-      }
-
-      sseBuffer += textDecoder.decode(value, { stream: true });
-      totalChunks++;
-      totalBytes += value?.byteLength || 0;
-
-      // Process complete lines; leave partial in buffer
-      const lines = sseBuffer.split(/\r?\n/);
-      sseBuffer = lines.pop() || '';
-
-      for (const rawLine of lines) {
-        if (!rawLine.startsWith('data: ')) continue;
-        const line = rawLine;
-        const payload = line.replace(/^data: /, '').trim();
+    const relay = await relayUpstreamSSE({
+      reader,
+      res,
+      thinkingEnabled: isDeepSeekThinking,
+      canWrite: canWriteToResponse,
+      logLabel: '[Stream]',
+      onFrame: (payload) => {
+        responseFrames.push(payload);
         if (sseCapture) sseCapture.push(payload);
-
-        if (payload === '[DONE]') {
-          if (canWriteToResponse()) {
-            res.write('data: [DONE]\n\n');
-          }
-          // Mark completion & break outer loops
-          sseBuffer = '';
-          streamCompleted = true;
-          stopHeartbeat();
-          break;
-        }
-
-        try {
-          const parsed = JSON.parse(payload);
-          const delta = parsed.choices?.[0]?.delta?.content || '';
-          const reasoningDelta = parsed.choices?.[0]?.delta?.reasoning_content || '';
-          responseFrames.push(payload);
-
-          // Handle reasoning_content (DeepSeek thinking via separate field)
-          if (reasoningDelta && isDeepSeekThinking) {
-            assistantThinkingText += reasoningDelta; // Keep in logs for download
-            if (!insideThinkTag) {
-              insideThinkTag = true;
-              if (canWriteToResponse()) {
-                try { res.write(`data: ${JSON.stringify({ thinking: true })}\n\n`); } catch {}
-              }
-            }
-          }
-
-          if (delta) {
-            // If we were in reasoning_content mode, signal thinking ended
-            if (insideThinkTag && isDeepSeekThinking && !reasoningDelta) {
-              insideThinkTag = false;
-              if (canWriteToResponse()) {
-                try { res.write(`data: ${JSON.stringify({ thinking: false })}\n\n`); } catch {}
-              }
-            }
-            // Throttle-persist a snapshot of streaming response for debugging/download
-            if (Date.now() - lastPersistTs > 1500) {
-              lastPersistTs = Date.now();
-              await persistSseResponse(sessionIdToUse, apiRes, {
-                frames: responseFrames.slice(-100),
-                completed: false,
-                assistantText,
-                assistantThinkingText,
-              });
-            }
-
-            // Filter <think> tags for DeepSeek thinking mode
-            let clientDelta = delta;
-            if (isDeepSeekThinking) {
-              clientDelta = '';
-              let text = thinkTagBuffer + delta;
-              thinkTagBuffer = '';
-              while (text.length > 0) {
-                if (insideThinkTag) {
-                  const closeIdx = text.indexOf('</think>');
-                  if (closeIdx !== -1) {
-                    insideThinkTag = false;
-                    assistantThinkingText += text.slice(0, closeIdx);
-                    text = text.slice(closeIdx + 8);
-                    // Signal thinking ended
-                    if (canWriteToResponse()) {
-                      try { res.write(`data: ${JSON.stringify({ thinking: false })}\n\n`); } catch {}
-                    }
-                  } else {
-                    // Check if text ends with a partial </think> tag
-                    const partialClose = matchPartialTag(text, '</think>');
-                    if (partialClose > 0) {
-                      assistantThinkingText += text.slice(0, -partialClose);
-                      thinkTagBuffer = text.slice(-partialClose);
-                    } else {
-                      assistantThinkingText += text;
-                    }
-                    text = '';
-                  }
-                } else {
-                  const openIdx = text.indexOf('<think>');
-                  if (openIdx !== -1) {
-                    // Emit content before the tag
-                    clientDelta += text.slice(0, openIdx);
-                    insideThinkTag = true;
-                    text = text.slice(openIdx + 7);
-                    // Signal thinking started
-                    if (canWriteToResponse()) {
-                      try { res.write(`data: ${JSON.stringify({ thinking: true })}\n\n`); } catch {}
-                    }
-                  } else {
-                    // Check if text ends with a partial <think> tag
-                    const partialOpen = matchPartialTag(text, '<think>');
-                    if (partialOpen > 0) {
-                      clientDelta += text.slice(0, -partialOpen);
-                      thinkTagBuffer = text.slice(-partialOpen);
-                    } else {
-                      clientDelta += text;
-                    }
-                    text = '';
-                  }
-                }
-              }
-              assistantText += clientDelta;
-            } else {
-              assistantText += delta;
-            }
-
-            if (clientDelta && canWriteToResponse()) {
-              try {
-                res.write(`data: ${JSON.stringify({ content: clientDelta })}\n\n`);
-              } catch (error) {
-                console.log('Error writing to response, marking client as disconnected:', (error as Error).message);
-                clientDisconnected = true;
-                break;
-              }
-            } else if (!clientDelta && !canWriteToResponse()) {
-              clientDisconnected = true;
-              break;
-            }
-          } else if (DEBUG_CAPTURE) {
-            // Capture and log any non-content frames that could indicate errors/metadata
-            console.warn('[Stream][Upstream] Non-content frame:', payload);
-          }
-        } catch (e) {
-          // Likely partial / malformed JSON (leave for buffer). We already trimmed complete lines; ignore.
-        }
-
-        if (clientDisconnected || !canWriteToResponse()) break;
-      }
-
-      if (streamCompleted || clientDisconnected || !canWriteToResponse()) {
-  stopHeartbeat();
-        break;
-      }
-    }
+      },
+      onProgress: async (s) => {
+        await persistSseResponse(sessionIdToUse, apiRes, {
+          frames: s.frames.slice(-100),
+          completed: false,
+          assistantText: s.assistantText,
+          assistantThinkingText: s.assistantThinkingText,
+        });
+      },
+      onReadError: async (_err, s) => {
+        // Keep whatever streamed before the failure so it can be persisted
+        assistantText = s.assistantText;
+        assistantThinkingText = s.assistantThinkingText;
+        await savePartialMessage('reader error');
+      },
+    });
+    stopHeartbeat();
+    assistantText = relay.assistantText;
+    assistantThinkingText = relay.assistantThinkingText;
+    if (relay.sawDone) streamCompleted = true;
+    if (relay.writeFailed) clientDisconnected = true;
     
     // Mark stream as completed only if we didn't detect a disconnect
   if (!clientDisconnected) {
       streamCompleted = true;
-      console.log('[Stream] Completed normally. chunks=%d bytes=%d assistantLen=%d', totalChunks, totalBytes, assistantText.length);
+      console.log('[Stream] Completed normally. chunks=%d bytes=%d assistantLen=%d', relay.totalChunks, relay.totalBytes, assistantText.length);
     } else {
-      console.log('[Stream] Stream stopped due to client disconnect. chunks=%d bytes=%d assistantLen=%d', totalChunks, totalBytes, assistantText.length);
+      console.log('[Stream] Stream stopped due to client disconnect. chunks=%d bytes=%d assistantLen=%d', relay.totalChunks, relay.totalBytes, assistantText.length);
     }
     if (DEBUG_CAPTURE && sseCapture && sseCapture.length) {
       try {

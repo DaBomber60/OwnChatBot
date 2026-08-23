@@ -138,8 +138,13 @@ export function parseChatData(requestData: any) {
       }
     }
     
-    // Extract chat messages (skip system message and initial "." user message)
-    const chatMessages = requestData.messages.slice(2); // Skip system and "." messages
+    // Extract chat messages: everything after the system message, minus a leading "." user
+    // placeholder if the payload came from an older export that still used that convention.
+    const afterSystem = requestData.messages.slice(requestData.messages.indexOf(systemMessage) + 1);
+    const leading = afterSystem[0];
+    const hasLegacyDot = !!leading && leading.role === 'user' && typeof leading.content === 'string' && leading.content.trim() === '.';
+    if (hasLegacyDot) logs.push('Skipped legacy "." placeholder user message');
+    const chatMessages = hasLegacyDot ? afterSystem.slice(1) : afterSystem;
     logs.push(`Found ${chatMessages.length} chat messages to import`);
     
     // Find the assistant's first message
