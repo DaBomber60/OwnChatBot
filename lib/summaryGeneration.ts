@@ -6,8 +6,7 @@ import prisma from './prisma';
 import { notFound, serverError } from './apiErrors';
 import { buildSystemPrompt, replacePlaceholders } from './systemPrompt';
 import { truncateMessagesIfNeeded, injectTruncationNote } from './messageUtils';
-import { callUpstreamAI } from './upstreamAI';
-import { failureTimeoutMs } from './aiProvider';
+import { callUpstreamAI, upstreamTimeoutMs } from './upstreamAI';
 import { resolveAIConfig, buildUpstreamBody, type PromptMessage } from './aiRequest';
 
 export interface SummaryRunResult {
@@ -97,7 +96,7 @@ export async function runSummary(
     url: cfg.url,
     apiKey: cfg.apiKey,
     body,
-    signal: AbortSignal.timeout(failureTimeoutMs(cfg.apiFailureTimeout, false)),
+    timeoutMs: upstreamTimeoutMs(cfg, false),
   }).catch((err: any) => {
     if (err?.name === 'TimeoutError' || err?.name === 'AbortError') return null;
     throw err;

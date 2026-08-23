@@ -1,7 +1,8 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import prisma from '../../../lib/prisma';
 import { badRequest, notFound, serverError, tooManyRequests } from '../../../lib/apiErrors';
-import { DEFAULT_FALLBACK_URL, clampMaxTokens, stripThinkTags, failureTimeoutMs, UPSTREAM_TIMEOUT_GRACE_MS } from '../../../lib/aiProvider';
+import { clampMaxTokens, stripThinkTags } from '../../../lib/aiProvider';
+import { startUpstreamRequest, type UpstreamRequestHandle } from '../../../lib/upstreamAI';
 import {
   resolveAIConfig, isThinkingEnabled, buildUpstreamBody, buildConversationPrompt,
   persistRequestWithMeta, loadUserPromptBody, parseUpstreamBody, forwardUpstreamError,
@@ -30,7 +31,7 @@ export default withApiHandler({}, {
   // Resolve AI provider configuration (api key, base URL, model)
   const aiCfg = await resolveAIConfig(res);
   if (!aiCfg) return;
-  const { apiKey, url: upstreamUrl, truncationLimit } = aiCfg;
+  const { truncationLimit } = aiCfg;
   const isDeepSeekThinking = isThinkingEnabled(aiCfg);
   // Validate request body via Zod schema
   const parsed = validateBody(schemas.chatGenerate, req, res);
@@ -174,51 +175,19 @@ export default withApiHandler({}, {
     });
   };
 
-  // Upstream abort + inactivity timeout. The timer is re-armed on every chunk so
-  // long replies are fine, but a stalled provider is dropped promptly.
-  // A small grace period lets the browser's own stall timer fire first so the user
-  // sees a proper error instead of a silently truncated reply.
-  const abortController = new AbortController();
-  const envTimeout = parseInt(process.env.STREAM_TIMEOUT_MS || '', 10);
-  const IDLE_TIMEOUT_MS = !isNaN(envTimeout)
-    ? envTimeout
-    : failureTimeoutMs(aiCfg.apiFailureTimeout, stream) + (stream ? UPSTREAM_TIMEOUT_GRACE_MS : 0);
-  let idleTimer: NodeJS.Timeout | null = null;
-  const clearIdleTimeout = () => {
-    if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
-  };
-  const armIdleTimeout = () => {
-    clearIdleTimeout();
-    idleTimer = setTimeout(() => {
-      if (!abortController.signal.aborted) {
-        console.log(`[Timeout] Aborting upstream fetch after ${IDLE_TIMEOUT_MS}ms without activity`);
-        abortController.abort();
-      }
-    }, IDLE_TIMEOUT_MS);
-  };
-  armIdleTimeout();
-
-  let apiRes: Response;
+  let upstream: UpstreamRequestHandle;
   try {
-    apiRes = await fetch(upstreamUrl || DEFAULT_FALLBACK_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`
-      },
-      body: JSON.stringify(body),
-      signal: abortController.signal
-    });
+    upstream = await startUpstreamRequest(aiCfg, { body, streaming: stream, logLabel: '[Stream]' });
   } catch (err) {
-    clearIdleTimeout();
     if ((err as any)?.name === 'AbortError') {
       return serverError(res, 'Upstream model request aborted', 'UPSTREAM_ABORTED');
     }
     throw err;
   }
+  const apiRes = upstream.response;
 
   if (!stream) {
-    clearIdleTimeout();
+    upstream.stopTimer();
     // Capture entire body text for debug, then parse JSON
     const rawText = await apiRes.text();
     if (DEBUG_CAPTURE) {
@@ -262,7 +231,7 @@ export default withApiHandler({}, {
   const upstreamCT = apiRes.headers.get('content-type') || '';
   const upstreamIsSSE = upstreamCT.includes('text/event-stream');
   if (!upstreamIsSSE) {
-    clearIdleTimeout();
+    upstream.stopTimer();
     // Upstream did not return SSE; capture and forward as non-stream error/response
     const rawText = await apiRes.text();
     if (DEBUG_CAPTURE) {
@@ -373,20 +342,12 @@ export default withApiHandler({}, {
     }
   };
   
-  // Handle client disconnect
-  const abortUpstream = (reason: string) => {
-    if (!abortController.signal.aborted) {
-  console.log(`[Stream] Aborting upstream fetch: ${reason}`);
-      abortController.abort();
-    }
-  };
-
   const handleEarlyClose = async (label: string) => {
     if (clientDisconnected) return; // ensure single execution path
   console.log(`[Stream] ${label} during streaming`);
     clientDisconnected = true;
   stopHeartbeat();
-    abortUpstream(label);
+    upstream.dispose(label);
     if (!streamCompleted) {
       await savePartialMessage(label);
       // If NO assistant content streamed and we created a user message this request, roll it back
@@ -431,7 +392,7 @@ export default withApiHandler({}, {
         responseFrames.push(payload);
         if (sseCapture) sseCapture.push(payload);
       },
-      onChunk: () => armIdleTimeout(),
+      onChunk: () => upstream.keepAlive(),
       onProgress: async (s) => {
         await persistSseResponse(sessionIdToUse, apiRes, {
           frames: s.frames.slice(-100),
@@ -448,7 +409,7 @@ export default withApiHandler({}, {
       },
     });
     stopHeartbeat();
-    clearIdleTimeout();
+    upstream.stopTimer();
     assistantText = relay.assistantText;
     assistantThinkingText = relay.assistantThinkingText;
     if (relay.sawDone) streamCompleted = true;
@@ -504,12 +465,10 @@ export default withApiHandler({}, {
     }
   }
   
-  // Cleanup timeout
-  clearIdleTimeout();
   stopHeartbeat();
 
   // Tear down the upstream connection so the provider can't keep sending after we're done
-  abortUpstream('stream finished');
+  upstream.dispose('stream finished');
   try { await reader.cancel(); } catch {}
 
   // Persist last API response for SSE (frames and summary)

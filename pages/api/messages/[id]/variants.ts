@@ -10,7 +10,7 @@ import {
   extractUpstreamContent,
 } from '../../../../lib/aiRequest';
 import { relayUpstreamSSE } from '../../../../lib/sseRelay';
-import { failureTimeoutMs, UPSTREAM_TIMEOUT_GRACE_MS } from '../../../../lib/aiProvider';
+import { startUpstreamRequest, type UpstreamRequestHandle } from '../../../../lib/upstreamAI';
 import { withApiHandler } from '../../../../lib/withApiHandler';
 import { persistJsonResponse, persistSseResponse } from '../../../../lib/apiLog';
 
@@ -142,7 +142,7 @@ export default withApiHandler({ parseId: true }, {
       }
       const aiCfg = await resolveAIConfig(res);
       if (!aiCfg) return;
-      const { apiKey, url: upstreamUrl, truncationLimit } = aiCfg;
+      const { truncationLimit } = aiCfg;
       const isDeepSeekThinking = isThinkingEnabled(aiCfg);
 
       // Determine temperature: optional per-request override, else from batched config
@@ -177,49 +177,19 @@ export default withApiHandler({ parseId: true }, {
       // Store the variant request payload in the database for download
       await persistRequestWithMeta(message.session.id, requestBody, prompt, truncationLimit);
 
-      // Upstream abort + inactivity timeout, re-armed on every chunk (see chat/index.ts)
-      const abortController = new AbortController();
-      const envTimeout = parseInt(process.env.STREAM_TIMEOUT_MS || '', 10);
-      const IDLE_TIMEOUT_MS = !isNaN(envTimeout)
-        ? envTimeout
-        : failureTimeoutMs(aiCfg.apiFailureTimeout, stream) + (stream ? UPSTREAM_TIMEOUT_GRACE_MS : 0);
-      let idleTimer: NodeJS.Timeout | null = null;
-      const clearIdleTimeout = () => {
-        if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
-      };
-      const armIdleTimeout = () => {
-        clearIdleTimeout();
-        idleTimer = setTimeout(() => {
-          if (!abortController.signal.aborted) {
-            console.log(`[Variant] Aborting upstream fetch after ${IDLE_TIMEOUT_MS}ms without activity`);
-            abortController.abort();
-          }
-        }, IDLE_TIMEOUT_MS);
-      };
-      armIdleTimeout();
-
-      // Call upstream API
-      let response: Response;
+      let upstream: UpstreamRequestHandle;
       try {
-        response = await fetch(upstreamUrl, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${apiKey}`
-          },
-          body: JSON.stringify(requestBody),
-          signal: abortController.signal
-        });
+        upstream = await startUpstreamRequest(aiCfg, { body: requestBody, streaming: stream, logLabel: '[Variant]' });
       } catch (err) {
-        clearIdleTimeout();
         if ((err as any)?.name === 'AbortError') {
           return serverError(res, 'Upstream model request aborted', 'UPSTREAM_ABORTED');
         }
         throw err;
       }
+      const response = upstream.response;
       
       if (!stream) {
-        clearIdleTimeout();
+        upstream.stopTimer();
         // Non-stream: capture entire body first for better error reporting
         const rawText = await response.text();
         const data = parseUpstreamBody(rawText);
@@ -268,7 +238,7 @@ export default withApiHandler({ parseId: true }, {
       const upstreamCT = response.headers.get('content-type') || '';
       const upstreamIsSSE = upstreamCT.includes('text/event-stream');
       if (!upstreamIsSSE) {
-        clearIdleTimeout();
+        upstream.stopTimer();
         const rawText = await response.text();
         const data = parseUpstreamBody(rawText);
         // Persist last API response payload for download (non-SSE in stream mode)
@@ -320,25 +290,16 @@ export default withApiHandler({ parseId: true }, {
       let streamCompletedNaturally = false;
       
       // Handle client disconnect — also drop the upstream call so it can't keep streaming
-      const abortUpstream = (reason: string) => {
-        if (!abortController.signal.aborted) {
-          console.log(`[Variant] Aborting upstream fetch: ${reason}`);
-          abortController.abort();
-        }
-      };
-
       req.on('close', () => {
   console.log(`[Variant] Client disconnected during variant streaming`);
         clientDisconnected = true;
-        clearIdleTimeout();
-        abortUpstream('client disconnect');
+        upstream.dispose('client disconnect');
       });
       
       req.on('aborted', () => {
   console.log(`[Variant] Request aborted during variant streaming`);
         clientDisconnected = true;
-        clearIdleTimeout();
-        abortUpstream('request aborted');
+        upstream.dispose('request aborted');
       });
       
       // Function to check if we can still write to response
@@ -357,7 +318,7 @@ export default withApiHandler({ parseId: true }, {
           thinkingEnabled: isDeepSeekThinking,
           canWrite: canWriteToResponse,
           logLabel: '[Variant]',
-          onChunk: () => armIdleTimeout(),
+          onChunk: () => upstream.keepAlive(),
         });
         assistantText = relay.assistantText;
         assistantThinkingText = relay.assistantThinkingText;
@@ -370,8 +331,7 @@ export default withApiHandler({ parseId: true }, {
         // Mark as not completed naturally due to error
         streamCompletedNaturally = false;
       } finally {
-        clearIdleTimeout();
-        abortUpstream('stream finished');
+        upstream.dispose('stream finished');
         try { await reader.cancel(); } catch {}
       }
       

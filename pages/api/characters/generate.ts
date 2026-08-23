@@ -1,7 +1,7 @@
 import { apiKeyNotConfigured, serverError } from '../../../lib/apiErrors';
 import { getAIConfig, tokenFieldFor, normalizeTemperature, getMaxTokens, buildDeepSeekThinking } from '../../../lib/aiProvider';
 import type { AIConfig } from '../../../lib/aiProvider';
-import { callUpstreamAI } from '../../../lib/upstreamAI';
+import { callUpstreamAI, upstreamTimeoutMs } from '../../../lib/upstreamAI';
 import prisma from '../../../lib/prisma';
 import { schemas, validateBody } from '../../../lib/validate';
 import { z } from 'zod';
@@ -88,7 +88,12 @@ Perspective: ${perspective.toUpperCase()} POV. ${perspectiveLine}
       messages
     };
 
-    const upstream = await callUpstreamAI({ url: upstreamUrl, apiKey, body: bodyPayload });
+    const upstream = await callUpstreamAI({
+      url: upstreamUrl,
+      apiKey,
+      body: bodyPayload,
+      timeoutMs: upstreamTimeoutMs(aiCfg as AIConfig, false),
+    });
 
     if (!upstream.ok) {
       return serverError(res, 'Generation API error: ' + (upstream.rawText || 'Unknown error'), 'UPSTREAM_API_ERROR');
