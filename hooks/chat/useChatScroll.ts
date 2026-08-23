@@ -26,8 +26,6 @@ export interface UseChatScrollReturn {
   setShowScrollToLatest: (v: boolean) => void;
   /** Whether the user is currently pinned to the bottom */
   userPinnedBottomRef: React.MutableRefObject<boolean>;
-  /** Ref to suppress one auto-scroll cycle */
-  suppressNextAutoScrollRef: React.MutableRefObject<boolean>;
   /** Ref to skip next scroll-to-bottom from the messages-change effect */
   skipNextScroll: React.MutableRefObject<boolean>;
   /** Ref to force smooth scroll on next call */
@@ -52,7 +50,6 @@ export function useChatScroll({
 
   // Refs
   const userPinnedBottomRef = useRef(true);
-  const suppressNextAutoScrollRef = useRef(false);
   const skipNextScroll = useRef(false);
   const forceNextSmoothRef = useRef(false);
   const initialScrollDoneRef = useRef(false);
@@ -189,7 +186,6 @@ export function useChatScroll({
   // --- Scroll-to-latest button handler ---
   const handleScrollToLatestClick = useCallback(() => {
     userPinnedBottomRef.current = true;
-    suppressNextAutoScrollRef.current = false;
     forceNextSmoothRef.current = true;
     scrollToBottom(false);
   }, [scrollToBottom]);
@@ -203,7 +199,6 @@ export function useChatScroll({
     showScrollToLatest,
     setShowScrollToLatest,
     userPinnedBottomRef,
-    suppressNextAutoScrollRef,
     skipNextScroll,
     forceNextSmoothRef,
     prevScrollHeightRef,

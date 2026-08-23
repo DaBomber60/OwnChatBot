@@ -1,0 +1,94 @@
+/* Add bottom buffer on wider screens for better spacing */
+@media (min-width: 800px) {
+  .chat-container-fullscreen {
+    bottom: var(--space-4);
+  }
+}
+
+/* Mobile-first restructuring: below 800px use full width without centering transform to avoid iOS fixed+transform keyboard bugs */
+@media (max-width: 800px) {
+  .chat-container-fullscreen {
+    position: absolute; /* allow internal scroll container to resize with keyboard */
+    left: 0;
+    right: 0;
+    transform: none;
+    max-width: none;
+    width: 100%;
+  /* Keep side borders visible while being flush with viewport */
+  border-left: 1px solid var(--border-primary);
+  border-right: 1px solid var(--border-primary);
+  /* Square top corners, keep bottom rounding */
+  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+  /* Stretch to bottom so background never reveals underlying page */
+  bottom: 0;
+  height: auto; /* allow natural fill via top (inline) + bottom */
+  }
+  /* Ensure internal messages area can scroll entire remaining space */
+  .chat-messages {
+    -webkit-overflow-scrolling: touch;
+  }
+}
+
+/* PWA standalone mode: accentuate bottom curvature & respect safe area for home indicator */
+@media (max-width: 800px) and (display-mode: standalone) {
+  .chat-container-fullscreen {
+    /* Use dynamic variable set via JS to approximate hardware corner curvature */
+    border-bottom-left-radius: var(--chat-bottom-radius, 28px);
+    border-bottom-right-radius: var(--chat-bottom-radius, 28px);
+    overflow: hidden; /* ensure background respects radius */
+    padding-bottom: calc(env(safe-area-inset-bottom, 0px));
+    background-clip: padding-box;
+  }
+  .chat-input-container {
+    padding-bottom: calc(var(--space-3) + env(safe-area-inset-bottom, 0px));
+  }
+}
+
+/* Composer hint spacing & right bias so it doesn't look clipped by curved corners */
+.composer-hint {
+  display: block;
+  font-variant-numeric: tabular-nums;
+  margin-top: var(--space-2);
+  margin-left: auto; /* push toward right edge */
+  padding: 0 var(--space-2) 0 var(--space-1);
+  max-width: 100%;
+  opacity: 0.85;
+}
+@media (max-width: 800px) {
+  .composer-hint {
+    padding-right: calc(var(--space-3) + env(safe-area-inset-right, 0px));
+  }
+}
+
+/* Mobile viewport fixes for virtual keyboard handling - ONLY for chat pages */
+@media (max-width: 800px) {
+  body.chat-page-active,
+  body.chat-page-active html {
+    height: 100%;
+    overflow: hidden; /* Prevent page scroll on mobile for chat pages only */
+  }
+  body.chat-page-active {
+    background: var(--bg-chat) !important; /* solid to prevent gradient bleed under keyboard */
+  }
+
+  .container-narrow {
+    padding-top: 0; /* Remove top padding on mobile */
+    padding-bottom: 0; /* Remove bottom padding on mobile */
+  }
+  
+  .chat-header {
+    flex-shrink: 0; /* Prevent header from shrinking */
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    /* Remove background - let it be transparent */
+    padding: 0 var(--space-3) var(--space-1) var(--space-3); /* No top padding, minimal bottom */
+    margin-bottom: 0; /* Remove margin bottom */
+    /* Force its own compositing layer to reduce iOS Safari repaint glitches after keyboard dismissal */
+    -webkit-transform: translateZ(0);
+    transform: translateZ(0);
+    will-change: transform;
+  }
+  
+}
+

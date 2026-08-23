@@ -69,12 +69,11 @@ export function SummaryModal({
       <div className="form-group">
         <label className="form-label">Summary Content</label>
         <textarea
-          className="form-textarea"
+          className="form-textarea summary-textarea"
           value={summaryContent}
           onChange={(e) => setSummaryContent(e.target.value)}
           placeholder="Enter a summary of this chat session..."
           rows={8}
-          style={{ minHeight: '200px' }}
         />
       </div>
     </Modal>

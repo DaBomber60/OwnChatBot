@@ -1,5 +1,12 @@
 import React from 'react';
 
+/** Matches .variant-temp-popover width in globals.css. */
+const POPOVER_WIDTH = 280;
+const VIEWPORT_MARGIN = 12;
+/** The popover is centred on the press point and lifted above it. */
+const OFFSET_X = POPOVER_WIDTH / 2;
+const OFFSET_Y = 140;
+
 interface VariantTempPopoverProps {
   x: number;
   y: number;
@@ -19,8 +26,8 @@ export function VariantTempPopover({ x, y, tempValue, setTempValue, onGenerate, 
         className="popover-content variant-temp-popover"
         onClick={(e) => e.stopPropagation()}
         style={{
-          left: Math.max(12, Math.min(window.innerWidth - 300, x - 140)),
-          top: Math.max(12, y - 140),
+          left: Math.max(VIEWPORT_MARGIN, Math.min(window.innerWidth - POPOVER_WIDTH - 20, x - OFFSET_X)),
+          top: Math.max(VIEWPORT_MARGIN, y - OFFSET_Y),
         }}
       >
         <div className="variant-temp-header">

@@ -1,0 +1,537 @@
+/* Chat styles */
+.chat-container-fullscreen {
+  position: fixed;
+  /* Dynamic top value set via inline style - default fallback removed */
+  left: 50%;
+  transform: translateX(-50%);
+  width: 100%;
+  max-width: 800px;
+  bottom: 0;
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-lg);
+  background-color: var(--bg-chat);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  transition: top 0.3s ease;
+  z-index: 1; /* ensure header (z-index:100) stays above but content above page bg */
+}
+
+.chat-messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  position: relative;
+  z-index: 1;
+  /* iOS momentum & better keyboard interplay */
+  -webkit-overflow-scrolling: touch;
+}
+
+.chat-message {
+  /* Let messages size to their content – was flex:1 causing extreme shrinking */
+  flex: 0 0 auto;
+  max-width: 95%;
+  min-width: var(--chat-message-min-width);
+  padding: var(--space-4);
+  border-radius: var(--radius-xl);
+  position: relative;
+  box-shadow: var(--shadow-sm);
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  overflow: visible; /* remove internal scrollbars per message */
+}
+
+.chat-message:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-md);
+}
+
+/* Disable hover effects when editing */
+.chat-message.editing:hover {
+  transform: none;
+}
+
+.chat-message.user {
+  align-self: flex-end;
+  background: linear-gradient(135deg, #4C2B8C 0%, #1f1038 100%);
+  color: white;
+  border-bottom-right-radius: var(--radius-md);
+}
+
+.chat-message.assistant {
+  align-self: flex-start;
+  background: linear-gradient(135deg, var(--bg-secondary) 0%, var(--bg-tertiary) 100%);
+  color: var(--text-primary);
+  border: 1px solid var(--border-primary);
+  border-bottom-left-radius: var(--radius-md);
+}
+
+/* Hide assistant messages during initial variant resolution to prevent flicker */
+.chat-message.assistant.initial-variant-loading {
+  opacity: 0;
+  transition: none; /* Immediate hide */
+}
+
+.chat-message.assistant.initial-variant-resolved {
+  opacity: 1;
+  transition: opacity 0.25s ease-in 0.1s; /* Delayed fade-in to ensure content is ready */
+}
+
+.chat-sender {
+  font-size: var(--font-size-vl);
+  font-weight: 600;
+  margin-bottom: var(--space-2);
+  opacity: 0.8;
+  letter-spacing: 0.025em;
+}
+
+.chat-sender.user {
+  text-align: right;
+}
+
+.chat-sender.assistant {
+  text-align: left;
+}
+
+/* Message content formatting - div-based approach for iOS compatibility */
+.message-content {
+  line-height: 1.5;
+  font-size: var(--font-size-base);
+}
+
+/* Style for individual line divs within message content */
+.message-content > div {
+  margin: 0;
+  line-height: 1.5;
+}
+
+/* Empty divs should still take up space for proper line breaks */
+.message-content > div:empty {
+  min-height: 0.7em;
+}
+
+/* Spacer for double line breaks (paragraph breaks) */
+.line-break-spacer {
+  height: 8px;
+  margin: 0;
+  line-height: 0;
+}
+
+/* Legacy br tag support for any remaining br elements */
+.message-content br {
+  display: block;
+  margin: 8px 0 0 0;
+  line-height: 0;
+  height: 8px;
+  content: "";
+}
+
+/* Prevent multiple consecutive br tags from creating extra spacing */
+.message-content br + br {
+  margin-top: 0;
+}
+
+.chat-message.user .message-content,
+.chat-message.assistant .message-content {
+  text-align: left;
+}
+
+/* Styling for italicized text in chat messages */
+.message-content em {
+  color: var(--text-secondary);
+  font-style: italic;
+}
+
+/* Pulsing "thinking" indicator */
+@keyframes thinking-pulse {
+  0%, 100% { color: #888; }
+  50% { color: #ccc; }
+}
+.message-content.thinking-indicator em {
+  animation: thinking-pulse 1.5s ease-in-out infinite;
+}
+
+/* Styling for monospace code text in chat messages */
+.message-content code {
+  font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Roboto Mono', 'Consolas', 'Courier New', monospace;
+}
+
+/* Horizontal divider styling for --- and ___ */
+.message-divider {
+  width: 100%;
+  height: 1px;
+  background: linear-gradient(90deg, 
+    transparent 0%, 
+    rgba(64, 64, 64, 0.2) 20%, 
+    var(--border-primary) 50%, 
+    rgba(64, 64, 64, 0.2) 80%, 
+    transparent 100%);
+  margin: var(--space-4) 0;
+  position: relative;
+}
+
+.message-divider::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 75%;
+  height: 1px;
+  background: linear-gradient(90deg, 
+    transparent 0%, 
+    rgba(139, 92, 246, 0.2) 15%, 
+    rgba(139, 92, 246, 0.6) 35%, 
+    var(--border-accent) 50%, 
+    rgba(139, 92, 246, 0.6) 65%, 
+    rgba(139, 92, 246, 0.2) 85%, 
+    transparent 100%);
+  opacity: 0.9;
+}
+
+.chat-input-container {
+  padding: var(--space-4);
+  /* Add safe-area inset so buttons/input are not hidden behind home indicator */
+  padding-bottom: calc(var(--space-4) + env(safe-area-inset-bottom, 0px));
+  border-top: 1px solid var(--border-primary);
+  background-color: var(--bg-secondary);
+  flex-shrink: 0;
+}
+
+.chat-input {
+  min-height: var(--chat-input-min-height);
+  max-height: var(--chat-input-max-height);
+  resize: none;
+  margin-bottom: 0 !important;
+  background-color: var(--bg-primary);
+  border: 1px solid var(--border-primary);
+  transition: all 0.2s ease;
+  overflow-y: auto; /* Enable scrolling when max-height is reached */
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
+  font-size: var(--font-size-base);
+  line-height: 1.5; /* Better line spacing for readability */
+  /* Comfortable scroll margin so focusing the composer doesn't pin it to the very bottom under the keyboard */
+  scroll-margin-block-end: 140px;
+}
+
+.chat-input:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.1);
+  background-color: var(--bg-secondary);
+}
+
+.chat-send-button {
+  height: 48px; /* 80% of 60px */
+  min-height: 48px;
+  align-self: flex-end; /* Position at bottom like before */
+  flex-shrink: 0;
+  background: linear-gradient(135deg, var(--primary-dark), var(--primary));
+  border: 1px solid var(--primary-dark);
+  font-size: 1.2rem;
+  width: 48px; /* Make it square */
+  padding: 0;
+  transition: all 0.3s ease;
+  margin-bottom: 1px; /* Move button up by 4 pixels */
+}
+
+.chat-send-button:hover {
+  background: linear-gradient(135deg, #5b21b6, var(--primary-dark));
+  transform: translateY(-2px);
+  box-shadow: 0 8px 20px rgba(107, 33, 168, 0.3);
+}
+
+.chat-send-button:active {
+  transform: translateY(-1px);
+}
+
+.chat-send-button:disabled {
+  background: var(--bg-tertiary);
+  border-color: var(--border-primary);
+  transform: none;
+  box-shadow: none;
+  opacity: 0.6;
+}
+
+/* Enhanced stop button styling for danger actions */
+.chat-send-button.btn-danger {
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(241, 40, 40, 0.418);
+  color: rgba(241, 54, 54, 0.8);
+  box-shadow: 0 4px 12px rgba(220, 38, 38, 0.4);
+}
+
+.chat-send-button.btn-danger:hover {
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(241, 40, 40, 0.418);
+  transform: translateY(-2px);
+  box-shadow: 0 8px 20px rgba(220, 38, 38, 0.5);
+}
+
+.chat-send-button.btn-danger:active {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(220, 38, 38, 0.6);
+}
+
+/* Chat message editing styles */
+.chat-message.editing {
+  background: var(--bg-tertiary) !important;
+  border: 2px solid var(--primary) !important;
+  box-shadow: 0 8px 32px rgba(139, 92, 246, 0.3) !important;
+  /* Force same width as non-editing messages */
+  width: 95% !important;
+}
+
+/* Ensure editing messages maintain their alignment */
+.chat-message.user.editing {
+  align-self: flex-end !important;
+}
+
+.chat-message.assistant.editing {
+  align-self: flex-start !important;
+}
+
+.chat-message-actions {
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-2);
+  opacity: 0;
+  transition: opacity 0.2s ease;
+  display: flex;
+  gap: var(--space-1);
+  align-items: center;
+}
+
+/* Position action buttons on the left for user messages */
+.chat-message.user .chat-message-actions {
+  left: var(--space-2);
+  right: auto;
+  flex-direction: row-reverse; /* Delete button appears first (leftmost) */
+}
+
+.chat-message:hover .chat-message-actions {
+  opacity: 1;
+}
+
+.edit-btn {
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: rgba(255, 255, 255, 0.7);
+  font-size: var(--font-size-sm);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-md);
+  transition: all 0.2s ease;
+  backdrop-filter: blur(10px);
+}
+
+.edit-btn:hover {
+  background: rgba(255, 255, 255, 0.2);
+  border-color: rgba(255, 255, 255, 0.3);
+  color: white;
+  transform: scale(1.05);
+}
+
+.delete-btn {
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.2);
+  color: rgba(239, 68, 68, 0.8);
+  font-size: var(--font-size-sm);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-md);
+  transition: all 0.2s ease;
+  backdrop-filter: blur(10px);
+}
+
+.delete-btn:hover {
+  background: rgba(239, 68, 68, 0.2);
+  border-color: rgba(239, 68, 68, 0.4);
+  color: #ef4444;
+  transform: scale(1.05);
+}
+
+/* Variant / Continue buttons (refactored MessageList) */
+/* Primary toned utility buttons unified */
+.variant-btn, .continue-btn, .variant-nav-btn {
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.15);
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-md);
+  /* Remove forced compact line-height so height matches edit button */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
+  backdrop-filter: blur(6px);
+}
+
+.variant-btn:hover, .continue-btn:hover, .variant-nav-btn:hover {
+  background: rgba(139, 92, 246, 0.15);
+  border-color: rgba(139, 92, 246, 0.35);
+  color: var(--primary);
+  transform: scale(1.05);
+}
+
+.variant-btn:active, .continue-btn:active, .variant-nav-btn:active {
+  transform: scale(0.98);
+}
+
+/* Distinguish main variant generate button slightly */
+.variant-btn {
+  background: rgba(139, 92, 246, 0.10);
+  border-color: rgba(139, 92, 246, 0.30);
+  color: var(--primary);
+}
+.variant-btn:hover { background: rgba(139, 92, 246, 0.22); }
+
+/* Navigation (prev/next) subtle styling */
+.variant-nav-btn {
+  font-weight: 600;
+  padding: 4px 10px;
+  background: rgba(255,255,255,0.05);
+}
+.variant-nav-btn:hover { background: rgba(255,255,255,0.12); color: var(--primary); }
+
+.variant-inline-controls {
+  display: flex;
+  align-items: center;
+  background: transparent;
+  /* border removed per request */
+  padding: 2px 4px;
+  gap: var(--space-1);
+  border-radius: var(--radius-md);
+}
+
+.continue-btn {
+  background: rgba(59, 130, 246, 0.1);
+  border: 1px solid rgba(59, 130, 246, 0.2);
+  color: rgba(59, 130, 246, 0.8);
+  font-size: var(--font-size-sm);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-md);
+  transition: all 0.2s ease;
+  backdrop-filter: blur(10px);
+}
+
+.continue-btn:hover {
+  background: rgba(59, 130, 246, 0.2);
+  border-color: rgba(59, 130, 246, 0.4);
+  color: #3b82f6;
+  transform: scale(1.05);
+}
+
+.retry-btn {
+  background: rgba(245, 158, 11, 0.1);
+  border: 1px solid rgba(245, 158, 11, 0.2);
+  color: rgba(245, 158, 11, 0.8);
+  font-size: var(--font-size-sm);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-md);
+  transition: all 0.2s ease;
+  backdrop-filter: blur(10px);
+}
+
+.retry-btn:hover {
+  background: rgba(245, 158, 11, 0.2);
+  border-color: rgba(245, 158, 11, 0.4);
+  color: #f59e0b;
+  transform: scale(1.05);
+}
+
+.message-edit-container {
+  width: 100%;
+  max-width: none; /* Ensure no width constraints */
+  display: block; /* Ensure block-level behavior */
+}
+
+.message-edit-input {
+  width: 100%;
+  /* Larger comfortable starting height */
+  min-height: var(--message-edit-min-height);
+  /* Allow a bit more expansion for longer edits */
+  max-height: var(--message-edit-max-height);
+  resize: none; /* JS auto-resize */
+  margin-bottom: var(--space-3);
+  overflow-y: auto;
+  box-sizing: border-box;
+  background-color: var(--bg-secondary);
+  border-color: var(--border-primary);
+  padding-top: var(--space-3);
+  padding-bottom: var(--space-3);
+  /* Prevent iOS zoom & caret offset issues */
+  font-size: 16px; /* lock at 16px so Safari won't zoom */
+  line-height: 1.55; /* slightly taller line for readability */
+  -webkit-text-size-adjust: 100%;
+  font-variant-ligatures: none; /* avoid ligature width shifts affecting caret */
+  -webkit-overflow-scrolling: touch; /* smooth momentum scrolling inside edit area */
+  overscroll-behavior: contain; /* prevent scroll chaining to parent during internal scroll */
+  /* Keep the edited message visible when auto-scrolled into view */
+  scroll-margin-block-start: 100px;
+  scroll-margin-block-end: 160px;
+}
+
+.message-edit-input:focus {
+  border-color: var(--border-accent);
+  box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.15);
+}
+
+.message-edit-actions {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+/* Message variant controls */
+.variant-counter {
+  font-size: var(--font-size-sm);
+  color: var(--text-secondary);
+  min-width: 60px;
+  text-align: center;
+}
+
+.variant-separator {
+  width: 1px;
+  height: 20px;
+  background-color: var(--border-primary);
+  margin: 0 var(--space-1);
+}
+
+.ml-2 {
+  margin-left: var(--space-2);
+}
+
+/* Responsive adjustments for variant controls */
+@media (max-width: 768px) {
+  .variant-separator {
+    display: none; /* Hide separator on mobile to save space */
+  }
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+  .chat-message-actions {
+    position: static;
+    opacity: 1;
+    margin-top: var(--space-2);
+    justify-content: flex-end;
+    flex-direction: row;
+  }
+  
+  /* For user messages on mobile, align to the left */
+  .chat-message.user .chat-message-actions {
+    justify-content: flex-start;
+    flex-direction: row; /* Reset flex direction for mobile */
+  }
+  
+  .message-edit-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  
+  .message-edit-actions .btn {
+    width: 100%;
+  }
+}
+

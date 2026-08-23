@@ -1,0 +1,35 @@
+/* Additional background utilities */
+.bg-primary { background-color: var(--bg-primary); }
+.bg-secondary { background-color: var(--bg-secondary); }
+.bg-tertiary { background-color: var(--bg-tertiary); }
+
+/* Border utilities */
+.border { border: 1px solid var(--border-primary); }
+.border-secondary { border: 1px solid var(--border-secondary); }
+.rounded-lg { border-radius: var(--radius-lg); }
+
+/* Spacing utilities */
+.space-y-2 > * + * { margin-top: var(--space-2); }
+.space-y-3 > * + * { margin-top: var(--space-3); }
+.py-12 { padding-top: var(--space-12); padding-bottom: var(--space-12); }
+
+/* Cursor utilities */
+.cursor-pointer { cursor: pointer; }
+
+/* Enhanced card interactions */
+.card.cursor-pointer {
+  transition: all 0.3s ease;
+  user-select: none;
+}
+
+.card.cursor-pointer:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-lg);
+  border-color: var(--primary);
+}
+
+.card.cursor-pointer:active {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-md);
+}
+

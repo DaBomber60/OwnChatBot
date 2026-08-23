@@ -48,12 +48,11 @@ export function NotesOverlayModal(props: NotesPanelProps) {
       <div className="form-group">
         <label className="form-label">Personal Notes</label>
         <textarea
-          className="form-textarea"
+          className="form-textarea notes-textarea"
           value={props.notesContent}
           onChange={(e) => props.setNotesContent(e.target.value)}
           placeholder="Write your personal notes here... These are private and never sent to the AI."
           rows={12}
-          style={{ minHeight: '300px' }}
         />
         <div className="text-xs text-muted mt-1">
           💡 Use this space to keep track of important details, ideas, or context as you chat.

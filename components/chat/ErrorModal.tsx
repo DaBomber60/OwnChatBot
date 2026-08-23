@@ -25,8 +25,8 @@ export function ErrorModal({ apiErrorMessage, onDownloadRequest, onDownloadRespo
       }
     >
       <p className="mb-4">The API encountered an error.</p>
-      <div className="card card-compact" style={{ background: 'var(--bg-tertiary)' }}>
-        <code style={{ whiteSpace: 'pre-wrap' }}>{apiErrorMessage}</code>
+      <div className="card card-compact error-details">
+        <code>{apiErrorMessage}</code>
       </div>
     </Modal>
   );

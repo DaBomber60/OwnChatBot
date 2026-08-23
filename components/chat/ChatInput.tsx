@@ -35,7 +35,6 @@ export function ChatInput({
           placeholder="Type your message..."
           onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onSend(); } }}
           disabled={loading}
-          style={{ minHeight: '80px' }}
         />
         <div className="chat-input-buttons">
           <button

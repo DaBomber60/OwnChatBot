@@ -1,0 +1,35 @@
+/* Chat list specific styles */
+.chat-group-header {
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border-primary);
+  transition: all 0.2s ease;
+}
+
+.chat-group-header:hover {
+  border-color: var(--border-accent);
+  box-shadow: 0 2px 8px rgba(139, 92, 246, 0.1);
+  transform: translateY(-1px);
+}
+
+.chat-group-header h4 {
+  margin: 0;
+  line-height: 1;
+}
+
+.chat-list-item {
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border-primary);
+  transition: all 0.2s ease;
+}
+
+.chat-list-item:hover {
+  border-color: var(--border-accent);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(139, 92, 246, 0.15);
+}
+
+.chat-list-item h5 {
+  margin: 0;
+  line-height: 1;
+}
+

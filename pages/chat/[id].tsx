@@ -1,4 +1,4 @@
-import { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { flushSync } from 'react-dom';
 import { useRouter } from 'next/router';
 import useSWR from 'swr';
@@ -8,6 +8,7 @@ import { useClickOutside } from '../../hooks/useClickOutside';
 import { useNotes } from '../../hooks/chat/useNotes';
 import { useSummary } from '../../hooks/chat/useSummary';
 import { useChatScroll } from '../../hooks/chat/useChatScroll';
+import { useChatViewport } from '../../hooks/chat/useChatViewport';
 import { ChatHeader } from '../../components/chat/ChatHeader';
 import { ChatInput } from '../../components/chat/ChatInput';
 import { SummaryModal } from '../../components/chat/SummaryModal';
@@ -18,6 +19,12 @@ import { VariantTempPopover } from '../../components/chat/VariantTempPopover';
 import { readSSEStream, isSSEResponse, performStreamingRequest } from '../../lib/chat/streamSSE';
 import { fetchChatSettings } from '../../lib/chat/chatSettings';
 import { safeJson, sanitizeErrorMessage, extractUsefulError, extractErrorFromResponse } from '../../lib/chat/errorUtils';
+import {
+  CHAT_INPUT_MIN_HEIGHT, CHAT_INPUT_MAX_HEIGHT,
+  EDIT_INPUT_MIN_HEIGHT, editTextareaMaxHeight,
+  BOTTOM_PIN_THRESHOLD_PX, TOP_LOAD_THRESHOLD_PX,
+  VARIANT_LONG_PRESS_MS,
+} from '../../lib/chat/layout';
 import { sanitizeMessage } from '../../lib/messageFormat';
 import type { ChatMessage, Message, MessageVersion, SessionData } from '../../types/models';
 
@@ -83,11 +90,8 @@ export default function ChatSessionPage() {
   const [showErrorModal, setShowErrorModal] = useState(false);
   const [apiErrorMessage, setApiErrorMessage] = useState('');
   // reusing error modal for truncation warnings
-  const [isWideScreen, setIsWideScreen] = useState(false);
-  const [isNarrowScreen, setIsNarrowScreen] = useState(false);
   const [isBurgerMenuOpen, setIsBurgerMenuOpen] = useState(false);
   const headerRef = useRef<HTMLElement>(null);
-  const [headerHeight, setHeaderHeight] = useState(112); // Initial estimate: 80px header + 32px gap
   const streamingMessageRef = useRef<string>('');
   const containerRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -120,7 +124,14 @@ export default function ChatSessionPage() {
   const { showSummaryModal, setShowSummaryModal, summaryContent, setSummaryContent, savingSummary, generatingSummary, updatingSummary, saveSummary, generateSummary, updateSummary, canUpdateSummary } = summary;
 
   const scroll = useChatScroll({ containerRef, messages, isStreaming, generatingVariant, editingMessageIndex });
-  const { scrollToBottom, startStreamingFollow, stopStreamingFollow, maybeStartStreamingFollow, handleScrollToLatestClick, showScrollToLatest, setShowScrollToLatest, userPinnedBottomRef, suppressNextAutoScrollRef, skipNextScroll, forceNextSmoothRef } = scroll;
+  const { scrollToBottom, startStreamingFollow, stopStreamingFollow, maybeStartStreamingFollow, handleScrollToLatestClick, showScrollToLatest, setShowScrollToLatest, userPinnedBottomRef, skipNextScroll, forceNextSmoothRef } = scroll;
+
+  const { headerHeight, isWideScreen, isNarrowScreen } = useChatViewport({
+    headerRef,
+    isBurgerMenuOpen,
+    hasSession: !!session,
+    isEditing: editingMessageIndex !== null,
+  });
   // Debug helper for response logging
   const logMeta = (label: string, res: Response) => {
     try {
@@ -288,12 +299,10 @@ export default function ChatSessionPage() {
       if (editingMessageIndex !== null) return;
 
       const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-      const wasPinned = userPinnedBottomRef.current;
-      userPinnedBottomRef.current = distanceFromBottom < 120; // threshold
-      if (wasPinned && !userPinnedBottomRef.current) suppressNextAutoScrollRef.current = true;
+      userPinnedBottomRef.current = distanceFromBottom < BOTTOM_PIN_THRESHOLD_PX;
       setShowScrollToLatest(!userPinnedBottomRef.current);
       // Near the top? Load older messages if available (but not while editing)
-      if (el.scrollTop < 120 && hasMore && !loadingMore) {
+      if (el.scrollTop < TOP_LOAD_THRESHOLD_PX && hasMore && !loadingMore) {
         loadOlderMessages();
       }
     };
@@ -605,7 +614,7 @@ export default function ChatSessionPage() {
   // Default the slider to the current settings value when opening
   setVariantTempValue(isFinite(settingsTemperature) ? settingsTemperature : 0.7);
       setVariantTempPopover({ messageId, x: clientX, y: clientY });
-    }, 450); // ~0.45s long-press
+    }, VARIANT_LONG_PRESS_MS);
   };
 
   const handleVariantButtonPressEnd = () => {
@@ -1273,93 +1282,6 @@ export default function ChatSessionPage() {
     };
   }, []);
 
-  // Detect screen width for responsive modal behavior
-  useEffect(() => {
-    const checkScreenWidth = () => {
-      setIsWideScreen(window.innerWidth >= 1500);
-  setIsNarrowScreen(window.innerWidth < 800);
-    };
-    
-    // Check initially
-    checkScreenWidth();
-    
-    // Add event listener for window resize
-    window.addEventListener('resize', checkScreenWidth);
-    
-    // Cleanup
-    return () => window.removeEventListener('resize', checkScreenWidth);
-  }, []);
-
-  // Track header height for dynamic chat container positioning
-  useLayoutEffect(() => {
-    const updateHeaderHeight = () => {
-      if (headerRef.current) {
-        // Force a reflow to ensure we get accurate measurements
-        void headerRef.current.offsetHeight;
-        
-        const height = headerRef.current.offsetHeight;
-        // Add the mb-8 gap (32px) that provides natural spacing between header and chat container
-        // Use consistent height calculation that matches the post-interaction position
-        const adjustedHeight = height + 32;
-        setHeaderHeight(adjustedHeight);
-        // Set CSS custom property for use in sidecar modal
-        document.documentElement.style.setProperty('--dynamic-header-height', `${adjustedHeight}px`);
-      }
-    };
-
-    // Update immediately on mount
-    updateHeaderHeight();
-    
-    // Use requestAnimationFrame to ensure DOM is fully rendered
-    const rafId = requestAnimationFrame(() => {
-      updateHeaderHeight();
-      // Additional update after a brief delay to catch any delayed renders
-      setTimeout(updateHeaderHeight, 50);
-    });
-    
-    // Update on window resize
-    window.addEventListener('resize', updateHeaderHeight);
-    
-    return () => {
-      cancelAnimationFrame(rafId);
-      window.removeEventListener('resize', updateHeaderHeight);
-      // Clean up CSS custom property
-      document.documentElement.style.removeProperty('--dynamic-header-height');
-    };
-  }, [isBurgerMenuOpen]);
-
-  // Additional effect to recalculate height after session data loads
-  useLayoutEffect(() => {
-    const updateHeaderHeight = () => {
-      if (headerRef.current) {
-        // Force a reflow to ensure we get accurate measurements
-        void headerRef.current.offsetHeight;
-        
-        const height = headerRef.current.offsetHeight;
-        const adjustedHeight = height + 32;
-        setHeaderHeight(adjustedHeight);
-        document.documentElement.style.setProperty('--dynamic-header-height', `${adjustedHeight}px`);
-      }
-    };
-
-    // Update after session loads to ensure proper calculation with all content rendered
-    // Skip recalculation while the user is editing a message to avoid scroll jumps
-    if (session && editingMessageIndex === null) {
-      updateHeaderHeight();
-      
-      // Additional updates to catch any delayed content rendering
-      const timeouts = [
-        setTimeout(updateHeaderHeight, 0),
-        setTimeout(updateHeaderHeight, 100),
-        setTimeout(updateHeaderHeight, 200)
-      ];
-      
-      return () => {
-        timeouts.forEach(clearTimeout);
-      };
-    }
-  }, [session, editingMessageIndex]);
-
   // Close burger menu on outside click
   useClickOutside(isBurgerMenuOpen, () => setIsBurgerMenuOpen(false), {
     containerRef: headerRef,
@@ -1394,9 +1316,8 @@ export default function ChatSessionPage() {
     const textarea = textareaRef.current;
     // Reset height to auto to get the correct scrollHeight
     textarea.style.height = 'auto';
-  // Set height to scrollHeight, constrained by min/max (min 80px, max 240px)
-  const newHeight = Math.max(80, Math.min(textarea.scrollHeight, 240));
-  textarea.style.height = `${newHeight}px`;
+    const newHeight = Math.max(CHAT_INPUT_MIN_HEIGHT, Math.min(textarea.scrollHeight, CHAT_INPUT_MAX_HEIGHT));
+    textarea.style.height = `${newHeight}px`;
   }, []);
 
   // Commit any displayed variants before sending
@@ -1440,13 +1361,10 @@ export default function ChatSessionPage() {
     
     // Reset height to auto to get the correct scrollHeight
     textarea.style.height = 'auto';
-  // Dynamic sizing: min matches CSS (100px); max is 65% of viewport or 500px whichever is smaller, but at least 400px
-  const viewportMax = typeof window !== 'undefined' ? Math.floor(window.innerHeight * 0.65) : 500;
-  const dynamicMax = Math.max(400, Math.min(500, viewportMax));
-  const minH = 100;
-  const newHeight = Math.max(minH, Math.min(textarea.scrollHeight, dynamicMax));
-  textarea.style.maxHeight = dynamicMax + 'px';
-  textarea.style.height = `${newHeight}px`;
+    const dynamicMax = editTextareaMaxHeight();
+    const newHeight = Math.max(EDIT_INPUT_MIN_HEIGHT, Math.min(textarea.scrollHeight, dynamicMax));
+    textarea.style.maxHeight = dynamicMax + 'px';
+    textarea.style.height = `${newHeight}px`;
     
     // Restore scroll position to prevent the textarea from jumping around
     if (container) {
@@ -1488,9 +1406,7 @@ export default function ChatSessionPage() {
       tempTextarea.value = text;
       
       document.body.appendChild(tempTextarea);
-  const viewportMax = typeof window !== 'undefined' ? Math.floor(window.innerHeight * 0.65) : 500;
-  const dynamicMax = Math.max(400, Math.min(500, viewportMax));
-  const height = Math.max(100, Math.min(tempTextarea.scrollHeight, dynamicMax));
+      const height = Math.max(EDIT_INPUT_MIN_HEIGHT, Math.min(tempTextarea.scrollHeight, editTextareaMaxHeight()));
       document.body.removeChild(tempTextarea);
       
       return height;
@@ -2005,7 +1921,7 @@ export default function ChatSessionPage() {
   shouldRestoreInputRef.current = true;
       // Reset textarea height after clearing input
       if (textareaRef.current) {
-  textareaRef.current.style.height = '80px';
+        textareaRef.current.style.height = `${CHAT_INPUT_MIN_HEIGHT}px`;
       }
     }
     
@@ -2405,7 +2321,7 @@ export default function ChatSessionPage() {
                       {(!isUser && messageId && shouldShowVariants && variants && variants.length > 0 && generatingVariant !== messageId && !isEditing) ? (
                         <>
                           <span className="variant-separator" />
-                          <div className="variant-inline-controls" style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                          <div className="variant-inline-controls">
                             <button className="variant-nav-btn" onClick={() => navigateVariant(messageId, 'prev')} title="Previous variant">←</button>
                             <span className="variant-counter">{variantCounter}</span>
                             <button className="variant-nav-btn" onClick={() => navigateVariant(messageId, 'next')} title="Next variant">→</button>

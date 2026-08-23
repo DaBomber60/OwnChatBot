@@ -1,0 +1,209 @@
+/* Modal system */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0, 0, 0, 0.8);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  backdrop-filter: blur(4px);
+  animation: modalFadeIn 0.2s ease-out;
+}
+
+.modal-content {
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-xl);
+  padding: var(--space-8);
+  width: 90%;
+  max-width: 750px;
+  max-height: 80vh;
+  overflow: auto;
+  box-shadow: var(--shadow-xl);
+  animation: modalSlideIn 0.3s ease-out;
+}
+
+/* Ensure a clear gap between modal body and footer for overlay modals */
+.modal-overlay .modal-content .modal-body {
+  margin-bottom: var(--space-6);
+}
+
+.summary-textarea {
+  min-height: 200px;
+}
+
+.error-details {
+  background: var(--bg-tertiary);
+}
+
+.error-details code {
+  white-space: pre-wrap;
+}
+
+/* Notes modal responsive behavior */
+.notes-modal {
+  /* Default: narrow display behavior (fullscreen modal) */
+  width: 90%;
+  max-width: 750px;
+  max-height: 80vh;
+}
+
+/* Overlay-only; the sidecar textarea stretches to fill its panel instead */
+.notes-textarea {
+  min-height: 300px;
+}
+
+/* Wide display: position notes modal to bottom right as a separate element */
+.notes-modal-sidecar {
+  position: fixed;
+  bottom: var(--space-4);
+  /* Position modal to the right of the chat container with 24px gap */
+  /* Chat container is centered with max-width 800px, so position modal at 50% + 400px + 24px from left */
+  left: calc(50% + 400px + 24px);
+  width: auto;
+  min-width: 320px;
+  max-width: min(600px, calc(100vw - 50% - 400px - 48px)); /* Ensure it fits within viewport */
+  /* Use CSS custom property for dynamic height calculation */
+  height: calc((100vh - var(--dynamic-header-height, 180px)) / 2);
+  max-height: calc((100vh - var(--dynamic-header-height, 180px)) / 2);
+  z-index: 1000;
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-xl);
+  padding: var(--space-8);
+  box-shadow: var(--shadow-xl);
+  animation: notesFadeIn 0.3s ease-out;
+  display: flex;
+  flex-direction: column;
+}
+
+.notes-modal-sidecar .modal-header {
+  flex-shrink: 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: var(--space-6);
+}
+
+.notes-modal-sidecar .modal-body {
+  flex: 1;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.notes-modal-sidecar .form-group {
+  height: 100%;
+  margin-bottom: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.notes-modal-sidecar .form-label {
+  flex-shrink: 0;
+}
+
+.notes-modal-sidecar .form-textarea {
+  flex: 1;
+  min-height: unset !important;
+  resize: none;
+}
+
+.notes-modal-sidecar .modal-footer {
+  flex-shrink: 0;
+  margin-top: var(--space-6);
+}
+
+/* Animation for notes modal on wide screens */
+@keyframes notesFadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+/* Modal animations */
+@keyframes modalFadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes modalSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(-20px) scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* Warning box for delete modal */
+.warning-box {
+  font-size: var(--font-size-sm);
+  color: var(--text-muted);
+  margin-bottom: var(--space-4);
+  padding: var(--space-3);
+  background-color: rgba(245, 158, 11, 0.1);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  border-radius: var(--radius-lg);
+  line-height: 1.5;
+}
+
+/* Responsive modal */
+@media (max-width: 768px) {
+  .modal-content {
+    margin: var(--space-4);
+    padding: var(--space-6);
+    max-height: 90vh;
+  }
+  
+  .modal-footer {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--space-4);
+  }
+  
+  .modal-footer > .flex {
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  
+  .modal-footer > .flex .btn {
+    flex: 1;
+    min-width: 140px;
+  }
+  
+  .modal-actions {
+    justify-content: stretch;
+  }
+  
+  .modal-actions .btn {
+    flex: 1;
+  }
+}
+
+/* Medium screen adjustments */
+@media (max-width: 640px) {
+  .modal-footer > .flex {
+    flex-direction: column;
+  }
+  
+  .modal-footer > .flex .btn {
+    width: 100%;
+    min-width: auto;
+  }
+}
+

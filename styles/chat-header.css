@@ -1,0 +1,237 @@
+/* Chat page header responsive layout */
+.chat-header {
+  margin-bottom: var(--space-3);
+}
+
+/* Burger Menu Navigation */
+.chat-header-compact {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2); /* Reduced from space-3 */
+  padding: var(--space-1) 0; /* Reduced from space-2 to space-1 (4px top/bottom) */
+}
+
+.burger-menu-btn {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  width: 32px;
+  height: 32px;
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border-primary);
+  cursor: pointer;
+  padding: 0;
+  gap: 4px;
+  transition: all 0.2s ease;
+  border-radius: var(--radius-lg);
+  flex-shrink: 0;
+}
+
+/* Invisible spacer to balance the burger button and center the title */
+.burger-menu-spacer {
+  /* Match the exact burger-menu-btn dimensions */
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-lg);
+  flex-shrink: 0;
+  /* Make it completely invisible */
+  visibility: hidden;
+}
+
+.burger-menu-btn:hover {
+  background-color: var(--bg-hover);
+  border-color: var(--border-accent);
+}
+
+/* Focus styles for burger menu accessibility */
+.burger-menu-btn:focus {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+.burger-line {
+  width: 20px;
+  height: 2px;
+  background: var(--text-primary);
+  border-radius: 1px;
+  transition: all 0.3s ease;
+  transform-origin: center;
+}
+
+.burger-line.open:nth-child(1) {
+  transform: rotate(45deg) translate(6px, 6px);
+}
+
+.burger-line.open:nth-child(2) {
+  opacity: 0;
+}
+
+.burger-line.open:nth-child(3) {
+  transform: rotate(-45deg) translate(6px, -6px);
+}
+
+.chat-title-section {
+  flex: 1;
+  text-align: center;
+  overflow: hidden;
+}
+
+.chat-title {
+  font-size: var(--font-size-3xl);
+  font-weight: 600;
+  margin: 0;
+  line-height: 1.2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.persona-name,
+.character-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.title-separator {
+  flex-shrink: 0;
+}
+
+/* Burger Menu Content */
+.burger-menu-content {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-lg);
+  margin-top: var(--space-3);
+  padding: var(--space-4);
+  box-shadow: var(--shadow-lg);
+  animation: burgerMenuSlideIn 0.2s ease-out;
+  transition: all 0.2s ease;
+}
+
+.burger-menu-content:hover {
+  border-color: var(--border-accent);
+  box-shadow: var(--shadow-xl);
+  transform: translateY(-1px);
+}
+
+.burger-menu-section {
+  margin-bottom: var(--space-4);
+}
+
+.burger-menu-section:last-child {
+  margin-bottom: 0;
+}
+
+.burger-menu-label {
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: var(--space-2);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.burger-menu-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.btn-menu-item {
+  justify-content: flex-start;
+  text-align: left;
+  width: 100%;
+}
+
+/* Focus styles for menu items */
+.btn-menu-item:focus {
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
+}
+
+@keyframes burgerMenuSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Responsive title behavior - smooth scaling */
+@media (max-width: 800px) {
+  .chat-title {
+    font-size: var(--font-size-lg); /* Much smaller - down from 2xl to lg */
+    line-height: 1.1; /* Tighter line height */
+  }
+  
+  .persona-name,
+  .character-name {
+    max-width: 180px;
+  }
+}
+
+@media (max-width: 480px) {
+  .chat-title {
+    font-size: var(--font-size-base); /* Keep same size but optimize layout */
+    flex-direction: column;
+    gap: 0; /* Remove gap when stacked */
+    line-height: 1.1; /* Tighter line height */
+  }
+  
+  .persona-name,
+  .character-name {
+    max-width: 200px; /* More room when stacked vertically */
+  }
+  
+  .title-separator {
+    display: none;
+  }
+}
+
+@media (max-width: 320px) {
+  .chat-title {
+    font-size: var(--font-size-sm); /* Final step for very small screens */
+  }
+  
+  .persona-name,
+  .character-name {
+    max-width: 160px;
+  }
+}
+
+/* Additional responsive improvements for smaller screens */
+@media (max-width: 640px) {
+  .chat-header-compact {
+    padding: var(--space-1) 0; /* Keep tight padding */
+  }
+  
+  .burger-menu-content {
+    margin-top: var(--space-2);
+    padding: var(--space-3);
+  }
+  
+  .burger-menu-label {
+    font-size: var(--font-size-xs);
+    margin-bottom: var(--space-1);
+  }
+}
+
+/* Ensure burger menu doesn't interfere with wide screen notes modal */
+@media (min-width: 1500px) {
+  .burger-menu-content {
+    max-width: 400px; /* Prevent burger menu from being too wide on large screens */
+  }
+}
+
