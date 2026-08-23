@@ -22,7 +22,7 @@ import { fetchChatSettings } from '../../lib/chat/chatSettings';
 import { safeJson, sanitizeErrorMessage, extractUsefulError, extractErrorFromResponse } from '../../lib/chat/errorUtils';
 import {
   CHAT_INPUT_MIN_HEIGHT, CHAT_INPUT_MAX_HEIGHT,
-  EDIT_INPUT_MIN_HEIGHT, editTextareaMaxHeight,
+  EDIT_INPUT_MIN_HEIGHT, EDIT_VIEWPORT_MARGIN, editTextareaMaxHeight,
   BOTTOM_PIN_THRESHOLD_PX, TOP_LOAD_THRESHOLD_PX,
   VARIANT_LONG_PRESS_MS,
 } from '../../lib/chat/layout';
@@ -120,6 +120,8 @@ export default function ChatSessionPage() {
   // Scroll offsets captured just before a prepend, consumed by the restore layout effect.
   const pendingRestoreRef = useRef<{ scrollTop: number; scrollHeight: number } | null>(null);
   const messagesRef = useRef<ChatMessage[]>([]);
+  // Keeps the edited message visually stationary across the edit-mode layout change.
+  const editAnchorRef = useRef<{ index: number; offset: number } | null>(null);
   // Track last sent user input so we can restore it if streaming is aborted early
   const lastSentInputRef = useRef<string>('');
   const shouldRestoreInputRef = useRef<boolean>(false);
@@ -1238,19 +1240,9 @@ export default function ChatSessionPage() {
     
     console.log('Session useEffect triggered, editingMessageIndex:', editingMessageIndex);
     if (session?.messages) {
-      // Only update messages if we're not currently editing a message
-      // This prevents overriding local edits when session refreshes
-      if (editingMessageIndex === null) {
-        console.log('Updating messages from session data');
-        setMessages(session.messages.map(m => ({ 
-          role: m.role as 'user' | 'assistant', 
-          content: m.content,
-          messageId: m.id
-        })));
-      } else {
-        console.log('Skipping message update due to active editing');
-      }
-      
+      // Messages are owned by the "Load persisted messages" effect above, which processes
+      // continuation placeholders and merges the page into any older history already paged in.
+
       // Load variants only for the last assistant message from server data - but only if not in streaming state or editing
       if (!isStreaming && !justFinishedStreaming && generatingVariant === null && editingMessageIndex === null) {
         const lastAssistant = (() => {
@@ -1409,6 +1401,23 @@ export default function ChatSessionPage() {
     }
   };
 
+  // Height the edit textarea may occupy: the visible slice of the list (which excludes the
+  // on-screen keyboard) minus the bubble's own chrome — padding, Save/Cancel row and hint.
+  const availableEditHeight = useCallback(() => {
+    const el = containerRef.current;
+    const textarea = editTextareaRef.current;
+    if (!el || !textarea) return Number.NaN;
+
+    const cRect = el.getBoundingClientRect();
+    const vv = typeof window !== 'undefined' ? window.visualViewport : null;
+    const viewTop = Math.max(cRect.top, vv ? vv.offsetTop : 0);
+    const viewBottom = Math.min(cRect.bottom, vv ? vv.offsetTop + vv.height : window.innerHeight);
+
+    const bubble = textarea.closest('.chat-message') as HTMLElement | null;
+    const chrome = bubble ? bubble.getBoundingClientRect().height - textarea.getBoundingClientRect().height : 0;
+    return (viewBottom - viewTop) - chrome - EDIT_VIEWPORT_MARGIN * 2;
+  }, [containerRef]);
+
   // Auto-resize edit textarea function
   const autoResizeEditTextarea = useCallback(() => {
     if (!editTextareaRef.current) return;
@@ -1421,7 +1430,7 @@ export default function ChatSessionPage() {
     
     // Reset height to auto to get the correct scrollHeight
     textarea.style.height = 'auto';
-    const dynamicMax = editTextareaMaxHeight();
+    const dynamicMax = editTextareaMaxHeight(availableEditHeight());
     const newHeight = Math.max(EDIT_INPUT_MIN_HEIGHT, Math.min(textarea.scrollHeight, dynamicMax));
     textarea.style.maxHeight = dynamicMax + 'px';
     textarea.style.height = `${newHeight}px`;
@@ -1433,71 +1442,107 @@ export default function ChatSessionPage() {
   }, []);
 
   // Start editing a message
+  const captureEditAnchor = (index: number) => {
+    const el = containerRef.current;
+    const node = el?.querySelector<HTMLElement>(`[data-message-index="${index}"]`);
+    if (!el || !node) return;
+    editAnchorRef.current = {
+      index,
+      offset: node.getBoundingClientRect().top - el.getBoundingClientRect().top,
+    };
+  };
+
+  // Scrolls the message being edited into the genuinely visible area. On mobile the on-screen
+  // keyboard covers the bottom of the layout viewport without shrinking it, so visualViewport
+  // is the only reliable source for where the usable region actually ends.
+  const ensureEditVisible = useCallback(() => {
+    const el = containerRef.current;
+    if (!el || editingMessageIndex === null) return;
+    const node = el.querySelector<HTMLElement>(`[data-message-index="${editingMessageIndex}"]`);
+    if (!node) return;
+
+    const cRect = el.getBoundingClientRect();
+    const vv = typeof window !== 'undefined' ? window.visualViewport : null;
+    const viewTop = Math.max(cRect.top, vv ? vv.offsetTop : 0);
+    const viewBottom = Math.min(cRect.bottom, vv ? vv.offsetTop + vv.height : window.innerHeight);
+
+    // Without this the list cannot scroll far enough to lift the last message above the keyboard
+    const keyboardInset = Math.max(0, cRect.bottom - viewBottom);
+    el.style.paddingBottom = keyboardInset > 0 ? `${keyboardInset}px` : '';
+
+    const nRect = node.getBoundingClientRect();
+    let delta = 0;
+    if (nRect.bottom > viewBottom - EDIT_VIEWPORT_MARGIN) delta = nRect.bottom - (viewBottom - EDIT_VIEWPORT_MARGIN);
+    // If the box is taller than the visible area, favour showing its top over its bottom
+    if (nRect.top - delta < viewTop + EDIT_VIEWPORT_MARGIN) delta = nRect.top - (viewTop + EDIT_VIEWPORT_MARGIN);
+    if (Math.abs(delta) > 1) el.scrollTop += delta;
+  }, [containerRef, editingMessageIndex]);
+
+  // Entering/leaving edit mode swaps the bubble for a textarea and, on narrow screens,
+  // unmounts the composer entirely. Re-pin the edited message to where it already was
+  // rather than restoring a raw scrollTop that no longer means the same thing.
+  useLayoutEffect(() => {
+    const anchor = editAnchorRef.current;
+    if (!anchor) return;
+    editAnchorRef.current = null;
+
+    const el = containerRef.current;
+    if (!el) return;
+
+    if (editingMessageIndex !== null) {
+      autoResizeEditTextarea();
+    } else {
+      el.style.paddingBottom = ''; // drop the keyboard allowance; may clamp scrollTop
+    }
+
+    const node = el.querySelector<HTMLElement>(`[data-message-index="${anchor.index}"]`);
+    if (node) {
+      const after = node.getBoundingClientRect().top - el.getBoundingClientRect().top;
+      el.scrollTop += after - anchor.offset;
+    }
+
+    if (editingMessageIndex !== null) {
+      // On narrow screens Edit sits at the bottom of the bubble, so the message top the
+      // anchor restored is often above the viewport — pull the edit box back into view.
+      ensureEditVisible();
+      // preventScroll stops mobile browsers scrolling the caret into view over the top of us
+      editTextareaRef.current?.focus({ preventScroll: true });
+    }
+  }, [editingMessageIndex, autoResizeEditTextarea, ensureEditVisible]);
+
+  // The keyboard opens after focus, and hiding the header moves the container on the next
+  // render, so re-fit whenever the visual viewport or that offset changes.
+  useEffect(() => {
+    if (editingMessageIndex === null) return;
+    const vv = typeof window !== 'undefined' ? window.visualViewport : null;
+    const recheck = () => { autoResizeEditTextarea(); ensureEditVisible(); };
+    const raf = requestAnimationFrame(recheck);
+    vv?.addEventListener('resize', recheck);
+    vv?.addEventListener('scroll', recheck);
+    window.addEventListener('resize', recheck);
+    return () => {
+      cancelAnimationFrame(raf);
+      vv?.removeEventListener('resize', recheck);
+      vv?.removeEventListener('scroll', recheck);
+      window.removeEventListener('resize', recheck);
+    };
+  }, [editingMessageIndex, headerHeight, ensureEditVisible, autoResizeEditTextarea]);
+
   const startEditingMessage = (index: number) => {
     if (loading || isStreaming || !messages[index]) return; // Don't allow editing during loading
-    
+
     const message = messages[index];
     const messageId = message.messageId;
-    
+
     // For assistant messages with variants, edit the currently displayed content
     let contentToEdit = message.content;
     if (messageId && variantDisplayContent.has(messageId)) {
       contentToEdit = variantDisplayContent.get(messageId)!;
     }
-    
-    // Preserve current scroll position
-    const container = containerRef.current;
-    const currentScrollTop = container ? container.scrollTop : 0;
-    
-    // Pre-calculate the height needed for the content to prevent visual jump
-    const calculateTextareaHeight = (text: string) => {
-      // Create a temporary textarea to measure the required height
-      const tempTextarea = document.createElement('textarea');
-      tempTextarea.style.position = 'absolute';
-      tempTextarea.style.visibility = 'hidden';
-      tempTextarea.style.width = '100%';
-      tempTextarea.style.padding = '12px'; // Same as CSS --space-3
-      tempTextarea.style.fontSize = '16px'; // Same as CSS --font-size-base
-      tempTextarea.style.fontFamily = '-apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif';
-      tempTextarea.style.lineHeight = '1.5';
-      tempTextarea.style.border = '1px solid transparent';
-      tempTextarea.style.boxSizing = 'border-box';
-      tempTextarea.style.resize = 'none';
-      tempTextarea.value = text;
-      
-      document.body.appendChild(tempTextarea);
-      const height = Math.max(EDIT_INPUT_MIN_HEIGHT, Math.min(tempTextarea.scrollHeight, editTextareaMaxHeight()));
-      document.body.removeChild(tempTextarea);
-      
-      return height;
-    };
-    
-    const preCalculatedHeight = calculateTextareaHeight(contentToEdit);
-    
+
+    captureEditAnchor(index);
     setEditingMessageIndex(index);
     setEditingContent(contentToEdit);
-    
-    // Set the height immediately when the textarea becomes available
-    setTimeout(() => {
-      if (editTextareaRef.current) {
-        // Set the calculated height before it becomes visible to prevent jump
-        editTextareaRef.current.style.height = `${preCalculatedHeight}px`;
-        
-        // Restore scroll position before focusing to prevent auto-scroll
-        if (container) {
-          container.scrollTop = currentScrollTop;
-        }
-        
-        editTextareaRef.current.focus();
-        
-        // Restore scroll position again after focus
-        setTimeout(() => {
-          if (container) {
-            container.scrollTop = currentScrollTop;
-          }
-        }, 10);
-      }
-    }, 10); // Much shorter delay since we pre-calculated the height
   };
 
   // Save edited message
@@ -1515,11 +1560,7 @@ export default function ChatSessionPage() {
 
     const messageId = messageToEdit.messageId;
     const isAssistantMessage = messageToEdit.role === 'assistant';
-    
-    // Preserve scroll position before editing
-    const container = containerRef.current;
-    const savedScrollTop = container ? container.scrollTop : 0;
-    
+
     // Skip all scrolling during and after editing
     skipNextScroll.current = true;
     
@@ -1702,33 +1743,17 @@ export default function ChatSessionPage() {
     
     // Prevent scrolling after editing completes
     preventScrollForDuration();
-    
+
+    if (editingMessageIndex !== null) captureEditAnchor(editingMessageIndex);
     setEditingMessageIndex(null);
     setEditingContent('');
-    
-    // Restore scroll position after editing completes
-    setTimeout(() => {
-      if (containerRef.current && savedScrollTop !== undefined) {
-        containerRef.current.scrollTop = savedScrollTop;
-      }
-    }, 50);
   };
 
   // Cancel editing
   const cancelEditingMessage = () => {
-    // Preserve scroll position when canceling edit
-    const container = containerRef.current;
-    const savedScrollTop = container ? container.scrollTop : 0;
-    
+    if (editingMessageIndex !== null) captureEditAnchor(editingMessageIndex);
     setEditingMessageIndex(null);
     setEditingContent('');
-    
-    // Restore scroll position after canceling
-    setTimeout(() => {
-      if (containerRef.current) {
-        containerRef.current.scrollTop = savedScrollTop;
-      }
-    }, 10);
   };
 
   // Continue the conversation - prompt AI to continue without user input
@@ -2204,7 +2229,7 @@ export default function ChatSessionPage() {
   );
 
   return (
-    <div className="container-narrow chat-page">
+    <div className={`container-narrow chat-page${editingMessageIndex !== null ? ' editing-compact' : ''}`}>
       <Head>
         <title>{session.persona.name} chats with {session.character.name}</title>
         <meta name="description" content={`Chat conversation between ${session.persona.name} and ${session.character.name}`} />
@@ -2281,7 +2306,7 @@ export default function ChatSessionPage() {
                 : '';
             
             return (
-              <div key={i} className={`chat-message ${isUser ? 'user' : 'assistant'} ${isEditing ? 'editing' : ''} ${variantLoadingClass}`.trim()}>
+              <div key={i} data-message-index={i} className={`chat-message ${isUser ? 'user' : 'assistant'} ${isEditing ? 'editing' : ''} ${variantLoadingClass}`.trim()}>
                 {showSender && (
                   <div className={`chat-sender ${isUser ? 'user' : 'assistant'}`}>
                     {isUser ? session.persona.name : session.character.name}

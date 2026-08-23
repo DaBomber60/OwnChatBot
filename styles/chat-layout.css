@@ -71,6 +71,11 @@
     background: var(--bg-chat) !important; /* solid to prevent gradient bleed under keyboard */
   }
 
+  /* The header is the first thing on screen here, so the page gutter is wasted height */
+  body.chat-page-active .container {
+    padding-top: 0;
+  }
+
   .container-narrow {
     padding-top: 0; /* Remove top padding on mobile */
     padding-bottom: 0; /* Remove bottom padding on mobile */
@@ -82,13 +87,25 @@
     top: 0;
     z-index: 100;
     /* Remove background - let it be transparent */
-    padding: 0 var(--space-3) var(--space-1) var(--space-3); /* No top padding, minimal bottom */
+    /* Bottom is 0 because the gap to the chat container already sits below it */
+    padding: var(--space-2) var(--space-3) 0 var(--space-3);
     margin-bottom: 0; /* Remove margin bottom */
     /* Force its own compositing layer to reduce iOS Safari repaint glitches after keyboard dismissal */
     -webkit-transform: translateZ(0);
     transform: translateZ(0);
     will-change: transform;
   }
-  
+
+  /* Editing needs every pixel it can get above the keyboard, so reclaim the header's.
+     Its measured height drops to 0, which pulls the chat container up to the top. */
+  .chat-page.editing-compact .chat-header {
+    display: none;
+  }
+
+  /* Enter/exit must be instant: the measurements that fit the edit box above the keyboard
+     are taken immediately and a transition would leave them reading a mid-animation position. */
+  .chat-page.editing-compact .chat-container-fullscreen {
+    transition: none;
+  }
 }
 

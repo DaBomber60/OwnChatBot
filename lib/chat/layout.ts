@@ -11,12 +11,13 @@ export const CHAT_INPUT_MAX_HEIGHT = 240;
 /** Message edit textarea bounds. Mirrors .message-edit-input min-height/max-height. */
 export const EDIT_INPUT_MIN_HEIGHT = 100;
 export const EDIT_INPUT_MAX_HEIGHT = 500;
-/** The edit textarea never shrinks below this even on very short viewports. */
-export const EDIT_INPUT_MAX_FLOOR = 400;
-export const EDIT_INPUT_VIEWPORT_RATIO = 0.65;
+/** Breathing room kept between the edit box and the edges of the visible area. */
+export const EDIT_VIEWPORT_MARGIN = 12;
 
 /** Gap between the chat header and the message container (the header's mb-8). */
 export const HEADER_GAP_PX = 32;
+/** Narrow screens can't spare 32px of empty gutter. */
+export const HEADER_GAP_COMPACT_PX = 8;
 /** Pre-measurement estimate: 80px header + HEADER_GAP_PX. */
 export const INITIAL_HEADER_HEIGHT = 112;
 
@@ -36,10 +37,12 @@ export const REVEAL_CATCHUP_MS = 250;
 /** Duration of the eased scroll-to-bottom used for non-streamed replies. */
 export const SMOOTH_SCROLL_MS = 280;
 
-/** Resolves the edit textarea's max height against the current viewport. */
-export function editTextareaMaxHeight(): number {
-  const viewportMax = typeof window !== 'undefined'
-    ? Math.floor(window.innerHeight * EDIT_INPUT_VIEWPORT_RATIO)
-    : EDIT_INPUT_MAX_HEIGHT;
-  return Math.max(EDIT_INPUT_MAX_FLOOR, Math.min(EDIT_INPUT_MAX_HEIGHT, viewportMax));
+/**
+ * Clamps the edit textarea to the space actually available to it. `availableHeight` is the
+ * visible height left once the surrounding bubble chrome and the on-screen keyboard are
+ * accounted for, so the whole edit area stays reachable on mobile.
+ */
+export function editTextareaMaxHeight(availableHeight: number): number {
+  if (!Number.isFinite(availableHeight)) return EDIT_INPUT_MAX_HEIGHT;
+  return Math.max(EDIT_INPUT_MIN_HEIGHT, Math.min(EDIT_INPUT_MAX_HEIGHT, Math.floor(availableHeight)));
 }

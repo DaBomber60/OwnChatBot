@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useState } from 'react';
-import { HEADER_GAP_PX, INITIAL_HEADER_HEIGHT } from '../../lib/chat/layout';
+import { HEADER_GAP_PX, HEADER_GAP_COMPACT_PX, INITIAL_HEADER_HEIGHT } from '../../lib/chat/layout';
 
 /** Mirrors the @media (min-width: 1500px) / (max-width: 800px) breakpoints in globals.css. */
 const WIDE_SCREEN_MIN_WIDTH = 1500;
@@ -38,7 +38,10 @@ export function useChatViewport({
     const el = headerRef.current;
     if (!el) return;
     void el.offsetHeight; // force reflow so the read below reflects pending layout
-    const adjusted = el.offsetHeight + HEADER_GAP_PX;
+    const height = el.offsetHeight;
+    const gap = window.innerWidth < NARROW_SCREEN_MAX_WIDTH ? HEADER_GAP_COMPACT_PX : HEADER_GAP_PX;
+    // A hidden header (editing on narrow screens) should reclaim its gap too
+    const adjusted = height === 0 ? 0 : height + gap;
     setHeaderHeight(prev => (prev === adjusted ? prev : adjusted));
     // Consumed by .notes-modal-sidecar in globals.css
     document.documentElement.style.setProperty('--dynamic-header-height', `${adjusted}px`);

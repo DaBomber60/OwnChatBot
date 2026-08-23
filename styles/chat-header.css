@@ -184,19 +184,15 @@
 
 @media (max-width: 480px) {
   .chat-title {
-    font-size: var(--font-size-base); /* Keep same size but optimize layout */
-    flex-direction: column;
-    gap: 0; /* Remove gap when stacked */
-    line-height: 1.1; /* Tighter line height */
+    font-size: var(--font-size-sm);
+    gap: var(--space-1);
+    line-height: 1.2;
   }
-  
+
+  /* Share the row rather than stacking, which cost a whole extra line of header */
   .persona-name,
   .character-name {
-    max-width: 200px; /* More room when stacked vertically */
-  }
-  
-  .title-separator {
-    display: none;
+    max-width: 45%;
   }
 }
 
@@ -207,7 +203,7 @@
   
   .persona-name,
   .character-name {
-    max-width: 160px;
+    max-width: 40%;
   }
 }
 

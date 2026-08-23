@@ -52,6 +52,7 @@ export function useChatScroll({
   const lastScrollTime = useRef(0);
   const scrollTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const prevScrollHeightRef = useRef(0);
+  const lastScrolledMessagesRef = useRef<ChatMessage[] | null>(null);
   const streamingFollowActiveRef = useRef(false);
   const streamingFollowRafRef = useRef<number | null>(null);
   // Last scrollTop we set ourselves, so the page's scroll listener can tell our
@@ -219,6 +220,9 @@ export function useChatScroll({
 
   // --- Scroll to bottom on message change ---
   useEffect(() => {
+    // Entering/leaving edit mode re-runs this effect; only new content should scroll
+    if (lastScrolledMessagesRef.current === messages) return;
+    lastScrolledMessagesRef.current = messages;
     if (skipNextScroll.current) { skipNextScroll.current = false; return; }
     if (editingMessageIndex !== null) return;
     scrollToBottom();
