@@ -320,25 +320,14 @@
   color: var(--error);
 }
 
-.settings-danger__row {
+.settings-danger__actions {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-4);
-  padding: var(--space-3) 0;
+  flex-wrap: wrap;
+  gap: var(--space-3);
 }
 
-.settings-danger__row + .settings-danger__row {
-  border-top: 1px solid var(--border-secondary);
-}
-
-.settings-danger__text {
-  flex: 1;
-  min-width: 0;
-}
-
-.settings-danger__text .settings-hint {
-  margin-top: var(--space-1);
+.settings-danger__actions .btn {
+  flex: 1 1 140px;
 }
 
 .settings-danger__list {
@@ -362,11 +351,6 @@
 
   .settings-header__actions {
     justify-content: flex-start;
-  }
-
-  .settings-danger__row {
-    flex-direction: column;
-    align-items: stretch;
   }
 }
 
