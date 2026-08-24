@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useReducer } from 'react';
+import { useState, useEffect, useRef, useReducer, useMemo } from 'react';
 import UserPromptsManager from '../components/UserPromptsManager';
 import { DEFAULT_USER_PROMPT_TITLE } from '../lib/defaultUserPrompt';
 import useSWR from 'swr';
@@ -45,6 +45,8 @@ interface SettingsState {
   deepseekThinkingGuidance: string;
 }
 
+const DEFAULT_SUMMARY_PROMPT = 'Create a brief, focused summary (~100 words) of the roleplay between {{char}} and {{user}}. Include:\\n\\n- Key events and decisions\\n- Important emotional moments\\n- Location/time changes\\n\\nRules: Only summarize provided transcript. No speculation. Single paragraph format.';
+
 const initialSettingsState: SettingsState = {
   apiKey: '',
   keysByProvider: {},
@@ -60,7 +62,7 @@ const initialSettingsState: SettingsState = {
   maxCharacters: 150000,
   maxTokens: 4096,
   devMode: false,
-  summaryPrompt: 'Create a brief, focused summary (~100 words) of the roleplay between {{char}} and {{user}}. Include:\\n\\n- Key events and decisions\\n- Important emotional moments\\n- Location/time changes\\n\\nRules: Only summarize provided transcript. No speculation. Single paragraph format.',
+  summaryPrompt: DEFAULT_SUMMARY_PROMPT,
   limitBio: 2500,
   limitScenario: 25000,
   limitPersonality: 25000,
@@ -75,6 +77,59 @@ const initialSettingsState: SettingsState = {
   deepseekReasoningEffort: 'high',
   deepseekThinkingGuidance: DEFAULT_THINKING_GUIDANCE,
 };
+
+// Maps the raw settings rows onto a complete SettingsState. Key insertion order matches
+// initialSettingsState so settingsFingerprint() stays comparable.
+function settingsFromDb(db: Record<string, string>): SettingsState {
+  const loaded: Record<string, string> = {
+    deepseek: db.apiKey_deepseek || '',
+    openai: db.apiKey_openai || '',
+    openrouter: db.apiKey_openrouter || '',
+    anthropic: db.apiKey_anthropic || '',
+    custom: db.apiKey_custom || '',
+  };
+  const storedProvider = (db.aiProvider as AIProvider) || 'deepseek';
+  // Migrate legacy apiKey into the selected provider slot if that slot is empty
+  if (db.apiKey && !loaded[storedProvider]) loaded[storedProvider] = db.apiKey;
+  const currentKey = loaded[storedProvider] || '';
+
+  return {
+    ...initialSettingsState,
+    apiKey: currentKey,
+    keysByProvider: loaded,
+    // Temporarily hide anthropic; coerce to deepseek if encountered
+    aiProvider: storedProvider === 'anthropic' ? 'deepseek' : storedProvider,
+    apiBaseUrl: db.apiBaseUrl || '',
+    modelName: db.modelName || '',
+    enableTemperatureOverride: db.modelEnableTemperature === undefined ? true : db.modelEnableTemperature === 'true',
+    maxTokenFieldName: db.maxTokenFieldName || '',
+    // Default streaming to true if the setting has never been saved (undefined)
+    stream: db.stream === undefined ? true : db.stream === 'true',
+    originalApiKey: currentKey,
+    defaultPromptId: db.defaultPromptId ? Number(db.defaultPromptId) : null,
+    temperature: db.temperature ? parseFloat(db.temperature) : 1,
+    maxCharacters: db.maxCharacters ? Math.max(30000, Math.min(2500000, parseInt(db.maxCharacters))) : 150000,
+    maxTokens: db.maxTokens ? Math.max(256, Math.min(256000, parseInt(db.maxTokens))) : 4096,
+    devMode: db.devMode === 'true',
+    summaryPrompt: db.summaryPrompt || DEFAULT_SUMMARY_PROMPT,
+    limitBio: db.limit_bio ? parseInt(db.limit_bio) : 2500,
+    limitScenario: db.limit_scenario ? parseInt(db.limit_scenario) : 25000,
+    limitPersonality: db.limit_personality ? parseInt(db.limit_personality) : 25000,
+    limitFirstMessage: db.limit_firstMessage ? parseInt(db.limit_firstMessage) : 25000,
+    limitExampleDialogue: db.limit_exampleDialogue ? parseInt(db.limit_exampleDialogue) : 25000,
+    limitSummary: db.limit_summary ? parseInt(db.limit_summary) : 20000,
+    limitNotes: db.limit_notes ? parseInt(db.limit_notes) : 10000,
+    limitGenerateDescription: db.limit_generateDescription ? parseInt(db.limit_generateDescription) : 3000,
+    limitMessageContent: db.limit_messageContent ? parseInt(db.limit_messageContent) : 8000,
+    apiFailureTimeout: db.apiFailureTimeout ? clampApiFailureTimeout(parseInt(db.apiFailureTimeout)) : DEFAULT_API_FAILURE_TIMEOUT,
+    deepseekThinking: db.deepseekThinking === 'enabled' ? 'enabled' : 'disabled',
+    deepseekReasoningEffort: db.deepseekReasoningEffort === 'max' ? 'max' : 'high',
+    deepseekThinkingGuidance: db.deepseekThinkingGuidance ?? DEFAULT_THINKING_GUIDANCE,
+  };
+}
+
+// originalApiKey is a display-only mirror of the saved key, so it must not affect dirtiness.
+const settingsFingerprint = (s: SettingsState) => JSON.stringify({ ...s, originalApiKey: '' });
 
 type SettingsAction =
   | { type: 'SET_FIELD'; field: keyof SettingsState; value: any }
@@ -109,6 +164,14 @@ export default function SettingsPage() {
   const [limitsOpen, setLimitsOpen] = useState(false);
   const [apiKeyEditing, setApiKeyEditing] = useState(false);
 
+  // Unsaved-change tracking for the floating save bar
+  const [baseline, setBaseline] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const currentFingerprint = useMemo(() => settingsFingerprint(state), [state]);
+  const isDirty = baseline !== null && baseline !== currentFingerprint;
+  const isDirtyRef = useRef(false);
+  isDirtyRef.current = isDirty;
+
   // Connection test state
   const [connStatus, setConnStatus] = useState<'idle' | 'testing' | 'ok' | 'slow' | 'degraded' | 'down'>('idle');
   const [connLatency, setConnLatency] = useState<number | null>(null);
@@ -120,6 +183,12 @@ export default function SettingsPage() {
   const [dsBalanceError, setDsBalanceError] = useState<string>('');
 
   const isFixedTemp = (prov: string, model: string) => prov === 'openai' && /^gpt-5/i.test(model || '');
+
+  const connStatusModifier =
+    connStatus === 'ok' ? 'settings-status--ok' :
+    connStatus === 'slow' ? 'settings-status--warn' :
+    connStatus === 'degraded' || connStatus === 'down' ? 'settings-status--error' :
+    connStatus === 'testing' ? 'settings-status--testing' : '';
 
   const { data: userPrompts, error: userPromptsError, mutate: mutateUserPrompts } = useSWR<{id: number; title: string; body: string;} | { error?: string } | null>(
     '/api/user-prompts',
@@ -246,67 +315,30 @@ export default function SettingsPage() {
   }, [state.aiProvider, state.originalApiKey]);
 
   useEffect(() => {
-    // Initialize all settings from database via single batched dispatch
-    if (dbSettings) {
-      const payload: Partial<SettingsState> = {};
+    if (!dbSettings) return;
+    // Never let a background revalidation overwrite edits that haven't been saved yet
+    if (isDirtyRef.current) return;
 
-      if (!apiKeyEditing) {
-        // Load provider-specific keys (fallback to legacy apiKey)
-        const loaded: Record<string, string> = {
-          deepseek: dbSettings.apiKey_deepseek || '',
-          openai: dbSettings.apiKey_openai || '',
-          openrouter: dbSettings.apiKey_openrouter || '',
-          anthropic: dbSettings.apiKey_anthropic || '',
-          custom: dbSettings.apiKey_custom || '',
-        };
-        // Migrate legacy apiKey into selected provider slot if empty
-        if ((dbSettings.apiKey || '') && !loaded[(dbSettings.aiProvider as string) || 'deepseek']) {
-          const legacyProviderKey = (dbSettings.aiProvider as string) || 'deepseek';
-          loaded[legacyProviderKey] = dbSettings.apiKey as string;
-        }
-        payload.keysByProvider = loaded;
-        const currentKey = loaded[(dbSettings.aiProvider as any) || 'deepseek'] || '';
-        payload.originalApiKey = currentKey;
-        payload.apiKey = currentKey;
-      }
-
-      const incomingProvider = (dbSettings.aiProvider as any) || 'deepseek';
-      // Temporarily hide anthropic; coerce to deepseek if encountered
-      payload.aiProvider = incomingProvider === 'anthropic' ? 'deepseek' : incomingProvider;
-      payload.apiBaseUrl = dbSettings.apiBaseUrl || '';
-      payload.modelName = dbSettings.modelName || '';
-      payload.enableTemperatureOverride = dbSettings.modelEnableTemperature === undefined ? true : dbSettings.modelEnableTemperature === 'true';
-      payload.maxTokenFieldName = dbSettings.maxTokenFieldName || '';
-      // Default streaming to true if the setting has never been saved (undefined)
-      payload.stream = dbSettings.stream === undefined ? true : dbSettings.stream === 'true';
-      payload.defaultPromptId = dbSettings.defaultPromptId ? Number(dbSettings.defaultPromptId) : null;
-      payload.temperature = dbSettings.temperature ? parseFloat(dbSettings.temperature) : 1;
-      payload.maxCharacters = dbSettings.maxCharacters ? Math.max(30000, Math.min(2500000, parseInt(dbSettings.maxCharacters))) : 150000;
-      payload.maxTokens = dbSettings.maxTokens ? Math.max(256, Math.min(256000, parseInt(dbSettings.maxTokens))) : 4096;
-      payload.devMode = dbSettings.devMode === 'true';
-      payload.summaryPrompt = dbSettings.summaryPrompt || 'Create a brief, focused summary (~100 words) of the roleplay between {{char}} and {{user}}. Include:\\n\\n- Key events and decisions\\n- Important emotional moments\\n- Location/time changes\\n\\nRules: Only summarize provided transcript. No speculation. Single paragraph format.';
-      // Dynamic limits (fallback to defaults)
-      payload.limitBio = dbSettings.limit_bio ? parseInt(dbSettings.limit_bio) : 2500;
-      payload.limitScenario = dbSettings.limit_scenario ? parseInt(dbSettings.limit_scenario) : 25000;
-      payload.limitPersonality = dbSettings.limit_personality ? parseInt(dbSettings.limit_personality) : 25000;
-      payload.limitFirstMessage = dbSettings.limit_firstMessage ? parseInt(dbSettings.limit_firstMessage) : 25000;
-      payload.limitExampleDialogue = dbSettings.limit_exampleDialogue ? parseInt(dbSettings.limit_exampleDialogue) : 25000;
-      payload.limitSummary = dbSettings.limit_summary ? parseInt(dbSettings.limit_summary) : 20000;
-      payload.limitNotes = dbSettings.limit_notes ? parseInt(dbSettings.limit_notes) : 10000;
-      payload.limitGenerateDescription = dbSettings.limit_generateDescription ? parseInt(dbSettings.limit_generateDescription) : 3000;
-      payload.limitMessageContent = dbSettings.limit_messageContent ? parseInt(dbSettings.limit_messageContent) : 8000;
-      payload.apiFailureTimeout = dbSettings.apiFailureTimeout ? clampApiFailureTimeout(parseInt(dbSettings.apiFailureTimeout)) : DEFAULT_API_FAILURE_TIMEOUT;
-      // DeepSeek thinking/reasoning
-      payload.deepseekThinking = dbSettings.deepseekThinking === 'enabled' ? 'enabled' : 'disabled';
-      payload.deepseekReasoningEffort = dbSettings.deepseekReasoningEffort === 'max' ? 'max' : 'high';
-      payload.deepseekThinkingGuidance = dbSettings.deepseekThinkingGuidance ?? DEFAULT_THINKING_GUIDANCE;
-
-      // Single dispatch triggers exactly ONE re-render instead of 24+
-      dispatch({ type: 'LOAD_ALL', payload });
+    const next = settingsFromDb(dbSettings);
+    if (apiKeyEditing) {
+      const { apiKey, keysByProvider, originalApiKey, ...rest } = next;
+      dispatch({ type: 'LOAD_ALL', payload: rest });
+      return;
     }
+    dispatch({ type: 'LOAD_ALL', payload: next });
+    setBaseline(settingsFingerprint(next));
   }, [dbSettings, apiKeyEditing]);
 
+  const handleDiscard = () => {
+    if (!dbSettings) return;
+    const next = settingsFromDb(dbSettings);
+    dispatch({ type: 'LOAD_ALL', payload: next });
+    setApiKeyEditing(false);
+    setBaseline(settingsFingerprint(next));
+  };
+
   const handleSave = async () => {
+    setSaving(true);
     try {
       const res = await fetch('/api/settings', {
         method: 'POST',
@@ -349,6 +381,7 @@ export default function SettingsPage() {
         })
       });
       if (res.ok) {
+        setBaseline(currentFingerprint);
         mutateSettings();
         if (apiKeyEditing) {
           dispatch({ type: 'SET_FIELD', field: 'originalApiKey', value: state.apiKey });
@@ -360,6 +393,8 @@ export default function SettingsPage() {
       }
     } catch {
       showToast('Error saving settings', 'error');
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -698,21 +733,26 @@ export default function SettingsPage() {
         <meta name="description" content="Configure your AI API settings, manage user prompts, and update security settings." />
       </Head>
 
-      <div className="flex items-center justify-between mb-6">
+      <div className="settings-header">
         <div>
           <h1 className="text-3xl font-semibold mb-0">Settings</h1>
-          <p className="text-xs text-secondary mt-1">Version {appVersion}</p>
+          <p className="settings-header__meta">Version {appVersion}</p>
         </div>
-        <button className="btn btn-secondary" onClick={() => router.push('/')}>
-          🏠 Home
-        </button>
+        <div className="settings-header__actions">
+          <button className="btn btn-secondary" onClick={logout} title="Sign out">
+            🚪 Logout
+          </button>
+          <button className="btn btn-secondary" onClick={() => router.push('/')}>
+            🏠 Home
+          </button>
+        </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <div className="card">
+      <div className="settings-grid">
+        <div className="card settings-card">
           <div className="card-header">
-            <h3 className="card-title">API Configuration</h3>
-            <p className="card-description">Configure your AI provider settings</p>
+            <h3 className="card-title">🔌 Provider &amp; Connection</h3>
+            <p className="card-description">Where requests are sent and which key is used</p>
           </div>
           <div className="form-group">
             <label className="form-label">AI Provider</label>
@@ -731,9 +771,9 @@ export default function SettingsPage() {
               <option value="openrouter">OpenRouter</option>
               <option value="custom">Custom (OpenAI-compatible)</option>
             </select>
-            <p className="text-xs text-secondary mt-1">Select a preset or choose Custom to supply your own base URL and model.</p>
+            <p className="settings-hint">Select a preset or choose Custom to supply your own base URL and model.</p>
           </div>
-          
+
           <div className="form-group">
             <label className="form-label flex items-center justify-between">
               <span>API Key</span>
@@ -755,7 +795,7 @@ export default function SettingsPage() {
                   className="btn btn-secondary btn-small"
                   onClick={() => {
                     setApiKeyEditing(false);
-                    dispatch({ type: 'SET_FIELD', field: 'apiKey', value: state.originalApiKey });
+                    dispatch({ type: 'UPDATE_API_KEY', value: state.originalApiKey, provider: state.aiProvider });
                   }}
                   title="Cancel editing and revert"
                 >
@@ -776,91 +816,106 @@ export default function SettingsPage() {
                 disabled={!apiKeyEditing && !!state.originalApiKey}
               />
             ) : (
-              <div className="flex items-center gap-2">
-                <input
-                  type="password"
-                  className="form-input flex-1"
-                  value={"********"}
-                  disabled
-                  style={{ fontFamily: 'monospace' }}
-                />
-              </div>
+              <input
+                type="password"
+                className="form-input"
+                value={'********'}
+                disabled
+                style={{ fontFamily: 'monospace' }}
+                readOnly
+              />
             )}
             {state.originalApiKey && !apiKeyEditing && (
-              <p className="text-xs text-secondary mt-1">Click Edit to modify stored key.</p>
+              <p className="settings-hint">Click Edit to modify the stored key.</p>
             )}
             {apiKeyEditing && (
-              <p className="text-xs text-secondary mt-1">Editing API key. Save settings to apply or Cancel to revert.</p>
+              <p className="settings-hint">Editing API key — Save to apply, or Cancel to revert.</p>
             )}
           </div>
 
-          {/* Connection Test */}
-          <div className="form-group">
-            <div className={`p-3 rounded-lg border flex items-center justify-between ${
-              connStatus === 'ok' ? 'bg-success/10 border-success/30' :
-              connStatus === 'slow' ? 'bg-warning/10 border-warning/30' :
-              connStatus === 'degraded' || connStatus === 'down' ? 'bg-error/10 border-error/30' :
-              'bg-black/5 border-border'
-            }`}>
-              <div className="flex items-center gap-2">
-                <span className={`inline-block w-2.5 h-2.5 rounded-full ${
-                  connStatus === 'ok' ? 'bg-success' :
-                  connStatus === 'slow' ? 'bg-warning' :
-                  connStatus === 'degraded' || connStatus === 'down' ? 'bg-error' :
-                  connStatus === 'testing' ? 'bg-primary animate-pulse' :
-                  'bg-secondary'
-                }`} />
-                <span className={`text-sm font-medium ${
-                  connStatus === 'ok' ? 'text-success' :
-                  connStatus === 'slow' ? 'text-warning' :
-                  connStatus === 'degraded' || connStatus === 'down' ? 'text-error' :
-                  'text-secondary'
-                }`}>
-                  {connStatus === 'idle' && 'Connection not tested'}
-                  {connStatus === 'testing' && 'Testing connection...'}
-                  {connStatus === 'ok' && `API connected${connLatency ? ` (${connLatency}ms)` : ''}`}
-                  {connStatus === 'slow' && `Slow response${connLatency ? ` (${connLatency}ms)` : '...'}`}
-                  {connStatus === 'degraded' && `API degraded${connLatency ? ` (${connLatency}ms)` : '...'}`}
-                  {connStatus === 'down' && 'API down'}
-                </span>
-                {connError && <span className="text-xs text-error ml-1">— {connError}</span>}
-              </div>
-              <button
-                type="button"
-                className="btn btn-secondary btn-small"
-                onClick={runConnectionTest}
-                disabled={connStatus === 'testing'}
-              >
-                {connStatus === 'testing' ? 'Testing...' : 'Test'}
-              </button>
-            </div>
-          </div>
-
-          {/* DeepSeek Balance */}
-          {state.aiProvider === 'deepseek' && (
+          {state.aiProvider === 'custom' && (
             <div className="form-group">
-              <div className="p-3 rounded-lg border bg-black/5 border-border flex items-center justify-between">
-                <div>
-                  <span className="text-sm font-medium">Remaining Balance: </span>
-                  {dsBalanceLoading && <span className="text-sm text-secondary">Loading...</span>}
-                  {dsBalance && <span className="text-sm font-semibold text-success">{dsBalance}</span>}
-                  {dsBalanceError && <span className="text-sm text-error">{dsBalanceError}</span>}
-                  {!dsBalanceLoading && !dsBalance && !dsBalanceError && <span className="text-sm text-secondary">—</span>}
-                </div>
-                <button
-                  type="button"
-                  className="btn btn-secondary btn-small"
-                  onClick={fetchBalance}
-                  disabled={dsBalanceLoading}
-                >
-                  {dsBalanceLoading ? 'Checking...' : 'Refresh'}
-                </button>
-              </div>
+              <label className="form-label">Custom API Base URL</label>
+              <input
+                type="text"
+                className="form-input"
+                value={state.apiBaseUrl}
+                onChange={e => dispatch({ type: 'SET_FIELD', field: 'apiBaseUrl', value: e.target.value })}
+                placeholder="https://your-endpoint.example.com/v1/chat/completions"
+                style={{ fontFamily: 'monospace' }}
+              />
+              <p className="settings-hint">Full endpoint URL (OpenAI-compatible chat completions).</p>
             </div>
           )}
 
-          {/* DeepSeek Thinking/Reasoning Mode */}
+          <div className="form-group">
+            <label className="form-label">Model Override (optional)</label>
+            <input
+              type="text"
+              className="form-input"
+              value={state.modelName}
+              onChange={e => dispatch({ type: 'SET_FIELD', field: 'modelName', value: e.target.value })}
+              placeholder={state.aiProvider === 'deepseek' ? 'deepseek-v4-flash'
+                : state.aiProvider === 'openai' ? 'gpt-5-mini'
+                : state.aiProvider === 'openrouter' ? 'openrouter/auto'
+                : 'your-model-name'}
+              style={{ fontFamily: 'monospace' }}
+            />
+            <p className="settings-hint">Leave blank to use the preset default for the selected provider.</p>
+          </div>
+
+          <div className={`settings-status ${connStatusModifier}`}>
+            <span className="settings-status__text">
+              <span className="settings-status__dot" />
+              <span className="settings-status__label">
+                {connStatus === 'idle' && 'Connection not tested'}
+                {connStatus === 'testing' && 'Testing connection...'}
+                {connStatus === 'ok' && `API connected${connLatency ? ` (${connLatency}ms)` : ''}`}
+                {connStatus === 'slow' && `Slow response${connLatency ? ` (${connLatency}ms)` : '...'}`}
+                {connStatus === 'degraded' && `API degraded${connLatency ? ` (${connLatency}ms)` : '...'}`}
+                {connStatus === 'down' && 'API down'}
+              </span>
+              {connError && <span className="settings-status__detail">— {connError}</span>}
+            </span>
+            <button
+              type="button"
+              className="btn btn-secondary btn-small"
+              onClick={runConnectionTest}
+              disabled={connStatus === 'testing'}
+            >
+              {connStatus === 'testing' ? 'Testing...' : 'Test'}
+            </button>
+          </div>
+
           {state.aiProvider === 'deepseek' && (
+            <div className="settings-status">
+              <span className="settings-status__text">
+                <span className="settings-status__label">Remaining balance</span>
+                {dsBalanceLoading && <span className="settings-status__detail">Loading...</span>}
+                {dsBalance && <span className="settings-status__detail">{dsBalance}</span>}
+                {dsBalanceError && <span className="settings-status__detail">{dsBalanceError}</span>}
+                {!dsBalanceLoading && !dsBalance && !dsBalanceError && <span className="settings-status__detail">—</span>}
+              </span>
+              <button
+                type="button"
+                className="btn btn-secondary btn-small"
+                onClick={fetchBalance}
+                disabled={dsBalanceLoading}
+              >
+                {dsBalanceLoading ? 'Checking...' : 'Refresh'}
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* Reasoning (DeepSeek only) */}
+        {state.aiProvider === 'deepseek' && (
+          <div className="card settings-card">
+            <div className="card-header">
+              <h3 className="card-title">🧠 Reasoning</h3>
+              <p className="card-description">DeepSeek thinking mode</p>
+            </div>
+
             <div className="form-group">
               <label className="form-label">Thinking / Reasoning Mode</label>
               <select
@@ -871,10 +926,12 @@ export default function SettingsPage() {
                 <option value="disabled">Disabled</option>
                 <option value="enabled">Enabled</option>
               </select>
-              <p className="text-xs text-secondary mt-1">Enable DeepSeek thinking/reasoning for more thorough responses (uses more tokens).</p>
-              {state.deepseekThinking === 'enabled' && (
-                <>
-                <div className="mt-3">
+              <p className="settings-hint">More thorough responses, at the cost of extra tokens.</p>
+            </div>
+
+            {state.deepseekThinking === 'enabled' && (
+              <>
+                <div className="form-group">
                   <label className="form-label">Reasoning Effort</label>
                   <select
                     className="form-select"
@@ -884,9 +941,9 @@ export default function SettingsPage() {
                     <option value="high">High</option>
                     <option value="max">Max</option>
                   </select>
-                  <p className="text-xs text-secondary mt-1">Controls how much reasoning effort the model applies.</p>
+                  <p className="settings-hint">Controls how much reasoning effort the model applies.</p>
                 </div>
-                <div className="mt-3">
+                <div className="form-group">
                   <label className="form-label">Thinking Guidance</label>
                   <textarea
                     className="form-textarea"
@@ -895,139 +952,18 @@ export default function SettingsPage() {
                     onChange={e => dispatch({ type: 'SET_FIELD', field: 'deepseekThinkingGuidance', value: e.target.value })}
                     placeholder={DEFAULT_THINKING_GUIDANCE}
                   />
-                  <p className="text-xs text-secondary mt-1">Guidance text appended to the first user message when thinking is enabled. This is invisible to the user and only sent to the model.</p>
+                  <p className="settings-hint">Appended to the first user message when thinking is enabled. Invisible to you; only sent to the model.</p>
                 </div>
-                </>
-              )}
-            </div>
-          )}
-
-          {state.aiProvider === 'custom' && (
-            <>
-              <div className="form-group">
-                <label className="form-label">Custom API Base URL</label>
-                <input
-                  type="text"
-                  className="form-input"
-                  value={state.apiBaseUrl}
-                  onChange={e => dispatch({ type: 'SET_FIELD', field: 'apiBaseUrl', value: e.target.value })}
-                  placeholder="https://your-endpoint.example.com/v1/chat/completions"
-                  style={{ fontFamily: 'monospace' }}
-                />
-                <p className="text-xs text-secondary mt-1">Full endpoint URL (OpenAI-compatible chat completions).</p>
-              </div>
-            </>
-          )}
-
-          <div className="form-group">
-            <label className="form-label">Model Override (optional)</label>
-            <input
-              type="text"
-              className="form-input"
-              value={state.modelName}
-              onChange={e => dispatch({ type: 'SET_FIELD', field: 'modelName', value: e.target.value })}
-              placeholder={state.aiProvider === 'deepseek' ? 'deepseek-v4-flash' 
-                : state.aiProvider === 'openai' ? 'gpt-5-mini' 
-                : state.aiProvider === 'openrouter' ? 'openrouter/auto' 
-                : 'your-model-name'}
-              style={{ fontFamily: 'monospace' }}
-            />
-            <p className="text-xs text-secondary mt-1">Leave blank to use the preset default for selected provider.</p>
-          </div>
-
-          <div className="form-group">
-            <button
-              type="button"
-              className="btn btn-secondary w-full flex items-center justify-between"
-              onClick={() => setModelSettingsOpen(o => !o)}
-            >
-              <span>Model Settings</span>
-              <span>{modelSettingsOpen ? '▲' : '▼'}</span>
-            </button>
-            {modelSettingsOpen && (
-              <div className="mt-3 p-3 border rounded-lg space-y-4 bg-black/5">
-                <div>
-                  <label className="form-label flex items-center gap-3">
-                    <input
-                      type="checkbox"
-                      className="form-checkbox"
-                      checked={state.enableTemperatureOverride}
-                      onChange={e => dispatch({ type: 'SET_FIELD', field: 'enableTemperatureOverride', value: e.target.checked })}
-                    />
-                    Enable Temperature Parameter
-                  </label>
-                  <p className="text-xs text-secondary mt-1">Uncheck to omit temperature entirely (provider default).</p>
-                </div>
-                <div>
-                  <label className="form-label">Max Token Field Name Override</label>
-                  <input
-                    type="text"
-                    className="form-input"
-                    value={state.maxTokenFieldName}
-                    onChange={e => dispatch({ type: 'SET_FIELD', field: 'maxTokenFieldName', value: e.target.value })}
-                    placeholder={state.aiProvider === 'openai' ? 'max_completion_tokens' : 'max_tokens'}
-                    style={{ fontFamily: 'monospace' }}
-                  />
-                  <p className="text-xs text-secondary mt-1">Override the upstream JSON field name for token limit. Leave blank for auto-detect ({state.aiProvider === 'openai' ? 'max_completion_tokens' : 'max_tokens'}).</p>
-                </div>
-              </div>
+              </>
             )}
           </div>
+        )}
 
-          {/* Limits Dropdown */}
-          <div className="form-group">
-            <button
-              type="button"
-              className="btn btn-secondary w-full flex items-center justify-between"
-              onClick={() => setLimitsOpen(o => !o)}
-            >
-              <span>Limits</span>
-              <span>{limitsOpen ? '▲' : '▼'}</span>
-            </button>
-            {limitsOpen && (
-              <div className="mt-3 p-3 border rounded-lg space-y-4 bg-black/5">
-                <p className="text-xs text-secondary">Configure maximum character lengths. These affect validation when creating or updating data. Message & Variant share one limit.</p>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <label className="form-label">Bio</label>
-                    <input type="number" className="form-input" value={state.limitBio} onChange={e=>dispatch({ type: 'SET_FIELD', field: 'limitBio', value: parseInt(e.target.value)||0 })} min={500} max={200000} />
-                  </div>
-                  <div>
-                    <label className="form-label">Scenario</label>
-                    <input type="number" className="form-input" value={state.limitScenario} onChange={e=>dispatch({ type: 'SET_FIELD', field: 'limitScenario', value: parseInt(e.target.value)||0 })} min={1000} max={300000} />
-                  </div>
-                  <div>
-                    <label className="form-label">Personality</label>
-                    <input type="number" className="form-input" value={state.limitPersonality} onChange={e=>dispatch({ type: 'SET_FIELD', field: 'limitPersonality', value: parseInt(e.target.value)||0 })} min={1000} max={300000} />
-                  </div>
-                  <div>
-                    <label className="form-label">First Message</label>
-                    <input type="number" className="form-input" value={state.limitFirstMessage} onChange={e=>dispatch({ type: 'SET_FIELD', field: 'limitFirstMessage', value: parseInt(e.target.value)||0 })} min={500} max={300000} />
-                  </div>
-                  <div>
-                    <label className="form-label">Example Dialogue</label>
-                    <input type="number" className="form-input" value={state.limitExampleDialogue} onChange={e=>dispatch({ type: 'SET_FIELD', field: 'limitExampleDialogue', value: parseInt(e.target.value)||0 })} min={500} max={300000} />
-                  </div>
-                  <div>
-                    <label className="form-label">Summary</label>
-                    <input type="number" className="form-input" value={state.limitSummary} onChange={e=>dispatch({ type: 'SET_FIELD', field: 'limitSummary', value: parseInt(e.target.value)||0 })} min={1000} max={50000} />
-                  </div>
-                  <div>
-                    <label className="form-label">Notes</label>
-                    <input type="number" className="form-input" value={state.limitNotes} onChange={e=>dispatch({ type: 'SET_FIELD', field: 'limitNotes', value: parseInt(e.target.value)||0 })} min={1000} max={100000} />
-                  </div>
-                  <div>
-                    <label className="form-label">Generate Description</label>
-                    <input type="number" className="form-input" value={state.limitGenerateDescription} onChange={e=>dispatch({ type: 'SET_FIELD', field: 'limitGenerateDescription', value: parseInt(e.target.value)||0 })} min={200} max={6000} />
-                  </div>
-                  <div>
-                    <label className="form-label">Message & Variant Content</label>
-                    <input type="number" className="form-input" value={state.limitMessageContent} onChange={e=>dispatch({ type: 'SET_FIELD', field: 'limitMessageContent', value: parseInt(e.target.value)||0 })} min={1000} max={20000} />
-                  </div>
-                </div>
-                <p className="text-xs text-secondary">Keep limits reasonable to avoid extremely large payloads. Some hard upper bounds may still apply upstream via token limits.</p>
-              </div>
-            )}
+        {/* Generation */}
+        <div className="card settings-card">
+          <div className="card-header">
+            <h3 className="card-title">🎛️ Generation</h3>
+            <p className="card-description">How replies are produced</p>
           </div>
 
           <div className="form-group">
@@ -1040,16 +976,9 @@ export default function SettingsPage() {
               />
               Enable Streamed Chat
             </label>
-            <p className="text-sm text-secondary mt-1">
-              Stream responses for real-time conversation experience
-            </p>
+            <p className="settings-hint">Stream responses for a real-time conversation experience.</p>
           </div>
 
-          <div className="card-header">
-            <h3 className="card-title">Model Parameters</h3>
-            <p className="card-description">Fine-tune model behavior</p>
-          </div>
-          
           <div className="form-group">
             <label className="form-label">
               Temperature: {isFixedTemp(state.aiProvider, state.modelName || '') ? '1 (fixed)' : state.temperature.toFixed(1)}
@@ -1064,16 +993,16 @@ export default function SettingsPage() {
               className="form-range w-full"
               disabled={isFixedTemp(state.aiProvider, state.modelName || '') || !state.enableTemperatureOverride}
             />
-            <div className="flex justify-between text-xs text-muted mt-1">
+            <div className="settings-range-scale">
               <span>Focused</span>
               <span>Balanced</span>
               <span>Creative</span>
             </div>
             {isFixedTemp(state.aiProvider, state.modelName || '') && (
-              <p className="text-xs text-secondary mt-1">Selected model enforces a fixed temperature of 1.</p>
+              <p className="settings-hint">Selected model enforces a fixed temperature of 1.</p>
             )}
             {!state.enableTemperatureOverride && !isFixedTemp(state.aiProvider, state.modelName || '') && (
-              <p className="text-xs text-secondary mt-1">Temperature disabled in Model Settings.</p>
+              <p className="settings-hint">Temperature is switched off under Advanced model parameters.</p>
             )}
           </div>
 
@@ -1090,7 +1019,7 @@ export default function SettingsPage() {
               onChange={e => dispatch({ type: 'SET_FIELD', field: 'maxCharacters', value: parseInt(e.target.value) })}
               className="form-range w-full"
             />
-            <div className="flex justify-between text-xs text-muted mt-1">
+            <div className="settings-range-scale">
               <span>30,000</span>
               <span>150,000 (default)</span>
               <span>2,500,000</span>
@@ -1110,7 +1039,7 @@ export default function SettingsPage() {
               onChange={e => dispatch({ type: 'SET_FIELD', field: 'maxTokens', value: parseInt(e.target.value) })}
               className="form-range w-full"
             />
-            <div className="flex justify-between text-xs text-muted mt-1">
+            <div className="settings-range-scale">
               <span>256</span>
               <span>4096 (default)</span>
               <span>256,000</span>
@@ -1130,15 +1059,62 @@ export default function SettingsPage() {
               onChange={e => dispatch({ type: 'SET_FIELD', field: 'apiFailureTimeout', value: parseInt(e.target.value) })}
               className="form-range w-full"
             />
-            <div className="flex justify-between text-xs text-muted mt-1">
+            <div className="settings-range-scale">
               <span>5s</span>
               <span>20s (default)</span>
               <span>240s</span>
             </div>
-            <p className="text-xs text-secondary mt-1">
+            <p className="settings-hint">
               If nothing arrives within this time, the request is cancelled and an error is shown.
               Streamed replies allow twice this long between chunks.
             </p>
+          </div>
+
+          <div className="form-group">
+            <button
+              type="button"
+              className="btn btn-secondary settings-disclosure"
+              onClick={() => setModelSettingsOpen(o => !o)}
+            >
+              <span>Advanced model parameters</span>
+              <span>{modelSettingsOpen ? '▲' : '▼'}</span>
+            </button>
+            {modelSettingsOpen && (
+              <div className="settings-panel">
+                <div>
+                  <label className="form-label flex items-center gap-3">
+                    <input
+                      type="checkbox"
+                      className="form-checkbox"
+                      checked={state.enableTemperatureOverride}
+                      onChange={e => dispatch({ type: 'SET_FIELD', field: 'enableTemperatureOverride', value: e.target.checked })}
+                    />
+                    Enable Temperature Parameter
+                  </label>
+                  <p className="settings-hint">Uncheck to omit temperature entirely (provider default).</p>
+                </div>
+                <div>
+                  <label className="form-label">Max Token Field Name Override</label>
+                  <input
+                    type="text"
+                    className="form-input"
+                    value={state.maxTokenFieldName}
+                    onChange={e => dispatch({ type: 'SET_FIELD', field: 'maxTokenFieldName', value: e.target.value })}
+                    placeholder={state.aiProvider === 'openai' ? 'max_completion_tokens' : 'max_tokens'}
+                    style={{ fontFamily: 'monospace' }}
+                  />
+                  <p className="settings-hint">Override the upstream JSON field name for the token limit. Leave blank for auto-detect ({state.aiProvider === 'openai' ? 'max_completion_tokens' : 'max_tokens'}).</p>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Prompts */}
+        <div className="card settings-card">
+          <div className="card-header">
+            <h3 className="card-title">📝 Prompts</h3>
+            <p className="card-description">Templates applied to every chat</p>
           </div>
 
           <div className="form-group">
@@ -1173,9 +1149,72 @@ export default function SettingsPage() {
               placeholder="Prompt template for AI summary generation..."
               rows={3}
             />
-            <p className="text-xs text-secondary mt-1">
+            <p className="settings-hint">
               Use {'{{char}}'} and {'{{user}}'} placeholders. Supports \n for line breaks.
             </p>
+          </div>
+        </div>
+
+        {/* Advanced */}
+        <div className="card settings-card">
+          <div className="card-header">
+            <h3 className="card-title">🧪 Advanced</h3>
+            <p className="card-description">Validation limits and debugging</p>
+          </div>
+
+          <div className="form-group">
+            <button
+              type="button"
+              className="btn btn-secondary settings-disclosure"
+              onClick={() => setLimitsOpen(o => !o)}
+            >
+              <span>Field length limits</span>
+              <span>{limitsOpen ? '▲' : '▼'}</span>
+            </button>
+            {limitsOpen && (
+              <div className="settings-panel">
+                <p className="settings-hint">Maximum character lengths enforced when creating or updating data. Message &amp; Variant share one limit.</p>
+                <div className="settings-fields">
+                  <div>
+                    <label className="form-label">Bio</label>
+                    <input type="number" className="form-input" value={state.limitBio} onChange={e=>dispatch({ type: 'SET_FIELD', field: 'limitBio', value: parseInt(e.target.value)||0 })} min={500} max={200000} />
+                  </div>
+                  <div>
+                    <label className="form-label">Scenario</label>
+                    <input type="number" className="form-input" value={state.limitScenario} onChange={e=>dispatch({ type: 'SET_FIELD', field: 'limitScenario', value: parseInt(e.target.value)||0 })} min={1000} max={300000} />
+                  </div>
+                  <div>
+                    <label className="form-label">Personality</label>
+                    <input type="number" className="form-input" value={state.limitPersonality} onChange={e=>dispatch({ type: 'SET_FIELD', field: 'limitPersonality', value: parseInt(e.target.value)||0 })} min={1000} max={300000} />
+                  </div>
+                  <div>
+                    <label className="form-label">First Message</label>
+                    <input type="number" className="form-input" value={state.limitFirstMessage} onChange={e=>dispatch({ type: 'SET_FIELD', field: 'limitFirstMessage', value: parseInt(e.target.value)||0 })} min={500} max={300000} />
+                  </div>
+                  <div>
+                    <label className="form-label">Example Dialogue</label>
+                    <input type="number" className="form-input" value={state.limitExampleDialogue} onChange={e=>dispatch({ type: 'SET_FIELD', field: 'limitExampleDialogue', value: parseInt(e.target.value)||0 })} min={500} max={300000} />
+                  </div>
+                  <div>
+                    <label className="form-label">Summary</label>
+                    <input type="number" className="form-input" value={state.limitSummary} onChange={e=>dispatch({ type: 'SET_FIELD', field: 'limitSummary', value: parseInt(e.target.value)||0 })} min={1000} max={50000} />
+                  </div>
+                  <div>
+                    <label className="form-label">Notes</label>
+                    <input type="number" className="form-input" value={state.limitNotes} onChange={e=>dispatch({ type: 'SET_FIELD', field: 'limitNotes', value: parseInt(e.target.value)||0 })} min={1000} max={100000} />
+                  </div>
+                  <div>
+                    <label className="form-label">Generate Description</label>
+                    <input type="number" className="form-input" value={state.limitGenerateDescription} onChange={e=>dispatch({ type: 'SET_FIELD', field: 'limitGenerateDescription', value: parseInt(e.target.value)||0 })} min={200} max={6000} />
+                  </div>
+                  <div>
+                    <label className="form-label">Message &amp; Variant Content</label>
+                    <input type="number" className="form-input" value={state.limitMessageContent} onChange={e=>dispatch({ type: 'SET_FIELD', field: 'limitMessageContent', value: parseInt(e.target.value)||0 })} min={1000} max={20000} />
+                  </div>
+                </div>
+                <p className="settings-hint">Keep limits reasonable to avoid very large payloads. Upstream token limits still apply.</p>
+              </div>
+            )}
           </div>
 
           <div className="form-group">
@@ -1188,35 +1227,15 @@ export default function SettingsPage() {
               />
               Developer Mode
             </label>
-            <p className="text-sm text-secondary mt-1">
-              Enable additional debugging features
-            </p>
+            <p className="settings-hint">Enables additional debugging features, such as the legacy JSON export.</p>
           </div>
-
-          <button
-            className="btn btn-primary w-full"
-            onClick={handleSave}
-          >
-            Save Settings
-          </button>
         </div>
 
         {/* Authentication Section */}
-        <div className="card">
+        <div className="card settings-card">
           <div className="card-header">
-            <div className="flex items-center justify-between">
-              <div>
-                <h3 className="card-title">🔐 Authentication</h3>
-                <p className="card-description">Manage site access password</p>
-              </div>
-              <button 
-                className="btn btn-secondary btn-small"
-                onClick={logout}
-                title="Sign Out"
-              >
-                🚪 Logout
-              </button>
-            </div>
+            <h3 className="card-title">🔐 Authentication</h3>
+            <p className="card-description">Manage site access password</p>
           </div>
 
           {!showPasswordSection ? (
@@ -1251,8 +1270,8 @@ export default function SettingsPage() {
               </div>
 
               {passwordError && (
-                <div className="mb-4 p-3 bg-error/10 border border-error/20 rounded-lg">
-                  <p className="text-error text-sm">{passwordError}</p>
+                <div className="settings-callout settings-callout--error mb-4">
+                  <p className="settings-callout__body">{passwordError}</p>
                 </div>
               )}
 
@@ -1278,25 +1297,23 @@ export default function SettingsPage() {
             </div>
           )}
         </div>
-      </div>
 
-      <div className="mt-8">
-        <div className="card">
+        <div className="card settings-card settings-span-all">
           <div className="card-header">
             <h2 className="card-title">🗃️ Database Management</h2>
             <p className="card-description">Import and export your entire database</p>
           </div>
-          
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+
+          <div className="settings-grid">
             {/* Export Section */}
             <div>
               <h3 className="text-lg font-semibold mb-3">📤 Export Database</h3>
               <p className="text-sm text-secondary mb-4">
                 Download a complete backup of your database as a compressed ZIP file including all characters, personas, chat sessions, messages, and settings.
               </p>
-              <div className="space-y-3">
+              <div className="settings-stack">
                 <button
-                  className={`btn btn-primary w-full ${exportLoading ? 'opacity-50' : ''}`}
+                  className={`btn btn-primary w-full ${exportLoading ? 'btn-disabled-muted' : ''}`}
                   onClick={handleExportDatabase}
                   disabled={exportLoading}
                 >
@@ -1311,7 +1328,7 @@ export default function SettingsPage() {
                 </button>
                 {state.devMode && (
                   <button
-                    className={`btn btn-secondary w-full text-sm ${exportLoading ? 'opacity-50' : ''}`}
+                    className={`btn btn-secondary w-full text-sm ${exportLoading ? 'btn-disabled-muted' : ''}`}
                     onClick={handleExportLegacyJson}
                     disabled={exportLoading}
                     title="Export as uncompressed JSON file (legacy format)"
@@ -1330,12 +1347,12 @@ export default function SettingsPage() {
             </div>
 
             {/* Import Section */}
-            <div className={`transition-opacity duration-300 ${importStatus === 'importing' ? 'opacity-75' : ''}`}>
+            <div>
               <h3 className="text-lg font-semibold mb-3">📥 Import Database</h3>
               <p className="text-sm text-secondary mb-4">
                 Import data from a database export file (.zip or .json). Existing data will be preserved - only new records will be added. Includes complete chat history. Supports files up to 500MB.
               </p>
-              <label className="form-label flex items-center gap-3 mb-3">
+              <label className="form-label flex items-center gap-3 mb-2">
                 <input
                   type="checkbox"
                   checked={importSettingsEnabled}
@@ -1345,20 +1362,18 @@ export default function SettingsPage() {
                 />
                 Import settings
               </label>
-              <p className="text-xs text-muted mb-3">
+              <p className="settings-hint mb-4">
                 When checked, settings in the file overwrite your current ones (passwords and secrets are never imported). Uncheck to keep your current settings.
               </p>
               <button
-                className={`btn btn-secondary w-full ${importStatus === 'importing' ? 'opacity-50' : ''}`}
+                className={`btn btn-secondary w-full ${importStatus === 'importing' ? 'btn-disabled-muted' : ''}`}
                 onClick={triggerFileInput}
                 disabled={importStatus === 'importing'}
               >
                 {importStatus === 'importing' ? (
                   <span className="flex items-center justify-center gap-2">
                     <div className="status-dot status-loading"></div>
-                    <div className="flex flex-col items-center">
-                      <span>Importing...</span>
-                    </div>
+                    Importing...
                   </span>
                 ) : (
                   'Select Import File'
@@ -1371,7 +1386,7 @@ export default function SettingsPage() {
                 onChange={handleImportDatabase}
                 style={{ display: 'none' }}
               />
-              <p className="text-xs text-muted mt-2">
+              <p className="settings-hint">
                 Supports .zip (recommended) and .json files. Large files may take several minutes to process.
               </p>
             </div>
@@ -1379,36 +1394,28 @@ export default function SettingsPage() {
 
           {/* Status Messages */}
           {importStatus !== 'idle' && (
-            <div className={`mt-6 p-4 rounded-lg border ${
-              importStatus === 'success' 
-                ? 'bg-success/10 border-success/20' 
-                : importStatus === 'error'
-                ? 'bg-error/10 border-error/20'
-                : 'bg-primary/10 border-primary/20'
+            <div className={`settings-callout ${
+              importStatus === 'success' ? 'settings-callout--ok'
+                : importStatus === 'error' ? 'settings-callout--error'
+                : 'settings-callout--info'
             }`}>
-              <div className="flex items-start justify-between gap-3">
-                <div className={`text-sm flex-1 ${
-                  importStatus === 'success' 
-                    ? 'text-success' 
-                    : importStatus === 'error'
-                    ? 'text-error'
-                    : 'text-primary'
-                }`}>
+              <div className="settings-callout__row">
+                <div className="flex-1">
                   {importStatus === 'importing' && importProgress && (
-                    <div className="import-progress flex items-center gap-3 mb-3 p-3 bg-black/5 rounded-lg">
+                    <div className="import-progress flex items-center gap-3 mb-3">
                       <div className="status-dot status-loading"></div>
                       <div>
                         <div className="font-medium">{importProgress}</div>
-                        <div className="text-xs opacity-75 mt-1">Please wait while we process your database...</div>
+                        <div className="settings-hint">Please wait while we process your database...</div>
                       </div>
                     </div>
                   )}
-                  <pre className="whitespace-pre-wrap font-sans">{importMessage}</pre>
+                  <pre className="settings-callout__body">{importMessage}</pre>
                 </div>
                 {importStatus === 'success' && (
                   <button
                     onClick={() => setImportStatus('idle')}
-                    className="btn btn-small text-success hover:bg-success/20 px-2 py-1 text-xs"
+                    className="btn btn-secondary btn-small"
                     title="Dismiss"
                   >
                     ✕
@@ -1418,9 +1425,9 @@ export default function SettingsPage() {
             </div>
           )}
 
-          <div className="mt-6 p-4 bg-warning/10 border border-warning/20 rounded-lg">
-            <h4 className="text-warning font-semibold mb-2">⚠️ Important Notes:</h4>
-            <ul className="text-sm text-secondary space-y-1 list-disc list-inside">
+          <details className="settings-details">
+            <summary>⚠️ How import &amp; export handle your data</summary>
+            <ul>
               <li><strong>Export:</strong> Creates a compressed ZIP backup of your entire OwnChatBot</li>
               <li><strong>Duplicates:</strong> Records with the same name/identifier will be skipped to prevent conflicts</li>
               <li><strong>Characters:</strong> A matching name only reuses the existing character if its content is identical; otherwise the imported copy is kept separately under an &quot;(import N)&quot; profile name</li>
@@ -1428,12 +1435,10 @@ export default function SettingsPage() {
               <li><strong>Chat History:</strong> Each chat is imported whole or not at all - an existing chat is never merged with an imported one</li>
               <li><strong>Relationships:</strong> All connections between characters, personas, and chats are maintained</li>
             </ul>
-          </div>
+          </details>
         </div>
-      </div>
 
-      <div className="mt-8">
-        <div className="card">
+        <div className="card settings-card settings-span-all">
           <div className="card-header flex items-start justify-between gap-4">
             <div>
               <h2 className="card-title">Global User Prompts</h2>
@@ -1459,6 +1464,27 @@ export default function SettingsPage() {
           </div>
           <UserPromptsManager />
         </div>
+      </div>
+
+      <div className="settings-spacer" />
+
+      <div className={`settings-savebar ${isDirty ? 'settings-savebar--dirty' : ''}`}>
+        <span className="settings-savebar__status">
+          <span className="settings-savebar__dot" />
+          {isDirty ? 'Unsaved changes' : 'All changes saved'}
+        </span>
+        {isDirty && (
+          <button className="btn btn-secondary btn-small" onClick={handleDiscard} disabled={saving}>
+            Discard
+          </button>
+        )}
+        <button
+          className={`btn btn-primary btn-small ${!isDirty || saving ? 'btn-disabled-muted' : ''}`}
+          onClick={handleSave}
+          disabled={!isDirty || saving}
+        >
+          {saving ? 'Saving...' : 'Save'}
+        </button>
       </div>
     </>
   );

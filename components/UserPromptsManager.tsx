@@ -54,7 +54,7 @@ export default function UserPromptsManager() {
                 value={body} 
                 onChange={e => setBody(e.target.value)}
                 placeholder="Enter the prompt template..."
-                rows={4}
+                rows={14}
                 required
               />
             </div>
@@ -130,7 +130,7 @@ export default function UserPromptsManager() {
                       value={editBody} 
                       onChange={e => setEditBody(e.target.value)}
                       placeholder="Body"
-                      rows={4}
+                      rows={14}
                       required
                     />
                   </div>
