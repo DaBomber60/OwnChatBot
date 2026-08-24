@@ -385,7 +385,7 @@ export default function ChatSessionPage() {
         });
         // Delete server-side messages that were created after our last known point.
         // Delay to let the server's partial-save from req.on('close') complete first.
-        if (lastKnownId && id) {
+        if (id) {
           setTimeout(async () => {
             try {
               // Fetch the session to find the actual server-side message IDs
@@ -393,8 +393,10 @@ export default function ChatSessionPage() {
               if (res.ok) {
                 const data = await res.json();
                 const serverMsgs = data.messages || [];
-                // Find the first message added after our last known good message
-                const firstNew = serverMsgs.find((m: any) => m.id > lastKnownId);
+                // Without a known-good anchor the session was empty, so everything here is new
+                const firstNew = lastKnownId
+                  ? serverMsgs.find((m: any) => m.id > lastKnownId)
+                  : serverMsgs[0];
                 if (firstNew) {
                   await fetch(`/api/messages/${firstNew.id}?truncate=1`, { method: 'DELETE' });
                 }
@@ -2065,8 +2067,10 @@ export default function ChatSessionPage() {
         }
       },
       onError: async (msg) => {
+        // Show immediately, then enrich — the size lookup must never gate the modal
+        showError(msg);
         const note = await buildRequestSizeNote();
-        showError(note ? `${msg}\n\n${note}` : msg);
+        if (note) setApiErrorMessage(`${msg}\n\n${note}`);
       },
       onAbort: () => { reveal.flush(); setLoading(false); setIsStreaming(false); setIsModelThinking(false); },
     });
@@ -2075,20 +2079,30 @@ export default function ChatSessionPage() {
 
     if (result.wasAborted) { stopStreamingFollow(); return; }
 
-    // Zero-content safety check (stream finished but no content arrived)
-    if (result.wasStreaming && streamingMessageRef.current.length === 0) {
-      console.warn('[Send] Stream finished with zero assistant content. Will trigger a mutate to refresh.');
-      // Clean up the empty assistant bubble and restore user input
-      if (!retryMessage && shouldRestoreInputRef.current && lastSentInputRef.current) {
-        setInput(lastSentInputRef.current);
+    // A timeout (or any zero-content failure) leaves the user message "sent" so Retry works.
+    // Only an explicit Stop returns the text to the input box.
+    const failedWithNoContent = result.wasStreaming && streamingMessageRef.current.length === 0;
+    if (failedWithNoContent) {
+      if (!result.errorShown) {
+        showError('The AI returned an empty response. You can press Retry to try again.');
       }
+      // Drop the empty assistant bubble but keep the user message in place
       setMessages(prev => {
         const copy = [...prev];
         if (copy.length > 0 && copy[copy.length - 1]?.role === 'assistant' && !copy[copy.length - 1]?.content) copy.pop();
-        if (!retryMessage && copy.length > 0 && copy[copy.length - 1]?.role === 'user') copy.pop();
         return copy;
       });
       shouldRestoreInputRef.current = false;
+      stopStreamingFollow();
+      setLoading(false);
+      setIsStreaming(false);
+      setIsModelThinking(false);
+      streamingMessageRef.current = '';
+      preStreamLastMessageIdRef.current = null;
+      // Re-sync so the kept user message picks up its server id (needed by edit/delete)
+      skipNextScroll.current = true;
+      await mutateWithVariantPreservation();
+      return;
     }
 
     // Post-request: truncation & max-token warnings

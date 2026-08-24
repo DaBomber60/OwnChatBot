@@ -57,12 +57,8 @@ export default withApiHandler({}, {
   }
 
   // persist new user message (skip any continuation system placeholder variants + retry scenarios)
-  // Track created user message so we can roll it back if user aborts before any assistant content arrives
-  let createdUserMessageId: number | null = null;
-  let userMessageRolledBack = false; // prevent double deletion / race
   if (userMessage && !isContinuationPlaceholder(userMessage) && !retry) {
-    const created = await prisma.chatMessage.create({ data: { sessionId: sessionIdToUse, role: 'user', content:  userMessage } });
-    createdUserMessageId = created.id;
+    await prisma.chatMessage.create({ data: { sessionId: sessionIdToUse, role: 'user', content:  userMessage } });
     // Update session's updatedAt timestamp
     await prisma.chatSession.update({
       where: { id: sessionIdToUse },
@@ -350,23 +346,9 @@ export default withApiHandler({}, {
     upstream.dispose(label);
     if (!streamCompleted) {
       await savePartialMessage(label);
-      // If NO assistant content streamed and we created a user message this request, roll it back
-      if (!assistantText.trim() && createdUserMessageId && !userMessageRolledBack) {
-        try {
-          const result = await prisma.chatMessage.deleteMany({ where: { id: createdUserMessageId } });
-          if (result.count > 0) {
-            console.log(`[Rollback] Deleted user message ${createdUserMessageId} due to early abort with no assistant content`);
-          } else {
-            console.log(`[Rollback] Early abort: user message ${createdUserMessageId} already absent (idempotent)`);
-          }
-        } catch (e) {
-          console.error('[Rollback] Failed to delete early-aborted user message (unexpected)', e);
-        } finally {
-          createdUserMessageId = null;
-          userMessageRolledBack = true;
-        }
-      }
     }
+    // The user message is deliberately kept: a disconnect may be a timeout, and the
+    // client needs it to stay for Retry. An explicit Stop deletes it via the API.
   };
 
   req.on('close', () => { void handleEarlyClose('client disconnect'); });
@@ -438,23 +420,6 @@ export default withApiHandler({}, {
     } else if (clientDisconnected && !messageSaved) {
       // Fallback (should normally already be saved by disconnect handler)
       await savePartialMessage('post-disconnect finalize');
-    }
-    // Final safety: if stream ended (abort or otherwise) with zero assistant content AND user aborted (clientDisconnected)
-    // and we still have an unrolled user message, delete it.
-    if (clientDisconnected && !assistantText.trim() && createdUserMessageId && !userMessageRolledBack) {
-      try {
-        const result = await prisma.chatMessage.deleteMany({ where: { id: createdUserMessageId } });
-        if (result.count > 0) {
-          console.log(`[Rollback] Deleted user message ${createdUserMessageId} in finalize (no assistant content)`);
-        } else {
-          console.log(`[Rollback] Finalize: user message ${createdUserMessageId} already absent (idempotent)`);
-        }
-      } catch (e) {
-        console.error('[Rollback] Finalize deletion failed (unexpected)', e);
-      } finally {
-        createdUserMessageId = null;
-        userMessageRolledBack = true;
-      }
     }
     
   } catch (error) {

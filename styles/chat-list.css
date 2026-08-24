@@ -33,3 +33,28 @@
   line-height: 1;
 }
 
+.chat-list-item--selected {
+  border-color: var(--primary);
+  background-color: var(--bg-tertiary);
+}
+
+.chat-list-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+
+.chat-select-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.chat-select-toolbar__count {
+  font-size: var(--font-size-xs);
+  color: var(--text-muted);
+}
+

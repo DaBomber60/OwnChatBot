@@ -93,10 +93,16 @@ export default function ChatIndexPage() {
   const [descriptionText, setDescriptionText] = useState('');
   const [savingDescription, setSavingDescription] = useState(false);
   const [openMenuId, setOpenMenuId] = useState<number | null>(null);
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [showBulkDeleteModal, setShowBulkDeleteModal] = useState(false);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
   const { data: personas } = useSWR<Persona[]>('/api/personas', fetcher);
   const { data: chars } = useSWR<Character[]>('/api/characters', fetcher);
   const { data: groups } = useSWR<CharacterGroup[]>('/api/character-groups', fetcher);
   const { data: sessions, mutate: mutateSessions } = useSWR<Session[]>('/api/sessions', fetcher);
+  const { data: settingsData } = useSWR<Record<string, string>>('/api/settings', fetcher);
+  const devMode = settingsData?.devMode === 'true';
 
   const [selectedPersona, setSelectedPersona] = useState<number>(0);
   const [selectedCharacter, setSelectedCharacter] = useState<number>(0);
@@ -146,6 +152,58 @@ export default function ChatIndexPage() {
     setConfirmDeleteId(null);
     mutateSessions();
     closeMenu();
+  };
+
+  const toggleSelected = (sessionId: number) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(sessionId)) {
+        next.delete(sessionId);
+      } else {
+        next.add(sessionId);
+      }
+      return next;
+    });
+  };
+
+  const toggleSelectAllFor = (characterSessions: Session[]) => {
+    const allSelected = characterSessions.every(s => selectedIds.has(s.id));
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      characterSessions.forEach(s => {
+        if (allSelected) {
+          next.delete(s.id);
+        } else {
+          next.add(s.id);
+        }
+      });
+      return next;
+    });
+  };
+
+  const exitSelectMode = () => {
+    setSelectMode(false);
+    setSelectedIds(new Set());
+  };
+
+  const bulkDeleteSelected = async () => {
+    setBulkDeleting(true);
+    try {
+      const res = await fetch('/api/sessions/bulk-delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: Array.from(selectedIds) })
+      });
+      if (!res.ok) throw new Error('Bulk delete failed');
+      await mutateSessions();
+      setShowBulkDeleteModal(false);
+      exitSelectMode();
+    } catch (err) {
+      console.error('Error deleting chats:', err);
+      alert('Failed to delete the selected chats. Please try again.');
+    } finally {
+      setBulkDeleting(false);
+    }
   };
 
   const openDescriptionModal = (sessionId: number, currentDescription: string) => {
@@ -321,9 +379,34 @@ export default function ChatIndexPage() {
       {/* Existing Chats Section */}
       {sessions && sessions.length > 0 && (
         <div className="card">
-          <div className="card-header">
-            <h3 className="card-title">Continue Existing Conversations</h3>
-            <p className="card-description">Resume your previous chats</p>
+          <div className="card-header chat-list-header">
+            <div>
+              <h3 className="card-title">Continue Existing Conversations</h3>
+              <p className="card-description">Resume your previous chats</p>
+            </div>
+            {devMode && (
+              <div className="chat-select-toolbar">
+                {selectMode ? (
+                  <>
+                    <span className="chat-select-toolbar__count">{selectedIds.size} selected</span>
+                    <button
+                      className={`btn btn-danger btn-small ${selectedIds.size === 0 ? 'btn-disabled-muted' : ''}`}
+                      onClick={() => setShowBulkDeleteModal(true)}
+                      disabled={selectedIds.size === 0}
+                    >
+                      Delete Selected
+                    </button>
+                    <button className="btn btn-secondary btn-small" onClick={exitSelectMode}>
+                      Cancel
+                    </button>
+                  </>
+                ) : (
+                  <button className="btn btn-secondary btn-small" onClick={() => setSelectMode(true)}>
+                    Select
+                  </button>
+                )}
+              </div>
+            )}
           </div>
           
           <div className="space-y-6">
@@ -442,11 +525,24 @@ export default function ChatIndexPage() {
                                 <span className="text-sm text-secondary italic">({characterGroup.character.profileName})</span>
                               )}
                             </div>
-                            <span className="text-xs text-muted">
-                              {characterGroup.sessions.length} conversation{characterGroup.sessions.length !== 1 ? 's' : ''}
-                            </span>
+                            <div className="flex items-center gap-3">
+                              {selectMode && (
+                                <button
+                                  className="btn btn-secondary btn-small"
+                                  onClick={e => {
+                                    e.stopPropagation();
+                                    toggleSelectAllFor(characterGroup.sessions);
+                                  }}
+                                >
+                                  {characterGroup.sessions.every(s => selectedIds.has(s.id)) ? 'Deselect all' : 'Select all'}
+                                </button>
+                              )}
+                              <span className="text-xs text-muted">
+                                {characterGroup.sessions.length} conversation{characterGroup.sessions.length !== 1 ? 's' : ''}
+                              </span>
+                            </div>
                           </div>
-                          
+
                           {isExpanded && (
                             <div className="border-t border-primary p-4 space-y-3">
                               {characterGroup.sessions
@@ -454,10 +550,20 @@ export default function ChatIndexPage() {
                                 .map((s: Session) => (
                                   <div 
                                     key={s.id} 
-                                    className="chat-list-item bg-secondary border border-primary rounded-lg p-4 cursor-pointer"
-                                    onClick={() => router.push(`/chat/${s.id}`)}
+                                    className={`chat-list-item bg-secondary border border-primary rounded-lg p-4 cursor-pointer${selectMode && selectedIds.has(s.id) ? ' chat-list-item--selected' : ''}`}
+                                    onClick={() => (selectMode ? toggleSelected(s.id) : router.push(`/chat/${s.id}`))}
                                   >
-                                    <div className="flex items-center justify-between">
+                                    <div className="flex items-center justify-between gap-3">
+                                      {selectMode && (
+                                        <input
+                                          type="checkbox"
+                                          className="form-checkbox"
+                                          checked={selectedIds.has(s.id)}
+                                          onChange={() => toggleSelected(s.id)}
+                                          onClick={e => e.stopPropagation()}
+                                          aria-label={`Select chat with ${s.persona.name}`}
+                                        />
+                                      )}
                                       <div className="flex-1">
                                         <div className="flex items-center gap-3 mb-1">
                                           <h5 className="font-medium text-primary">{s.persona.name}</h5>
@@ -481,6 +587,7 @@ export default function ChatIndexPage() {
                                         </div>
                                       </div>
                                       
+                                      {!selectMode && (
                                       <DropdownMenu
                                         entityId={s.id}
                                         isOpen={openMenuId === s.id}
@@ -516,6 +623,7 @@ export default function ChatIndexPage() {
                                           stopPropagation
                                         />
                                       </DropdownMenu>
+                                      )}
                                     </div>
                                   </div>
                                 ))}
@@ -537,6 +645,43 @@ export default function ChatIndexPage() {
         <div className="text-center py-12">
           <p className="text-muted text-sm">Start your first chat above!</p>
         </div>
+      )}
+
+      {/* Bulk Delete Modal */}
+      {showBulkDeleteModal && (
+        <Modal
+          open
+          onClose={() => setShowBulkDeleteModal(false)}
+          title="🗑️ Delete Chats"
+          maxWidth="500px"
+          footer={
+            <div className="flex gap-3 justify-center">
+              <button
+                className="btn btn-secondary"
+                onClick={() => setShowBulkDeleteModal(false)}
+                disabled={bulkDeleting}
+              >
+                Cancel
+              </button>
+              <button
+                className={`btn btn-danger ${bulkDeleting ? 'btn-disabled-muted' : ''}`}
+                onClick={bulkDeleteSelected}
+                disabled={bulkDeleting}
+              >
+                {bulkDeleting ? 'Deleting...' : `Delete ${selectedIds.size} Chat${selectedIds.size !== 1 ? 's' : ''}`}
+              </button>
+            </div>
+          }
+        >
+          <div className="text-center">
+            <p className="mb-4">
+              Delete {selectedIds.size} chat{selectedIds.size !== 1 ? 's' : ''}? All of their messages will be removed too.
+            </p>
+            <div className="text-sm text-muted mb-4">
+              <strong>⚠️ This action cannot be undone.</strong>
+            </div>
+          </div>
+        </Modal>
       )}
 
       {/* Description Modal */}

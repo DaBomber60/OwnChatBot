@@ -311,6 +311,43 @@
   border-radius: var(--radius-full);
 }
 
+/* Danger zone (dev mode only) */
+.settings-danger {
+  border-color: rgba(239, 68, 68, 0.35);
+}
+
+.settings-danger .card-title {
+  color: var(--error);
+}
+
+.settings-danger__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-3) 0;
+}
+
+.settings-danger__row + .settings-danger__row {
+  border-top: 1px solid var(--border-secondary);
+}
+
+.settings-danger__text {
+  flex: 1;
+  min-width: 0;
+}
+
+.settings-danger__text .settings-hint {
+  margin-top: var(--space-1);
+}
+
+.settings-danger__list {
+  margin: 0 0 var(--space-4);
+  padding-left: var(--space-5);
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+}
+
 @media (max-width: 640px) {
   .settings-savebar {
     left: var(--space-4);
@@ -325,6 +362,11 @@
 
   .settings-header__actions {
     justify-content: flex-start;
+  }
+
+  .settings-danger__row {
+    flex-direction: column;
+    align-items: stretch;
   }
 }
 

@@ -53,6 +53,12 @@ export const schemas = {
   updateSessionDescription: z.object({
     description: z.string().trim().max(200000)
   }),
+  bulkDeleteSessions: z.object({
+    ids: z.array(z.number().int().positive()).min(1).max(1000)
+  }),
+  purgeDatabase: z.object({
+    target: z.enum(['chats', 'characters', 'personas', 'everything'])
+  }),
   createPersona: z.object({
     name: z.string().trim().min(1).max(200),
     profile: z.string().trim().min(1),
