@@ -140,6 +140,7 @@ export default function SettingsPage() {
   const [importMessage, setImportMessage] = useState('');
   const [exportLoading, setExportLoading] = useState(false);
   const [importProgress, setImportProgress] = useState<string>('');
+  const [importSettingsEnabled, setImportSettingsEnabled] = useState(true);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { data: dbSettings, mutate: mutateSettings } = useSWR<Record<string, string>>(
@@ -508,6 +509,7 @@ export default function SettingsPage() {
 
     try {
       const formData = new FormData();
+      formData.append('importSettings', String(importSettingsEnabled));
       formData.append('file', file);
 
       // Show file size info for large files
@@ -592,6 +594,8 @@ export default function SettingsPage() {
           message += `⚙️ Settings: ${imported.settings} new`;
           if (skipped.settings > 0) message += `, ${skipped.settings} updated`;
           message += `\n`;
+        } else if (!importSettingsEnabled) {
+          message += `⚙️ Settings: skipped (not selected)\n`;
         }
         
         // Chat Sessions
@@ -621,6 +625,12 @@ export default function SettingsPage() {
         
         if (totalErrors > 0) {
           message += `• ${totalErrors} errors encountered\n`;
+        }
+        
+        if (result.results.renamedCharacters?.length > 0) {
+          message += `\n🏷️ Characters kept separate (content differed from an existing character):\n`;
+          message += result.results.renamedCharacters.map((note: string) => `• ${note}`).join('\n');
+          message += `\n`;
         }
         
         if (result.results.errors.length > 0) {
@@ -1325,6 +1335,19 @@ export default function SettingsPage() {
               <p className="text-sm text-secondary mb-4">
                 Import data from a database export file (.zip or .json). Existing data will be preserved - only new records will be added. Includes complete chat history. Supports files up to 500MB.
               </p>
+              <label className="form-label flex items-center gap-3 mb-3">
+                <input
+                  type="checkbox"
+                  checked={importSettingsEnabled}
+                  onChange={e => setImportSettingsEnabled(e.target.checked)}
+                  disabled={importStatus === 'importing'}
+                  className="form-checkbox"
+                />
+                Import settings
+              </label>
+              <p className="text-xs text-muted mb-3">
+                When checked, settings in the file overwrite your current ones (passwords and secrets are never imported). Uncheck to keep your current settings.
+              </p>
               <button
                 className={`btn btn-secondary w-full ${importStatus === 'importing' ? 'opacity-50' : ''}`}
                 onClick={triggerFileInput}
@@ -1400,8 +1423,9 @@ export default function SettingsPage() {
             <ul className="text-sm text-secondary space-y-1 list-disc list-inside">
               <li><strong>Export:</strong> Creates a compressed ZIP backup of your entire OwnChatBot</li>
               <li><strong>Duplicates:</strong> Records with the same name/identifier will be skipped to prevent conflicts</li>
-              <li><strong>Settings:</strong> New settings are imported, existing ones are updated with new values</li>
-              <li><strong>Chat History:</strong> Messages and their versions are fully preserved during import</li>
+              <li><strong>Characters:</strong> A matching name only reuses the existing character if its content is identical; otherwise the imported copy is kept separately under an &quot;(import N)&quot; profile name</li>
+              <li><strong>Settings:</strong> Only imported when &quot;Import settings&quot; is checked; new settings are added and existing ones are overwritten</li>
+              <li><strong>Chat History:</strong> Each chat is imported whole or not at all - an existing chat is never merged with an imported one</li>
               <li><strong>Relationships:</strong> All connections between characters, personas, and chats are maintained</li>
             </ul>
           </div>

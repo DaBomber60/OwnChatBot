@@ -1,6 +1,7 @@
 import prisma from '../../../lib/prisma';
 import { IncomingForm, Fields, Files } from 'formidable';
 import { promises as fs } from 'fs';
+import { createHash } from 'crypto';
 import path from 'path';
 import os from 'os';
 import JSZip from 'jszip';
@@ -34,6 +35,31 @@ interface ImportData {
   metadata?: any;
 }
 
+const CHARACTER_FINGERPRINT_FIELDS = [
+  'name',
+  'profileName',
+  'bio',
+  'scenario',
+  'personality',
+  'firstMessage',
+  'exampleDialogue'
+] as const;
+
+// Identity is (name, profileName); the fingerprint decides whether the bodies also agree.
+function characterFingerprint(character: any): string {
+  const canonical = CHARACTER_FINGERPRINT_FIELDS.map(field => String(character?.[field] ?? ''));
+  return createHash('sha256').update(JSON.stringify(canonical)).digest('hex');
+}
+
+async function nextImportProfileName(name: string, base: string | null): Promise<string | null> {
+  for (let n = 1; n <= 100; n++) {
+    const candidate = base ? `${base} (import ${n})` : `import ${n}`;
+    const clash = await prisma.character.findFirst({ where: { name, profileName: candidate } });
+    if (!clash) return candidate;
+  }
+  return null;
+}
+
 export default withApiHandler({}, {
   POST: async (req, res) => {
     const ip = clientIp(req as any);
@@ -57,16 +83,20 @@ export default withApiHandler({}, {
       hashAlgorithm: false, // skip hashing for faster uploads
     });
     
-    const { files } = await new Promise<{ files: Files }>((resolve, reject) => {
+    const { fields, files } = await new Promise<{ fields: Fields; files: Files }>((resolve, reject) => {
       form.parse(req, (err: any, fields: Fields, files: Files) => {
         if (err) {
           console.error('[database/import] Formidable parse error:', err.code, err.httpCode, err.message);
           reject(err);
         } else {
-          resolve({ files });
+          resolve({ fields, files });
         }
       });
     });
+
+    const rawImportSettings = Array.isArray(fields.importSettings) ? fields.importSettings[0] : fields.importSettings;
+    // Absent field means an older client: keep the previous behaviour and import settings.
+    const importSettingsEnabled = rawImportSettings !== 'false';
 
     const uploadedFile = Array.isArray(files.file) ? files.file[0] : files.file;
     
@@ -156,6 +186,7 @@ export default withApiHandler({}, {
         userPrompts: 0,
         settings: 0
       },
+      renamedCharacters: [] as string[],
       errors: [] as string[]
     };
 
@@ -191,18 +222,19 @@ export default withApiHandler({}, {
     }
 
     // 2. Import Personas (no dependencies)
+    const personaIdMap = new Map<number, number>();
     if (importData.data.personas?.length) {
       for (const persona of importData.data.personas) {
         try {
           const existing = await prisma.persona.findFirst({
             where: {
               name: persona.name,
-              profileName: persona.profileName
+              profileName: persona.profileName ?? null
             }
           });
           
           if (!existing) {
-            await prisma.persona.create({
+            const created = await prisma.persona.create({
               data: {
                 name: persona.name,
                 profileName: persona.profileName,
@@ -211,8 +243,10 @@ export default withApiHandler({}, {
                 updatedAt: new Date(persona.updatedAt)
               }
             });
+            personaIdMap.set(persona.id, created.id);
             results.imported.personas++;
           } else {
+            personaIdMap.set(persona.id, existing.id);
             results.skipped.personas++;
           }
         } catch (error) {
@@ -222,45 +256,60 @@ export default withApiHandler({}, {
     }
 
     // 3. Import Characters (depends on CharacterGroups)
+    const characterIdMap = new Map<number, number>();
     if (importData.data.characters?.length) {
       for (const character of importData.data.characters) {
         try {
           const existing = await prisma.character.findFirst({
             where: {
               name: character.name,
-              profileName: character.profileName
+              profileName: character.profileName ?? null
             }
           });
-          
-          if (!existing) {
-            // Find the group by name if groupId exists
-            let groupId = null;
-            if (character.groupId) {
-              const group = await prisma.characterGroup.findFirst({
-                where: { name: importData.data.characterGroups?.find(g => g.id === character.groupId)?.name }
-              });
-              groupId = group?.id || null;
-            }
 
-            await prisma.character.create({
-              data: {
-                name: character.name,
-                profileName: character.profileName,
-                bio: character.bio,
-                scenario: character.scenario,
-                personality: character.personality,
-                firstMessage: character.firstMessage,
-                exampleDialogue: character.exampleDialogue,
-                groupId: groupId,
-                sortOrder: character.sortOrder,
-                createdAt: new Date(character.createdAt),
-                updatedAt: new Date(character.updatedAt)
-              }
-            });
-            results.imported.characters++;
-          } else {
+          if (existing && characterFingerprint(existing) === characterFingerprint(character)) {
+            characterIdMap.set(character.id, existing.id);
             results.skipped.characters++;
+            continue;
           }
+
+          let profileName: string | null = character.profileName ?? null;
+          if (existing) {
+            const renamed = await nextImportProfileName(character.name, profileName);
+            if (!renamed) {
+              results.errors.push(`Character '${character.name}': could not allocate a free profile name for the differing imported copy`);
+              continue;
+            }
+            profileName = renamed;
+            results.renamedCharacters.push(`${character.name}: imported as profile "${renamed}" (content differs from the existing character)`);
+          }
+
+          // Find the group by name if groupId exists
+          let groupId = null;
+          if (character.groupId) {
+            const group = await prisma.characterGroup.findFirst({
+              where: { name: importData.data.characterGroups?.find(g => g.id === character.groupId)?.name }
+            });
+            groupId = group?.id || null;
+          }
+
+          const created = await prisma.character.create({
+            data: {
+              name: character.name,
+              profileName: profileName,
+              bio: character.bio,
+              scenario: character.scenario,
+              personality: character.personality,
+              firstMessage: character.firstMessage,
+              exampleDialogue: character.exampleDialogue,
+              groupId: groupId,
+              sortOrder: character.sortOrder,
+              createdAt: new Date(character.createdAt),
+              updatedAt: new Date(character.updatedAt)
+            }
+          });
+          characterIdMap.set(character.id, created.id);
+          results.imported.characters++;
         } catch (error) {
           results.errors.push(`Character '${character.name}': ${error instanceof Error ? error.message : 'Unknown error'}`);
         }
@@ -295,7 +344,7 @@ export default withApiHandler({}, {
     }
 
     // 5. Import Settings (skip sensitive auth-related keys)
-    if (importData.data.settings?.length) {
+    if (importSettingsEnabled && importData.data.settings?.length) {
       const SENSITIVE_SETTING_KEYS = new Set([
         'authPassword',
         'authPasswordVersion',
@@ -340,177 +389,85 @@ export default withApiHandler({}, {
       }
     }
 
-    // Create lookup maps for better performance
-    const personaLookup = new Map();
-    const characterLookup = new Map();
-    const sessionLookup = new Map();
-    const messageLookup = new Map();
-
-    // 6. Import ChatSessions (depends on Personas and Characters)
+    // 6. Import ChatSessions with their whole history. A chat is all-or-nothing: if the
+    // session already exists we import none of it, so two histories can never be merged.
     if (importData.data.chatSessions?.length) {
-      // First, get all existing personas and characters for lookup
-      const existingPersonas = await prisma.persona.findMany();
-      const existingCharacters = await prisma.character.findMany();
+      const messagesBySession = new Map<number, any[]>();
+      for (const message of importData.data.chatMessages ?? []) {
+        const bucket = messagesBySession.get(message.sessionId);
+        if (bucket) bucket.push(message);
+        else messagesBySession.set(message.sessionId, [message]);
+      }
 
-      existingPersonas.forEach(p => {
-        const key = `${p.name}|${p.profileName || ''}`;
-        personaLookup.set(key, p);
-      });
+      const versionsByMessage = new Map<number, any[]>();
+      for (const version of importData.data.messageVersions ?? []) {
+        const bucket = versionsByMessage.get(version.messageId);
+        if (bucket) bucket.push(version);
+        else versionsByMessage.set(version.messageId, [version]);
+      }
 
-      existingCharacters.forEach(c => {
-        const key = `${c.name}|${c.profileName || ''}`;
-        characterLookup.set(key, c);
-      });
+      for (const session of importData.data.chatSessions) {
+        const messages = messagesBySession.get(session.id) ?? [];
+        const versionCount = messages.reduce((total, m) => total + (versionsByMessage.get(m.id)?.length ?? 0), 0);
 
-      await prisma.$transaction(async (tx) => {
-        for (const session of importData.data.chatSessions) {
-          try {
-            // Find persona and character using lookup maps
-            const originalPersona = importData.data.personas?.find(p => p.id === session.personaId);
-            const originalCharacter = importData.data.characters?.find(c => c.id === session.characterId);
+        try {
+          const personaId = personaIdMap.get(session.personaId);
+          const characterId = characterIdMap.get(session.characterId);
 
-            if (!originalPersona || !originalCharacter) {
-              results.errors.push(`ChatSession: Missing original persona or character data`);
-              continue;
-            }
-
-            const personaKey = `${originalPersona.name}|${originalPersona.profileName || ''}`;
-            const characterKey = `${originalCharacter.name}|${originalCharacter.profileName || ''}`;
-
-            const persona = personaLookup.get(personaKey);
-            const character = characterLookup.get(characterKey);
-
-            if (persona && character) {
-              const existing = await tx.chatSession.findFirst({
-                where: {
-                  personaId: persona.id,
-                  characterId: character.id,
-                  createdAt: new Date(session.createdAt)
-                }
-              });
-
-              if (!existing) {
-                const newSession = await tx.chatSession.create({
-                  data: {
-                    personaId: persona.id,
-                    characterId: character.id,
-                    lastApiRequest: session.lastApiRequest,
-                    summary: session.summary,
-                    description: session.description,
-                    lastSummary: session.lastSummary,
-                    notes: session.notes,
-                    createdAt: new Date(session.createdAt),
-                    updatedAt: new Date(session.updatedAt)
-                  }
-                });
-                
-                // Store session mapping for messages import
-                sessionLookup.set(session.id, newSession);
-                results.imported.chatSessions++;
-              } else {
-                sessionLookup.set(session.id, existing);
-                results.skipped.chatSessions++;
-              }
-            } else {
-              results.errors.push(`ChatSession: Missing persona (${originalPersona.name}) or character (${originalCharacter.name}) reference`);
-            }
-          } catch (error) {
-            results.errors.push(`ChatSession: ${error instanceof Error ? error.message : 'Unknown error'}`);
+          if (!personaId || !characterId) {
+            results.errors.push(`ChatSession ${session.id}: missing persona or character reference`);
+            continue;
           }
-        }
-      }, { timeout: 60000 });
-    }
 
-    // Small delay between major transaction batches
-    await new Promise(r => setTimeout(r, 50));
+          const createdAt = new Date(session.createdAt);
+          const existing = await prisma.chatSession.findUnique({
+            where: { personaId_characterId_createdAt: { personaId, characterId, createdAt } }
+          });
 
-    // 7. Import ChatMessages (depends on ChatSessions)
-    if (importData.data.chatMessages?.length) {
-      await prisma.$transaction(async (tx) => {
-        for (const message of importData.data.chatMessages) {
-          try {
-            const importedSession = sessionLookup.get(message.sessionId);
-            if (!importedSession) {
-              results.errors.push(`ChatMessage: Could not find imported session for message ${message.id}`);
-              continue;
-            }
+          if (existing) {
+            results.skipped.chatSessions++;
+            results.skipped.chatMessages += messages.length;
+            results.skipped.messageVersions += versionCount;
+            continue;
+          }
 
-            // Check if message already exists (by content, role, and timestamp)
-            const existing = await tx.chatMessage.findFirst({
-              where: {
-                sessionId: importedSession.id,
-                role: message.role,
-                content: message.content,
-                createdAt: new Date(message.createdAt)
-              }
-            });
-
-            if (!existing) {
-              const newMessage = await tx.chatMessage.create({
-                data: {
-                  sessionId: importedSession.id,
+          // One nested write so the session and its full history land together or not at all.
+          await prisma.chatSession.create({
+            data: {
+              personaId,
+              characterId,
+              lastApiRequest: session.lastApiRequest,
+              summary: session.summary,
+              description: session.description,
+              lastSummary: session.lastSummary,
+              notes: session.notes,
+              createdAt,
+              updatedAt: new Date(session.updatedAt),
+              messages: {
+                create: messages.map(message => ({
                   role: message.role,
                   content: message.content,
-                  createdAt: new Date(message.createdAt)
-                }
-              });
-
-              // Store message mapping for versions import
-              messageLookup.set(message.id, newMessage);
-              results.imported.chatMessages++;
-            } else {
-              messageLookup.set(message.id, existing);
-              results.skipped.chatMessages++;
-            }
-          } catch (error) {
-            results.errors.push(`ChatMessage ${message.id}: ${error instanceof Error ? error.message : 'Unknown error'}`);
-          }
-        }
-      }, { timeout: 120000 });
-    }
-
-    // Small delay between major transaction batches
-    await new Promise(r => setTimeout(r, 50));
-
-    // 8. Import MessageVersions (depends on ChatMessages)
-    if (importData.data.messageVersions?.length) {
-      await prisma.$transaction(async (tx) => {
-        for (const version of importData.data.messageVersions) {
-          try {
-            const importedMessage = messageLookup.get(version.messageId);
-            if (!importedMessage) {
-              results.errors.push(`MessageVersion: Could not find imported message for version ${version.id}`);
-              continue;
-            }
-
-            // Check if version already exists
-            const existing = await tx.messageVersion.findFirst({
-              where: {
-                messageId: importedMessage.id,
-                version: version.version,
-                content: version.content
+                  createdAt: new Date(message.createdAt),
+                  versions: {
+                    create: (versionsByMessage.get(message.id) ?? []).map(version => ({
+                      content: version.content,
+                      version: version.version,
+                      isActive: version.isActive,
+                      createdAt: new Date(version.createdAt)
+                    }))
+                  }
+                }))
               }
-            });
-
-            if (!existing) {
-              await tx.messageVersion.create({
-                data: {
-                  messageId: importedMessage.id,
-                  content: version.content,
-                  version: version.version,
-                  isActive: version.isActive,
-                  createdAt: new Date(version.createdAt)
-                }
-              });
-              results.imported.messageVersions++;
-            } else {
-              results.skipped.messageVersions++;
             }
-          } catch (error) {
-            results.errors.push(`MessageVersion ${version.id}: ${error instanceof Error ? error.message : 'Unknown error'}`);
-          }
+          });
+
+          results.imported.chatSessions++;
+          results.imported.chatMessages += messages.length;
+          results.imported.messageVersions += versionCount;
+        } catch (error) {
+          results.errors.push(`ChatSession ${session.id}: ${error instanceof Error ? error.message : 'Unknown error'}`);
         }
-      }, { timeout: 120000 });
+      }
     }
 
     return res.status(200).json({
