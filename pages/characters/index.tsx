@@ -27,6 +27,7 @@ import type { Character, CharacterGroup } from '../../types/models';
 import { renderMultiline } from '../../components/RenderMultiline';
 import { useClickOutside } from '../../hooks/useClickOutside';
 import { PageHeader } from '../../components/PageHeader';
+import { Modal } from '../../components/Modal';
 import { DropdownMenu, DropdownMenuItem, DropdownMenuDivider, ConfirmDeleteItem } from '../../components/DropdownMenu';
 
 // Utility to get preview text for character cards
@@ -85,7 +86,10 @@ function SortableCharacterCard({
   onMove,
   mutate,
   closeMenu,
-  disableDrag = false
+  disableDrag = false,
+  selectMode = false,
+  isSelected = false,
+  onToggleSelect
 }: {
   character: Character;
   expandedId: number | null;
@@ -119,6 +123,9 @@ function SortableCharacterCard({
   mutate: () => void;
   closeMenu: () => void;
   disableDrag?: boolean;
+  selectMode?: boolean;
+  isSelected?: boolean;
+  onToggleSelect?: (id: number) => void;
 }) {
   const [showMoveSubmenu, setShowMoveSubmenu] = useState(false);
   const {
@@ -130,7 +137,7 @@ function SortableCharacterCard({
     isDragging,
   } = useSortable({
     id: `character-${character.id}`,
-    disabled: editingId === character.id || disableDrag,
+    disabled: editingId === character.id || disableDrag || selectMode,
   });
 
   const style = {
@@ -154,13 +161,29 @@ function SortableCharacterCard({
       ref={setNodeRef}
       style={style}
       {...attributes}
-      className={`card ${editingId !== character.id ? 'cursor-pointer' : ''} ${isDragging ? 'shadow-lg z-50' : ''}`}
-      onClick={editingId !== character.id ? () => setExpandedId(expandedId === character.id ? null : character.id) : undefined}
+      className={`card ${editingId !== character.id ? 'cursor-pointer' : ''} ${isDragging ? 'shadow-lg z-50' : ''}${selectMode && isSelected ? ' select-item--selected' : ''}`}
+      onClick={
+        selectMode
+          ? () => onToggleSelect?.(character.id)
+          : editingId !== character.id
+            ? () => setExpandedId(expandedId === character.id ? null : character.id)
+            : undefined
+      }
     >
       <div className="flex items-start justify-between">
+        {selectMode && (
+          <input
+            type="checkbox"
+            className="form-checkbox mt-2"
+            checked={isSelected}
+            onChange={() => onToggleSelect?.(character.id)}
+            onClick={e => e.stopPropagation()}
+            aria-label={`Select ${character.name}`}
+          />
+        )}
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
-            {!disableDrag && (
+            {!disableDrag && !selectMode && (
               <div
                 className="cursor-grab hover:cursor-grabbing text-gray-400 hover:text-gray-600"
                 style={{
@@ -221,6 +244,7 @@ function SortableCharacterCard({
           </div>
         </div>
         <div className="flex gap-4" onClick={(e) => e.stopPropagation()}>
+          {!selectMode && (
           <DropdownMenu
             entityId={character.id}
             isOpen={openMenuId === character.id}
@@ -312,6 +336,7 @@ function SortableCharacterCard({
               </>
             )}
           </DropdownMenu>
+          )}
         </div>
       </div>
       
@@ -529,6 +554,10 @@ export default function CharactersPage() {
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
   const [openMenuId, setOpenMenuId] = useState<number | string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [showBulkDeleteModal, setShowBulkDeleteModal] = useState(false);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
   // Integrated generation mode state
   const [isGeneratingMode, setIsGeneratingMode] = useState(false);
   // generationPhase: 'input' => only show minimal fields + description + sliders; 'generated' => show full character fields
@@ -540,6 +569,58 @@ export default function CharactersPage() {
   // global dev mode (from settings)
   const { data: settingsData } = useSWR<Record<string,string> | null>('/api/settings', (url: string) => fetch(url).then(r=>r.json()).catch(()=>null));
   const devMode = settingsData?.devMode === 'true';
+
+  const toggleSelected = (characterId: number) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(characterId)) {
+        next.delete(characterId);
+      } else {
+        next.add(characterId);
+      }
+      return next;
+    });
+  };
+
+  const toggleSelectAllFor = (list: Character[]) => {
+    const allSelected = list.length > 0 && list.every(c => selectedIds.has(c.id));
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      list.forEach(c => (allSelected ? next.delete(c.id) : next.add(c.id)));
+      return next;
+    });
+  };
+
+  const enterSelectMode = () => {
+    setExpandedId(null);
+    setEditingId(null);
+    setSelectMode(true);
+  };
+
+  const exitSelectMode = () => {
+    setSelectMode(false);
+    setSelectedIds(new Set());
+  };
+
+  const bulkDeleteSelected = async () => {
+    setBulkDeleting(true);
+    try {
+      const res = await fetch('/api/characters/bulk-delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: Array.from(selectedIds) })
+      });
+      if (!res.ok) throw new Error('Bulk delete failed');
+      await mutate();
+      setShowBulkDeleteModal(false);
+      exitSelectMode();
+    } catch (err) {
+      console.error('Error deleting characters:', err);
+      alert('Failed to delete the selected characters. Please try again.');
+    } finally {
+      setBulkDeleting(false);
+    }
+  };
   // Show / hide advanced sliders
   const [showAdvanced, setShowAdvanced] = useState(false);
   type SliderConfig = { label: string; key: string; help: string; category: string; advanced?: boolean };
@@ -1430,6 +1511,35 @@ export default function CharactersPage() {
         </div>
       </div>
 
+      {devMode && chars.length > 0 && (
+        <div className="select-bar">
+          <div className="select-toolbar">
+            {selectMode ? (
+              <>
+                <span className="select-toolbar__count">{selectedIds.size} selected</span>
+                <button className="btn btn-secondary btn-small" onClick={() => toggleSelectAllFor(chars)}>
+                  {chars.every(c => selectedIds.has(c.id)) ? 'Deselect all' : 'Select all'}
+                </button>
+                <button
+                  className={`btn btn-danger btn-small ${selectedIds.size === 0 ? 'btn-disabled-muted' : ''}`}
+                  onClick={() => setShowBulkDeleteModal(true)}
+                  disabled={selectedIds.size === 0}
+                >
+                  Delete Selected
+                </button>
+                <button className="btn btn-secondary btn-small" onClick={exitSelectMode}>
+                  Cancel
+                </button>
+              </>
+            ) : (
+              <button className="btn btn-secondary btn-small" onClick={enterSelectMode}>
+                Select
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Character Groups and Drag-Drop Context */}
       <DndContext
         sensors={sensors}
@@ -1510,6 +1620,9 @@ export default function CharactersPage() {
                           mutate={mutate}
                           closeMenu={closeMenu}
                           disableDrag={true}
+                          selectMode={selectMode}
+                          isSelected={selectedIds.has(character.id)}
+                          onToggleSelect={toggleSelected}
                         />
                       ))}
                     </div>
@@ -1558,6 +1671,17 @@ export default function CharactersPage() {
                   </div>
                 </div>
                 <div className="flex gap-2">
+                  {selectMode && groupCharacters.length > 0 && (
+                    <button
+                      className="btn btn-secondary btn-small"
+                      onClick={e => {
+                        e.stopPropagation();
+                        toggleSelectAllFor(groupCharacters);
+                      }}
+                    >
+                      {groupCharacters.every(c => selectedIds.has(c.id)) ? 'Deselect all' : 'Select all'}
+                    </button>
+                  )}
                   {editingGroupId === group.id ? (
                     <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
                       <input 
@@ -1688,6 +1812,9 @@ export default function CharactersPage() {
                             onMove={applyMove}
                             mutate={mutate}
                             closeMenu={closeMenu}
+                            selectMode={selectMode}
+                            isSelected={selectedIds.has(character.id)}
+                            onToggleSelect={toggleSelected}
                           />
                         ))}
                       </div>
@@ -1713,6 +1840,14 @@ export default function CharactersPage() {
                     <h3 className="text-xl font-semibold text-primary mb-0">Ungrouped Characters</h3>
                     <span className="text-sm text-muted">({ungrouped.length} characters)</span>
                   </div>
+                  {selectMode && ungrouped.length > 0 && (
+                    <button
+                      className="btn btn-secondary btn-small"
+                      onClick={() => toggleSelectAllFor(ungrouped)}
+                    >
+                      {ungrouped.every(c => selectedIds.has(c.id)) ? 'Deselect all' : 'Select all'}
+                    </button>
+                  )}
                 </div>
                 
                 {/* New group button - responsive */}
@@ -1848,6 +1983,9 @@ export default function CharactersPage() {
                           onMove={applyMove}
                           mutate={mutate}
                           closeMenu={closeMenu}
+                          selectMode={selectMode}
+                          isSelected={selectedIds.has(character.id)}
+                          onToggleSelect={toggleSelected}
                         />
                       ))}
                     </div>
@@ -1882,6 +2020,42 @@ export default function CharactersPage() {
             Create Your First Character
           </button>
         </div>
+      )}
+
+      {showBulkDeleteModal && (
+        <Modal
+          open
+          onClose={() => setShowBulkDeleteModal(false)}
+          title="🗑️ Delete Characters"
+          maxWidth="500px"
+          footer={
+            <div className="flex gap-3 justify-center">
+              <button
+                className="btn btn-secondary"
+                onClick={() => setShowBulkDeleteModal(false)}
+                disabled={bulkDeleting}
+              >
+                Cancel
+              </button>
+              <button
+                className={`btn btn-danger ${bulkDeleting ? 'btn-disabled-muted' : ''}`}
+                onClick={bulkDeleteSelected}
+                disabled={bulkDeleting}
+              >
+                {bulkDeleting ? 'Deleting...' : `Delete ${selectedIds.size} Character${selectedIds.size !== 1 ? 's' : ''}`}
+              </button>
+            </div>
+          }
+        >
+          <div className="text-center">
+            <p className="mb-4">
+              Delete {selectedIds.size} character{selectedIds.size !== 1 ? 's' : ''}? Every chat belonging to them will be removed too.
+            </p>
+            <div className="text-sm text-muted mb-4">
+              <strong>⚠️ This action cannot be undone.</strong>
+            </div>
+          </div>
+        </Modal>
       )}
 
     </>

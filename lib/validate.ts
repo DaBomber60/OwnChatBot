@@ -56,6 +56,12 @@ export const schemas = {
   bulkDeleteSessions: z.object({
     ids: z.array(z.number().int().positive()).min(1).max(1000)
   }),
+  bulkDeleteCharacters: z.object({
+    ids: z.array(z.number().int().positive()).min(1).max(1000)
+  }),
+  bulkDeletePersonas: z.object({
+    ids: z.array(z.number().int().positive()).min(1).max(1000)
+  }),
   purgeDatabase: z.object({
     target: z.enum(['chats', 'characters', 'personas', 'everything'])
   }),

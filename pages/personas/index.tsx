@@ -6,6 +6,7 @@ import type { Persona } from '../../types/models';
 import { renderMultiline } from '../../components/RenderMultiline';
 import { useClickOutside } from '../../hooks/useClickOutside';
 import { PageHeader } from '../../components/PageHeader';
+import { Modal } from '../../components/Modal';
 import { DropdownMenu, DropdownMenuItem, DropdownMenuDivider, ConfirmDeleteItem } from '../../components/DropdownMenu';
 
 // Utility to get preview text for persona cards
@@ -30,7 +31,59 @@ export default function PersonasPage() {
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
   const [openMenuId, setOpenMenuId] = useState<number | null>(null);
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [showBulkDeleteModal, setShowBulkDeleteModal] = useState(false);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
+  const { data: settingsData } = useSWR<Record<string, string>>('/api/settings', fetcher);
+  const devMode = settingsData?.devMode === 'true';
   useClickOutside(openMenuId !== null, () => setOpenMenuId(null));
+
+  const toggleSelected = (personaId: number) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(personaId)) {
+        next.delete(personaId);
+      } else {
+        next.add(personaId);
+      }
+      return next;
+    });
+  };
+
+  const toggleSelectAll = (list: Persona[]) => {
+    const allSelected = list.every(p => selectedIds.has(p.id));
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      list.forEach(p => (allSelected ? next.delete(p.id) : next.add(p.id)));
+      return next;
+    });
+  };
+
+  const exitSelectMode = () => {
+    setSelectMode(false);
+    setSelectedIds(new Set());
+  };
+
+  const bulkDeleteSelected = async () => {
+    setBulkDeleting(true);
+    try {
+      const res = await fetch('/api/personas/bulk-delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: Array.from(selectedIds) })
+      });
+      if (!res.ok) throw new Error('Bulk delete failed');
+      await mutate();
+      setShowBulkDeleteModal(false);
+      exitSelectMode();
+    } catch (err) {
+      console.error('Error deleting personas:', err);
+      alert('Failed to delete the selected personas. Please try again.');
+    } finally {
+      setBulkDeleting(false);
+    }
+  };
 
   const toggleMenu = (personaId: number) => {
     setOpenMenuId(openMenuId === personaId ? null : personaId);
@@ -141,14 +194,66 @@ export default function PersonasPage() {
         )}
       </div>
 
+      {devMode && personas.length > 0 && (
+        <div className="select-bar">
+          <div className="select-toolbar">
+            {selectMode ? (
+              <>
+                <span className="select-toolbar__count">{selectedIds.size} selected</span>
+                <button className="btn btn-secondary btn-small" onClick={() => toggleSelectAll(personas)}>
+                  {personas.every(p => selectedIds.has(p.id)) ? 'Deselect all' : 'Select all'}
+                </button>
+                <button
+                  className={`btn btn-danger btn-small ${selectedIds.size === 0 ? 'btn-disabled-muted' : ''}`}
+                  onClick={() => setShowBulkDeleteModal(true)}
+                  disabled={selectedIds.size === 0}
+                >
+                  Delete Selected
+                </button>
+                <button className="btn btn-secondary btn-small" onClick={exitSelectMode}>
+                  Cancel
+                </button>
+              </>
+            ) : (
+              <button
+                className="btn btn-secondary btn-small"
+                onClick={() => {
+                  setExpandedId(null);
+                  setEditingId(null);
+                  setSelectMode(true);
+                }}
+              >
+                Select
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
       <div className="grid gap-4">
         {personas.map(p => (
           <div 
             key={p.id} 
-            className={`card ${editingId !== p.id ? 'cursor-pointer' : ''}`}
-            onClick={editingId !== p.id ? () => setExpandedId(expandedId === p.id ? null : p.id) : undefined}
+            className={`card ${editingId !== p.id ? 'cursor-pointer' : ''}${selectMode && selectedIds.has(p.id) ? ' select-item--selected' : ''}`}
+            onClick={
+              selectMode
+                ? () => toggleSelected(p.id)
+                : editingId !== p.id
+                  ? () => setExpandedId(expandedId === p.id ? null : p.id)
+                  : undefined
+            }
           >
             <div className="flex items-start justify-between">
+              {selectMode && (
+                <input
+                  type="checkbox"
+                  className="form-checkbox mt-2"
+                  checked={selectedIds.has(p.id)}
+                  onChange={() => toggleSelected(p.id)}
+                  onClick={e => e.stopPropagation()}
+                  aria-label={`Select ${p.name}`}
+                />
+              )}
               <div className="flex-1 min-w-0">
                 <h3 className="text-lg font-semibold text-primary">{p.name}</h3>
                 {p.profileName && (
@@ -178,6 +283,7 @@ export default function PersonasPage() {
                 })()}
               </div>
               <div className="flex gap-2" onClick={(e) => e.stopPropagation()}>
+                {!selectMode && (
                 <DropdownMenu
                   entityId={p.id}
                   isOpen={openMenuId === p.id}
@@ -217,6 +323,7 @@ export default function PersonasPage() {
                     }}
                   />
                 </DropdownMenu>
+                )}
               </div>
             </div>
             
@@ -298,6 +405,42 @@ export default function PersonasPage() {
             Create Your First Persona
           </button>
         </div>
+      )}
+
+      {showBulkDeleteModal && (
+        <Modal
+          open
+          onClose={() => setShowBulkDeleteModal(false)}
+          title="🗑️ Delete Personas"
+          maxWidth="500px"
+          footer={
+            <div className="flex gap-3 justify-center">
+              <button
+                className="btn btn-secondary"
+                onClick={() => setShowBulkDeleteModal(false)}
+                disabled={bulkDeleting}
+              >
+                Cancel
+              </button>
+              <button
+                className={`btn btn-danger ${bulkDeleting ? 'btn-disabled-muted' : ''}`}
+                onClick={bulkDeleteSelected}
+                disabled={bulkDeleting}
+              >
+                {bulkDeleting ? 'Deleting...' : `Delete ${selectedIds.size} Persona${selectedIds.size !== 1 ? 's' : ''}`}
+              </button>
+            </div>
+          }
+        >
+          <div className="text-center">
+            <p className="mb-4">
+              Delete {selectedIds.size} persona{selectedIds.size !== 1 ? 's' : ''}? Every chat belonging to them will be removed too.
+            </p>
+            <div className="text-sm text-muted mb-4">
+              <strong>⚠️ This action cannot be undone.</strong>
+            </div>
+          </div>
+        </Modal>
       )}
     </>
   );

@@ -385,10 +385,10 @@ export default function ChatIndexPage() {
               <p className="card-description">Resume your previous chats</p>
             </div>
             {devMode && (
-              <div className="chat-select-toolbar">
+              <div className="select-toolbar">
                 {selectMode ? (
                   <>
-                    <span className="chat-select-toolbar__count">{selectedIds.size} selected</span>
+                    <span className="select-toolbar__count">{selectedIds.size} selected</span>
                     <button
                       className={`btn btn-danger btn-small ${selectedIds.size === 0 ? 'btn-disabled-muted' : ''}`}
                       onClick={() => setShowBulkDeleteModal(true)}
@@ -550,7 +550,7 @@ export default function ChatIndexPage() {
                                 .map((s: Session) => (
                                   <div 
                                     key={s.id} 
-                                    className={`chat-list-item bg-secondary border border-primary rounded-lg p-4 cursor-pointer${selectMode && selectedIds.has(s.id) ? ' chat-list-item--selected' : ''}`}
+                                    className={`chat-list-item bg-secondary border border-primary rounded-lg p-4 cursor-pointer${selectMode && selectedIds.has(s.id) ? ' select-item--selected' : ''}`}
                                     onClick={() => (selectMode ? toggleSelected(s.id) : router.push(`/chat/${s.id}`))}
                                   >
                                     <div className="flex items-center justify-between gap-3">

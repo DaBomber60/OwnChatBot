@@ -25,6 +25,8 @@ jest.mock('../lib/prisma', () => {
 
 import prisma from '../lib/prisma';
 import bulkDeleteHandler from '../pages/api/sessions/bulk-delete';
+import bulkDeleteCharactersHandler from '../pages/api/characters/bulk-delete';
+import bulkDeletePersonasHandler from '../pages/api/personas/bulk-delete';
 import purgeHandler from '../pages/api/database/purge';
 
 const db = prisma as any;
@@ -88,6 +90,87 @@ describe('POST /api/sessions/bulk-delete', () => {
     const res = mockRes();
     await bulkDeleteHandler(mockReq({ method: 'POST', body: { ids: [3, 3, 5] } }), res);
     expect(db.chatSession.deleteMany).toHaveBeenCalledWith({ where: { id: { in: [3, 5] } } });
+  });
+});
+
+describe('POST /api/characters/bulk-delete', () => {
+  it('rejects non-POST methods', async () => {
+    const res = mockRes();
+    await bulkDeleteCharactersHandler(mockReq({ method: 'GET' }), res);
+    expect(res._status).toBe(405);
+    expect(res._headers['Allow']).toEqual(['POST']);
+  });
+
+  it('rejects an empty id list', async () => {
+    const res = mockRes();
+    await bulkDeleteCharactersHandler(mockReq({ method: 'POST', body: { ids: [] } }), res);
+    expect(res._status).toBe(422);
+    expect(db.character.deleteMany).not.toHaveBeenCalled();
+  });
+
+  it('cascades through versions, messages and sessions before the characters', async () => {
+    db.character.deleteMany.mockResolvedValue({ count: 2 });
+    const res = mockRes();
+    await bulkDeleteCharactersHandler(mockReq({ method: 'POST', body: { ids: [8, 9] } }), res);
+
+    expect(res._status).toBe(200);
+    expect(res._body).toEqual({ deleted: 2 });
+    expect(db.messageVersion.deleteMany).toHaveBeenCalledWith({ where: { message: { session: { characterId: { in: [8, 9] } } } } });
+    expect(db.chatMessage.deleteMany).toHaveBeenCalledWith({ where: { session: { characterId: { in: [8, 9] } } } });
+    expect(db.chatSession.deleteMany).toHaveBeenCalledWith({ where: { characterId: { in: [8, 9] } } });
+    expect(db.character.deleteMany).toHaveBeenCalledWith({ where: { id: { in: [8, 9] } } });
+
+    const order = [
+      db.messageVersion.deleteMany.mock.invocationCallOrder[0],
+      db.chatMessage.deleteMany.mock.invocationCallOrder[0],
+      db.chatSession.deleteMany.mock.invocationCallOrder[0],
+      db.character.deleteMany.mock.invocationCallOrder[0],
+    ];
+    expect(order).toEqual([...order].sort((a, b) => a - b));
+    expect(db.$transaction).toHaveBeenCalled();
+  });
+
+  it('de-duplicates repeated ids', async () => {
+    const res = mockRes();
+    await bulkDeleteCharactersHandler(mockReq({ method: 'POST', body: { ids: [2, 2, 6] } }), res);
+    expect(db.character.deleteMany).toHaveBeenCalledWith({ where: { id: { in: [2, 6] } } });
+  });
+});
+
+describe('POST /api/personas/bulk-delete', () => {
+  it('rejects non-POST methods', async () => {
+    const res = mockRes();
+    await bulkDeletePersonasHandler(mockReq({ method: 'GET' }), res);
+    expect(res._status).toBe(405);
+    expect(res._headers['Allow']).toEqual(['POST']);
+  });
+
+  it('rejects non-positive ids', async () => {
+    const res = mockRes();
+    await bulkDeletePersonasHandler(mockReq({ method: 'POST', body: { ids: [1, 0] } }), res);
+    expect(res._status).toBe(422);
+    expect(db.persona.deleteMany).not.toHaveBeenCalled();
+  });
+
+  it('cascades through versions, messages and sessions before the personas', async () => {
+    db.persona.deleteMany.mockResolvedValue({ count: 1 });
+    const res = mockRes();
+    await bulkDeletePersonasHandler(mockReq({ method: 'POST', body: { ids: [11] } }), res);
+
+    expect(res._status).toBe(200);
+    expect(res._body).toEqual({ deleted: 1 });
+    expect(db.messageVersion.deleteMany).toHaveBeenCalledWith({ where: { message: { session: { personaId: { in: [11] } } } } });
+    expect(db.chatMessage.deleteMany).toHaveBeenCalledWith({ where: { session: { personaId: { in: [11] } } } });
+    expect(db.chatSession.deleteMany).toHaveBeenCalledWith({ where: { personaId: { in: [11] } } });
+    expect(db.persona.deleteMany).toHaveBeenCalledWith({ where: { id: { in: [11] } } });
+
+    const order = [
+      db.messageVersion.deleteMany.mock.invocationCallOrder[0],
+      db.chatMessage.deleteMany.mock.invocationCallOrder[0],
+      db.chatSession.deleteMany.mock.invocationCallOrder[0],
+      db.persona.deleteMany.mock.invocationCallOrder[0],
+    ];
+    expect(order).toEqual([...order].sort((a, b) => a - b));
   });
 });
 
