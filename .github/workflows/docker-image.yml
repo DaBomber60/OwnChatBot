@@ -48,6 +48,13 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
+      # Labels only here; the tags are applied by the merge job on the manifest list.
+      - name: Extract metadata (labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_NAME }}
+
       # Pushed by digest only — the merge job assembles the tagged manifest list from both arches.
       - name: Build & push by digest
         id: build
@@ -56,6 +63,7 @@ jobs:
           context: .
           file: Dockerfile
           platforms: ${{ matrix.platform }}
+          labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             APP_VERSION=${{ steps.ver.outputs.APP_VERSION }}
           outputs: type=image,name=${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
