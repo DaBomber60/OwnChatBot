@@ -17,8 +17,12 @@ export type ChatErrorCode =
   | 'UPSTREAM_STALLED'
   | 'UPSTREAM_UNPARSEABLE'
   | 'STREAM_INTERRUPTED'
-  | 'CONTEXT_TRUNCATED'
   | 'MAX_TOKENS'
+  | 'BAD_API_KEY'
+  | 'OUT_OF_CREDIT'
+  | 'RATE_LIMITED'
+  | 'CONTEXT_TOO_LONG'
+  | 'PROVIDER_UNAVAILABLE'
   | 'UPSTREAM_ERROR';
 
 export interface ChatErrorContext {
@@ -27,10 +31,9 @@ export interface ChatErrorContext {
   timeoutSeconds?: number;
   /** Seconds allowed between chunks once the reply had started. */
   stallSeconds?: number;
+  /** Seconds the provider asked us to wait before trying again. */
+  retryAfterSeconds?: number;
   maxTokens?: number;
-  /** Messages that fit in the context window, out of `baseCount` total. */
-  sentCount?: number;
-  baseCount?: number;
   /** Raw upstream/technical text, rendered verbatim in a code block. */
   detail?: string;
 }
@@ -44,8 +47,12 @@ export interface ChatErrorCopy {
 
 /** e.g. "the DeepSeek API"; falls back to "the API" when the provider is unknown. */
 function apiLabel(provider?: AIProvider): string {
-  const name = provider ? PROVIDER_DISPLAY_NAMES[provider] || provider : '';
+  const name = providerName(provider);
   return name ? `the ${name} API` : 'the API';
+}
+
+function providerName(provider?: AIProvider): string {
+  return provider ? PROVIDER_DISPLAY_NAMES[provider] || provider : '';
 }
 
 function cap(s: string): string {
@@ -62,7 +69,7 @@ export function describeChatError(code: ChatErrorCode, ctx: ChatErrorContext = {
     case 'THINKING_ONLY':
       return copy(
         'The AI thought to itself for a while, then forgot to actually say anything.',
-        'It sent us its reasoning but never got around to a reply. You\'re safe to retry sending the message — this usually sorts itself out.',
+        "It sent us its reasoning but never got around to a reply. You're safe to retry sending the message — this usually sorts itself out.",
       );
 
     case 'THINKING_TRUNCATED':
@@ -91,8 +98,8 @@ export function describeChatError(code: ChatErrorCode, ctx: ChatErrorContext = {
       return copy(
         `${cap(api)} started replying, then went quiet mid-sentence.`,
         ctx.stallSeconds
-          ? `Nothing new arrived for ${ctx.stallSeconds} seconds, so the request was cancelled. What did arrive has been kept — press Continue to resume, or raise the timeout in Settings and retry the message.`
-          : 'The request was cancelled after a long silence. What did arrive has been kept — press Continue to resume, or raise the timeout in Settings and retry the message.',
+          ? `Nothing new arrived for ${ctx.stallSeconds} seconds, so the request was cancelled and the half-written reply was thrown away. Retry sending the message, or raise the timeout in Settings.`
+          : 'The request was cancelled after a long silence, and the half-written reply was thrown away. Retry sending the message, or raise the timeout in Settings.',
       );
 
     case 'UPSTREAM_UNPARSEABLE':
@@ -104,30 +111,55 @@ export function describeChatError(code: ChatErrorCode, ctx: ChatErrorContext = {
     case 'STREAM_INTERRUPTED':
       return copy(
         `The connection to ${api} dropped mid-reply.`,
-        'Anything that arrived before the drop has been saved. Press Continue to pick up from there.',
-      );
-
-    case 'CONTEXT_TRUNCATED':
-      return copy(
-        ctx.sentCount && ctx.baseCount
-          ? `Only the last ${ctx.sentCount} of ${ctx.baseCount} messages fit in the context window.`
-          : 'Some older messages did not fit in the context window.',
-        'Older history was trimmed from this request, so the AI may have lost the thread. Increase Max Characters in Settings to include more.',
+        'We threw away the half-written reply rather than leave a fragment in your chat. Retry sending the message.',
       );
 
     case 'MAX_TOKENS':
       return copy(
-        'The reply hit the Max Tokens ceiling and stopped mid-thought.',
+        'The reply hit the Max Tokens ceiling and stopped mid-sentence.',
         ctx.maxTokens
-          ? `It reached the ${ctx.maxTokens} token limit. Press Continue to pick up where it left off, or raise Max Tokens in Settings and retry.`
-          : 'Press Continue to pick up where it left off, or raise Max Tokens in Settings and retry.',
+          ? `It ran out at the ${ctx.maxTokens} token limit, so the half-finished reply was thrown away. Raise Max Tokens in Settings, then retry sending the message.`
+          : 'It ran out of tokens, so the half-finished reply was thrown away. Raise Max Tokens in Settings, then retry sending the message.',
+      );
+
+    case 'BAD_API_KEY':
+      return copy(
+        `${cap(api)} does not recognise your API key.`,
+        'Check the API key in Settings — it may be mistyped, revoked, or from a different provider.',
+      );
+
+    case 'OUT_OF_CREDIT':
+      return copy(
+        'The AI is willing, but the wallet is empty.',
+        `Your ${providerName(ctx.provider)} account is out of credit. Top it up, then retry sending the message.`,
+      );
+
+    case 'RATE_LIMITED':
+      return copy(
+        `${cap(api)} is asking us to slow down.`,
+        ctx.retryAfterSeconds
+          ? `You have hit their rate limit. Wait about ${ctx.retryAfterSeconds} seconds, then retry sending the message.`
+          : 'You have hit their rate limit. Wait a moment, then retry sending the message.',
+      );
+
+    case 'CONTEXT_TOO_LONG':
+      return copy(
+        'This conversation is now too long for the model to read.',
+        'Lower Max Characters in Settings so older messages get trimmed, and write a summary to condense the history.',
+      );
+
+    case 'PROVIDER_UNAVAILABLE':
+      return copy(
+        `${cap(api)} is having problems on their end.`,
+        'Nothing is wrong with us. Wait a little, then retry sending the message.',
       );
 
     case 'UPSTREAM_ERROR':
     default:
+      // Catch-all: also covers network faults and our own 500s, so don't imply a rejection.
       return copy(
-        `${cap(api)} turned down the request.`,
-        'Press Retry to try again. If it keeps happening, check your API key and Base URL in Settings.',
+        `Something went wrong talking to ${api}.`,
+        `${cap(api)} is likely down, or they just don't want to talk to us right now. Retry sending the message. If it keeps happening, check your API key and Base URL in Settings.`,
       );
   }
 }
@@ -142,7 +174,24 @@ export function describeServerError(code: unknown, ctx: ChatErrorContext = {}): 
     case 'UPSTREAM_NO_CONTENT':
       return describeChatError('EMPTY_RESPONSE', mapped);
     case 'UPSTREAM_TIMEOUT':
+    case 'UPSTREAM_ABORTED':
       return describeChatError('UPSTREAM_DOWN', mapped);
+    case 'UPSTREAM_MAX_TOKENS':
+      return describeChatError('MAX_TOKENS', mapped);
+    case 'UPSTREAM_AUTH':
+    case 'API_KEY_NOT_CONFIGURED':
+      return describeChatError('BAD_API_KEY', mapped);
+    case 'UPSTREAM_QUOTA':
+      return describeChatError('OUT_OF_CREDIT', mapped);
+    case 'UPSTREAM_RATE_LIMITED':
+    case 'RATE_LIMITED':
+      return describeChatError('RATE_LIMITED', mapped);
+    case 'UPSTREAM_CONTEXT_TOO_LONG':
+      return describeChatError('CONTEXT_TOO_LONG', mapped);
+    case 'UPSTREAM_UNAVAILABLE':
+      return describeChatError('PROVIDER_UNAVAILABLE', mapped);
+    case 'UPSTREAM_UNPARSEABLE':
+      return describeChatError('UPSTREAM_UNPARSEABLE', mapped);
     default:
       return describeChatError('UPSTREAM_ERROR', ctx);
   }

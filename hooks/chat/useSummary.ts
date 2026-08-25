@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useToast } from '../../components/ToastProvider';
 import type { SessionData } from '../../types/models';
 
 export interface UseSummaryReturn {
@@ -24,6 +25,7 @@ export function useSummary(
   sessionId: string | string[] | undefined,
   onMutate: () => Promise<void>,
 ): UseSummaryReturn {
+  const { showToast } = useToast();
   const [showSummaryModal, setShowSummaryModal] = useState(false);
   const [summaryContent, setSummaryContent] = useState('');
   const [savingSummary, setSavingSummary] = useState(false);
@@ -51,7 +53,7 @@ export function useSummary(
       setShowSummaryModal(false);
     } catch (error) {
       console.error('Failed to save summary:', error);
-      alert('Failed to save summary. Please try again.');
+      showToast('Could not save the summary. Please try again.', 'error');
     } finally {
       setSavingSummary(false);
     }
@@ -70,7 +72,7 @@ export function useSummary(
       await onMutate();
     } catch (error) {
       console.error('Failed to generate summary:', error);
-      alert('Failed to generate summary. Please try again.');
+      showToast('Could not generate a summary. Please try again.', 'error');
     } finally {
       setGeneratingSummary(false);
     }
@@ -92,7 +94,7 @@ export function useSummary(
       await onMutate();
     } catch (error) {
       console.error('Failed to update summary:', error);
-      alert(`Failed to update summary: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      showToast(`Could not update the summary: ${error instanceof Error ? error.message : 'unknown error'}`, 'error');
     } finally {
       setUpdatingSummary(false);
     }

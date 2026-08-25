@@ -3,6 +3,7 @@ import type { AppProps } from 'next/app';
 import { useRouter } from 'next/router';
 import { useEffect } from 'react';
 import ProtectedRoute from '../components/ProtectedRoute';
+import { ToastProvider } from '../components/ToastProvider';
 
 export default function App({ Component, pageProps }: AppProps) {
   const router = useRouter();
@@ -26,14 +27,20 @@ export default function App({ Component, pageProps }: AppProps) {
   const isPublicPage = publicPages.includes(router.pathname);
 
   if (isPublicPage) {
-    return <Component {...pageProps} />;
+    return (
+      <ToastProvider>
+        <Component {...pageProps} />
+      </ToastProvider>
+    );
   }
 
   return (
-    <ProtectedRoute>
-      <div className="container">
-        <Component {...pageProps} />
-      </div>
-    </ProtectedRoute>
+    <ToastProvider>
+      <ProtectedRoute>
+        <div className="container">
+          <Component {...pageProps} />
+        </div>
+      </ProtectedRoute>
+    </ToastProvider>
   );
 }

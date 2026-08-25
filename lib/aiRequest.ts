@@ -3,7 +3,8 @@
 // prompt assembly / request shape / upstream error handling stay identical.
 import type { NextApiResponse } from 'next';
 import prisma from './prisma';
-import { apiKeyNotConfigured, serverError } from './apiErrors';
+import { apiKeyNotConfigured, serverError, upstreamError, classifyUpstreamStatus } from './apiErrors';
+import { redactString } from './redact';
 import {
   getAIConfig,
   tokenFieldFor,
@@ -186,17 +187,18 @@ export function forwardUpstreamError(
   logLabel: string,
 ) {
   const errPayload = (data && !data.__rawText) ? data : { message: rawText };
-  const errorMsg = errPayload?.error?.message || errPayload?.message || 'Upstream request failed';
-  console.warn(`${logLabel} Upstream failed: ${status} ${errorMsg}`);
-  return res.status(status).json({
-    error: {
-      message: errorMsg,
-      upstreamStatus: status,
-      type: errPayload?.type,
-      code: errPayload?.code,
-    },
-    upstream: errPayload,
-  });
+  // Provider error bodies can echo the API key back, so never forward or log one verbatim.
+  const message = redactString(errPayload?.error?.message || errPayload?.message || 'Upstream request failed');
+  const code = classifyUpstreamStatus(status, message);
+  const retryAfterSeconds = parseRetryAfter(errPayload);
+  console.warn(`${logLabel} Upstream failed: ${status} ${code} ${message}`);
+  return upstreamError(res, { code, message, upstreamStatus: status, retryAfterSeconds });
+}
+
+function parseRetryAfter(errPayload: any): number | undefined {
+  const raw = errPayload?.error?.retry_after ?? errPayload?.retry_after;
+  const seconds = typeof raw === 'string' ? Number(raw) : raw;
+  return typeof seconds === 'number' && Number.isFinite(seconds) && seconds > 0 ? seconds : undefined;
 }
 
 /**

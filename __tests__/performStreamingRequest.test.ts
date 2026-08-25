@@ -198,6 +198,34 @@ describe('performStreamingRequest — thinking detection', () => {
   });
 });
 
+describe('performStreamingRequest — discarded replies', () => {
+  it('surfaces the server discard notice without treating it as content', async () => {
+    stubSSE((controller) => {
+      controller.enqueue(frame('cut off mid-'));
+      controller.enqueue(encoder.encode(`data: ${JSON.stringify({ status: 'discarded', reason: 'max_tokens' })}\n\n`));
+      controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+    }, false);
+    const onError = jest.fn();
+
+    const result = await performStreamingRequest(baseOpts({ onError }));
+
+    expect(result.discardedReason).toBe('max_tokens');
+    expect(result.streamedContent).toBe('cut off mid-');
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  it('is undefined for a normal completion', async () => {
+    stubSSE((controller) => {
+      controller.enqueue(frame('all good'));
+      controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+    }, false);
+
+    const result = await performStreamingRequest(baseOpts());
+
+    expect(result.discardedReason).toBeUndefined();
+  });
+});
+
 describe('performStreamingRequest — user stop', () => {
   it('reports wasAborted (not timedOut) and shows no error', async () => {
     const ref = { current: null as AbortController | null };
@@ -217,4 +245,63 @@ describe('performStreamingRequest — user stop', () => {
     expect(onAbort).toHaveBeenCalledTimes(1);
     expect(onError).not.toHaveBeenCalled();
   });
+
+  it('exposes the controller synchronously, before any await', async () => {
+    // The Stop button is on screen from the moment the send starts, so the ref has to be
+    // populated before the settings fetch, not after it.
+    const ref = { current: null as AbortController | null };
+    stubSSE((controller) => {
+      controller.enqueue(frame('hi'));
+      controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+    }, false);
+
+    const pending = performStreamingRequest(baseOpts({ abortControllerRef: ref }));
+    expect(ref.current).toBeInstanceOf(AbortController);
+    await pending;
+  });
+
+  it('treats a stop before the first byte as an abort, not an error', async () => {
+    const ref = { current: null as AbortController | null };
+    global.fetch = jest.fn((_url: any, init: any) => new Promise((_resolve, reject) => {
+      const signal: AbortSignal = init.signal;
+      signal.addEventListener('abort', () => {
+        const err: any = new Error('The operation was aborted.');
+        err.name = 'AbortError';
+        reject(err);
+      });
+      setTimeout(() => ref.current?.abort(), 20);
+    })) as any;
+    const onError = jest.fn();
+    const onAbort = jest.fn();
+
+    const result = await performStreamingRequest(baseOpts({ abortControllerRef: ref, onError, onAbort }));
+
+    expect(result.wasAborted).toBe(true);
+    expect(result.errorShown).toBe(false);
+    expect(onError).not.toHaveBeenCalled();
+    expect(onAbort).toHaveBeenCalledTimes(1);
+  });
+
+  it('still reports a timeout when non-streaming exceeds its deadline', async () => {
+    const ref = { current: null as AbortController | null };
+    global.fetch = jest.fn((_url: any, init: any) => new Promise((_resolve, reject) => {
+      const signal: AbortSignal = init.signal;
+      signal.addEventListener('abort', () => {
+        const err: any = new Error('The operation was aborted.');
+        err.name = 'AbortError';
+        reject(err);
+      });
+    })) as any;
+    const onError = jest.fn();
+
+    const result = await performStreamingRequest(baseOpts({
+      abortControllerRef: ref,
+      onError,
+      chatSettings: { ...settings, stream: false, apiFailureTimeout: 5 },
+    }));
+
+    expect(result.timedOut).toBe(true);
+    expect(result.wasAborted).toBe(false);
+    expect(onError.mock.calls[0][0].code).toBe('UPSTREAM_DOWN');
+  }, 10000);
 });

@@ -1,3 +1,5 @@
+import { redactString } from '../redact';
+
 /**
  * Safely parse a Response as JSON, falling back to raw text.
  * Never throws — always returns an object.
@@ -15,51 +17,34 @@ export async function safeJson(res: Response): Promise<any> {
   }
 }
 
-/** Mask values that look like API keys in error messages. */
-export function sanitizeErrorMessage(msg: string): string {
+/** Longest technical detail we'll render; a provider can return a whole HTML page. */
+const MAX_DETAIL_LENGTH = 500;
+
+/**
+ * Normalise raw upstream or exception text for the modal's detail block: strips our own
+ * log prefix, redacts secrets with the shared server patterns, and caps the length.
+ * The message is shown in full — it sits under purpose-written copy, so nothing is gained
+ * by guessing which fragment matters.
+ */
+export function toErrorDetail(raw: unknown): string {
+  if (raw == null) return '';
+  let msg = (typeof raw === 'string' ? raw : JSON.stringify(raw) ?? '').trim();
   if (!msg) return '';
-  try {
-    return msg.replace(/(api\s*key\s*:\s*)(\S+)/gi, (_, p1, key) => {
-      const keep = 4;
-      const masked = key.length > keep
-        ? key.replace(new RegExp(`.(?=.{${keep}}$)`, 'g'), '*')
-        : '****';
-      return `${p1}${masked}`;
-    });
-  } catch {
-    return msg;
-  }
-}
-
-/** Extract a human-meaningful message from raw SSE / API error text. */
-export function extractUsefulError(raw: string): string {
-  if (!raw) return '';
-  let msg = raw.trim();
-  // Strip leading tag like [Stream]
   msg = msg.replace(/^\[[^\]]+\]\s*/, '');
-  // Normalize common generic errors
   if (/input\s*stream/i.test(msg)) {
-    return 'The AI stream was interrupted. Partial response was saved if available.';
+    return 'The AI stream was interrupted, so the half-written reply was discarded.';
   }
-  // Prefer the part starting at "Authentication Fails"
-  const auth = msg.match(/Authentication Fails[\s\S]*$/i);
-  if (auth) return auth[0].trim();
-  // Otherwise, drop up to the last colon
-  const idx = msg.lastIndexOf(':');
-  if (idx !== -1 && idx + 1 < msg.length) {
-    return msg.slice(idx + 1).trim();
-  }
-  return msg;
+  msg = redactString(msg).trim();
+  return msg.length > MAX_DETAIL_LENGTH ? `${msg.slice(0, MAX_DETAIL_LENGTH)}…` : msg;
 }
 
-/** Extract the useful error string from a raw Response or error data object. */
+/** Extract the useful error string from a parsed error body. */
 export function extractErrorFromResponse(errData: any, statusText?: string): string {
-  const raw = (
-    errData?.__rawText ||
-    errData?.error?.message ||
-    errData?.error ||
-    statusText ||
-    'Unknown error'
-  ) as string;
-  return sanitizeErrorMessage(extractUsefulError(String(raw)));
+  const raw =
+    errData?.error?.message ??
+    (typeof errData?.error === 'string' ? errData.error : undefined) ??
+    errData?.__rawText ??
+    statusText ??
+    'Unknown error';
+  return toErrorDetail(raw);
 }

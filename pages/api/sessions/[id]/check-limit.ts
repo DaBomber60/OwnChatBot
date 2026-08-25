@@ -63,7 +63,18 @@ export default withApiHandler({ parseId: true }, {
       isApproachingLimit,
       hasNoSummary,
       shouldBlock,
-      messageCount: messages.length
+      messageCount: messages.length,
+      contextWarnedAt: session.contextWarnedAt,
     });
+  },
+
+  // Records that the "context nearly full" prompt has been shown, so it only appears once.
+  POST: async (_req, res, { id }) => {
+    const updated = await prisma.chatSession.updateMany({
+      where: { id },
+      data: { contextWarnedAt: new Date() },
+    });
+    if (updated.count === 0) return notFound(res, 'Session not found', 'SESSION_NOT_FOUND');
+    return res.status(200).json({ ok: true });
   },
 });

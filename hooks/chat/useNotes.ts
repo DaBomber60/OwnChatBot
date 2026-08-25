@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useToast } from '../../components/ToastProvider';
 
 export interface UseNotesReturn {
   showNotesModal: boolean;
@@ -19,6 +20,7 @@ export interface UseNotesReturn {
  * Auto-loads notes when `sessionId` changes.
  */
 export function useNotes(sessionId: string | string[] | undefined): UseNotesReturn {
+  const { showToast } = useToast();
   const [showNotesModal, setShowNotesModal] = useState(false);
   const [notesContent, setNotesContent] = useState('');
   const [originalNotesContent, setOriginalNotesContent] = useState('');
@@ -62,7 +64,7 @@ export function useNotes(sessionId: string | string[] | undefined): UseNotesRetu
       setOriginalNotesContent(notesContent);
     } catch (error) {
       console.error('Failed to save notes:', error);
-      alert('Failed to save notes. Please try again.');
+      showToast('Could not save your notes. Please try again.', 'error');
     } finally {
       setSavingNotes(false);
     }

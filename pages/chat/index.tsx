@@ -8,6 +8,7 @@ import { useClickOutside } from '../../hooks/useClickOutside';
 import { PageHeader } from '../../components/PageHeader';
 import { DropdownMenu, DropdownMenuItem, DropdownMenuDivider, ConfirmDeleteItem } from '../../components/DropdownMenu';
 import { Modal } from '../../components/Modal';
+import { useToast } from '../../components/ToastProvider';
 
 // Pure function — defined outside the component so its reference is stable.
 function organizeCharactersForDisplay(
@@ -85,6 +86,7 @@ function organizeCharactersForDisplay(
 
 export default function ChatIndexPage() {
   const router = useRouter();
+  const { showToast } = useToast();
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
   const [expandedCharacters, setExpandedCharacters] = useState<Set<number>>(new Set());
   const [cloningSessionId, setCloningSessionId] = useState<number | null>(null);
@@ -141,7 +143,7 @@ export default function ChatIndexPage() {
       router.push(`/chat/${data.id}`);
     } catch (err) {
       console.error('Error cloning session:', err);
-      alert('Failed to clone session. Please try again.');
+      showToast('Could not clone that chat. Please try again.', 'error');
     } finally {
       setCloningSessionId(null);
     }
@@ -200,7 +202,7 @@ export default function ChatIndexPage() {
       exitSelectMode();
     } catch (err) {
       console.error('Error deleting chats:', err);
-      alert('Failed to delete the selected chats. Please try again.');
+      showToast('Could not delete the selected chats. Please try again.', 'error');
     } finally {
       setBulkDeleting(false);
     }
@@ -240,7 +242,7 @@ export default function ChatIndexPage() {
       }
     } catch (error) {
       console.error('Error saving description:', error);
-      alert('Failed to save description. Please try again.');
+      showToast('Could not save the description. Please try again.', 'error');
     } finally {
       setSavingDescription(false);
     }

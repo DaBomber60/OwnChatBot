@@ -365,10 +365,17 @@
   box-shadow: 0 4px 12px rgba(0,0,0,0.25);
   animation: toastIn 0.25s ease-out;
   border: 1px solid transparent;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  max-width: min(28rem, calc(100vw - 2rem));
 }
+
+.toast:hover { filter: brightness(1.12); }
 
 .toast-success { border-color: var(--success); }
 .toast-error { border-color: var(--error); }
+.toast-warning { border-color: var(--warning); }
 
 @keyframes toastIn {
   from { opacity: 0; transform: translateY(-6px); }

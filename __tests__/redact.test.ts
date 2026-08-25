@@ -48,6 +48,45 @@ describe('redactString', () => {
     const shortInput = 'text only';
     expect(redactString(shortInput)).toBe(shortInput);
   });
+
+  it.each([
+    ['sk-AbCdEfGhIjKlMnOpQrStUvWx', 'AbCdEfGhIjKlMnOpQrSt'],
+    ['sk-proj-AbCdEfGhIjKlMnOpQrStUvWx', 'AbCdEfGhIjKlMnOpQrSt'],
+    ['sk-ant-api03-AbCdEfGhIjKlMnOpQrStUvWx', 'AbCdEfGhIjKlMnOpQrSt'],
+  ])('redacts hyphenated provider keys: %s', (input, secret) => {
+    const result = redactString(`Invalid API key provided: ${input}`);
+    expect(result).not.toContain(secret);
+    expect(result).toContain('****REDACTED****');
+  });
+
+  it('redacts an api_key field in a JSON error body', () => {
+    const result = redactString('{"error":{"message":"bad request","api_key":"AbCdEfGhIjKlMnOp"}}');
+    expect(result).not.toContain('AbCdEfGhIjKlMnOp');
+    expect(result).toContain('****REDACTED****');
+  });
+
+  it('redacts an x-api-key header echo', () => {
+    const result = redactString('x-api-key: AbCdEfGhIjKlMnOpQrSt');
+    expect(result).not.toContain('AbCdEfGhIjKlMnOpQrSt');
+    expect(result).toContain('****REDACTED****');
+  });
+
+  it('redacts a bare Bearer token with no Authorization prefix', () => {
+    const result = redactString('Bearer eyJhbGciOiJIUzI1NiJ9.payload.signature');
+    expect(result).not.toContain('eyJhbGciOiJIUzI1NiJ9');
+    expect(result).toContain('****REDACTED****');
+  });
+
+  it('redacts every database URL, not just the first', () => {
+    const result = redactString('postgres://a:secretone@h/db and postgres://b:secrettwo@h/db');
+    expect(result).not.toContain('secretone');
+    expect(result).not.toContain('secrettwo');
+  });
+
+  it('leaves ordinary prose and short identifiers alone', () => {
+    const input = 'Assistant replied: the quick brown fox jumped over 12345 lazy dogs.';
+    expect(redactString(input)).toBe(input);
+  });
 });
 
 describe('redactAll', () => {

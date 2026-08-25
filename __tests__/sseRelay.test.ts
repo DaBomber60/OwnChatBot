@@ -118,6 +118,35 @@ describe('relayUpstreamSSE', () => {
     expect(result.assistantThinkingText).toBe('hidden');
   });
 
+  it('reports finish_reason from the final frame, which carries no content', async () => {
+    const res = fakeRes();
+    const result = await relayUpstreamSSE({
+      reader: readerFrom(
+        upstreamFrame({ content: 'cut off mid-' }),
+        `data: ${JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: 'length' }] })}\n\n`,
+        'data: [DONE]\n\n',
+      ),
+      res,
+      thinkingEnabled: false,
+      canWrite: () => true,
+    });
+
+    expect(result.assistantText).toBe('cut off mid-');
+    expect(result.finishReason).toBe('length');
+  });
+
+  it('leaves finishReason undefined on a normal stop', async () => {
+    const res = fakeRes();
+    const result = await relayUpstreamSSE({
+      reader: readerFrom(upstreamFrame({ content: 'all done' }), 'data: [DONE]\n\n'),
+      res,
+      thinkingEnabled: false,
+      canWrite: () => true,
+    });
+
+    expect(result.finishReason).toBeUndefined();
+  });
+
   it('leaves <think> tags alone when thinking is disabled', async () => {
     const res = fakeRes();
     const result = await relayUpstreamSSE({

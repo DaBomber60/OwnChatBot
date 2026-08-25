@@ -15,11 +15,15 @@ import { ChatInput } from '../../components/chat/ChatInput';
 import { SummaryModal } from '../../components/chat/SummaryModal';
 import { NotesOverlayModal, NotesSidecar } from '../../components/chat/NotesPanel';
 import { DeleteConfirmModal } from '../../components/chat/DeleteConfirmModal';
-import { ErrorModal } from '../../components/chat/ErrorModal';
+import { ErrorModal } from '../../components/ErrorModal';
+import { TruncationModal, type TruncationInfo } from '../../components/chat/TruncationModal';
+import { ContextWarningModal } from '../../components/chat/ContextWarningModal';
+import { useToast } from '../../components/ToastProvider';
+import { downloadSessionLog } from '../../lib/chat/debugDownload';
 import { VariantTempPopover } from '../../components/chat/VariantTempPopover';
 import { readSSEStream, isSSEResponse, performStreamingRequest } from '../../lib/chat/streamSSE';
 import { fetchChatSettings } from '../../lib/chat/chatSettings';
-import { safeJson, sanitizeErrorMessage, extractUsefulError, extractErrorFromResponse } from '../../lib/chat/errorUtils';
+import { safeJson, toErrorDetail, extractErrorFromResponse } from '../../lib/chat/errorUtils';
 import { describeChatError, type ChatErrorCopy } from '../../lib/chat/errorCopy';
 import {
   CHAT_INPUT_MIN_HEIGHT, CHAT_INPUT_MAX_HEIGHT,
@@ -32,6 +36,9 @@ import type { ChatMessage, Message, MessageVersion, SessionData } from '../../ty
 
 const INITIAL_PAGE_SIZE = 20; // messages for initial load
 const SCROLL_PAGE_SIZE = 60; // messages to load per top-scroll fetch
+
+// Context usage that triggers the one-time "write a summary" nudge.
+const CONTEXT_WARNING_PERCENT = 95;
 
 // The whole list re-renders on every reveal frame, so formatting is memoised by content.
 const FORMAT_CACHE_LIMIT = 400;
@@ -77,6 +84,7 @@ function formatMessage(content: string) {
 export default function ChatSessionPage() {
   const router = useRouter();
   const { id } = router.query;
+  const { showToast } = useToast();
   const { data: session, error, mutate } = useSWR<SessionData>(id ? `/api/sessions/${id}?limit=${INITIAL_PAGE_SIZE}` : null, fetcher, { revalidateOnFocus: false });
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [hasMore, setHasMore] = useState<boolean>(false);
@@ -104,6 +112,9 @@ export default function ChatSessionPage() {
   // API error modal
   const [showErrorModal, setShowErrorModal] = useState(false);
   const [chatError, setChatError] = useState<ChatErrorCopy | null>(null);
+  const [truncationInfo, setTruncationInfo] = useState<TruncationInfo | null>(null);
+  const [showTruncationModal, setShowTruncationModal] = useState(false);
+  const [contextWarningPercent, setContextWarningPercent] = useState<number | null>(null);
   // reusing error modal for truncation warnings
   const [isBurgerMenuOpen, setIsBurgerMenuOpen] = useState(false);
   const headerRef = useRef<HTMLElement>(null);
@@ -172,63 +183,45 @@ export default function ChatSessionPage() {
     setShowErrorModal(true);
   };
 
-  // Show warning if the last API request was heavily truncated (<=16 messages sent)
-  const maybeShowTruncationWarning = async () => {
+  // Refreshes the truncation banner data. Replaces the old per-send modal, which nagged on
+  // every message once the history stopped fitting.
+  const refreshTruncationInfo = async () => {
     try {
       const sessionIdNum = Number(id);
       if (!sessionIdNum || Number.isNaN(sessionIdNum)) return;
       const res = await fetch(`/api/chat/request-log/meta/${sessionIdNum}`);
       if (!res.ok) return;
       const meta = await res.json();
-      const wasTruncated = !!meta?.wasTruncated;
-      const sentCount = typeof meta?.sentCount === 'number' ? meta.sentCount : undefined;
-      if (wasTruncated && typeof sentCount === 'number' && sentCount <= 16) {
-        const baseCount = typeof meta?.baseCount === 'number' ? meta.baseCount : undefined;
-        showChatError(describeChatError('CONTEXT_TRUNCATED', { sentCount, baseCount }));
-      }
+      setTruncationInfo({
+        wasTruncated: !!meta?.wasTruncated,
+        sentCount: typeof meta?.sentCount === 'number' ? meta.sentCount : undefined,
+        baseCount: typeof meta?.baseCount === 'number' ? meta.baseCount : undefined,
+        truncationLimit: typeof meta?.truncationLimit === 'number' ? meta.truncationLimit : undefined,
+      });
     } catch {}
   };
 
-  // Show modal if the last API response hit the max_tokens limit
-  const maybeShowMaxTokensCutoff = async () => {
-    const hit = await checkMaxTokensHit();
-    if (hit) showChatError(describeChatError('MAX_TOKENS'));
-  };
-
-  // Check if last API response ended due to hitting max tokens (finish_reason = 'length')
-  const checkMaxTokensHit = async (): Promise<boolean> => {
+  // One-shot nudge to write a summary before truncation starts biting.
+  const maybeWarnContextNearlyFull = async () => {
     try {
       const sessionIdNum = Number(id);
-      if (!sessionIdNum || Number.isNaN(sessionIdNum)) return false;
-      const res = await fetch(`/api/chat/response-log/${sessionIdNum}`);
-      if (!res.ok) return false;
-      const payload = await res.json();
-      const mode = payload?.mode;
-      if (mode === 'json') {
-        let body = payload?.body;
-        if (!body && typeof payload?.bodyText === 'string') {
-          try { body = JSON.parse(payload.bodyText); } catch {}
-        }
-        const fr = body?.choices?.[0]?.finish_reason;
-        if (fr === 'length') return true;
-        if (typeof payload?.bodyText === 'string' && payload.bodyText.includes('"finish_reason":"length"')) return true;
-      } else if (mode === 'sse') {
-        const frames: string[] = Array.isArray(payload?.frames) ? payload.frames : [];
-        for (let i = frames.length - 1; i >= 0 && i >= frames.length - 50; i--) {
-          const f = frames[i];
-          if (!f || typeof f !== 'string') continue;
-          try {
-            const j = JSON.parse(f);
-            const fr = j?.choices?.[0]?.finish_reason;
-            if (fr === 'length') return true;
-          } catch {}
-        }
-      }
-      return false;
-    } catch {
-      return false;
-    }
+      if (!sessionIdNum || Number.isNaN(sessionIdNum)) return;
+      const res = await fetch(`/api/sessions/${sessionIdNum}/check-limit`);
+      if (!res.ok) return;
+      const stats = await res.json();
+      if (stats?.contextWarnedAt || typeof stats?.percentage !== 'number') return;
+      if (stats.percentage < CONTEXT_WARNING_PERCENT) return;
+      setContextWarningPercent(stats.percentage);
+      await fetch(`/api/sessions/${sessionIdNum}/check-limit`, { method: 'POST' }).catch(() => {});
+    } catch {}
   };
+
+  // Populate the Warnings menu when opening an existing chat, not just after sending
+  useEffect(() => {
+    setTruncationInfo(null);
+    if (id) void refreshTruncationInfo();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id]);
 
   // Reset initial variant gating when navigating to a different chat
   useEffect(() => {
@@ -385,7 +378,7 @@ export default function ChatSessionPage() {
           return copy;
         });
         // Delete server-side messages that were created after our last known point.
-        // Delay to let the server's partial-save from req.on('close') complete first.
+        // Delayed so the aborted request has unwound server-side before we truncate.
         if (id) {
           setTimeout(async () => {
             try {
@@ -414,6 +407,11 @@ export default function ChatSessionPage() {
         streamingMessageRef.current = '';
         shouldRestoreInputRef.current = false;
       }
+
+      // Dropping the bubbles and restoring the input both reflow the list, so glide down once
+      // React has committed. Forced because Stop is deliberate, and the eased scroll re-reads
+      // its target each frame while the composer is still resizing.
+      setTimeout(() => smoothScrollToBottom(true), 100);
     }
     
     if (variantAbortController.current) {
@@ -458,6 +456,9 @@ export default function ChatSessionPage() {
       variantAbortController.current.abort();
       variantAbortController.current = null;
       setGeneratingVariant(null);
+      // Reverting to the previous variant usually shortens the message, so settle at the
+      // bottom. Variants only ever regenerate the last message, so this is always the target.
+      setTimeout(() => smoothScrollToBottom(true), 100);
     }
   }, [generatingVariant, messageVariants, currentVariantIndex, messages]);
 
@@ -611,8 +612,7 @@ export default function ChatSessionPage() {
           smoothScrollToBottom();
         },
         onComplete: async () => {
-          await maybeShowTruncationWarning();
-          await maybeShowMaxTokensCutoff();
+          await refreshTruncationInfo();
         },
         onError: (error) => {
           reveal.reset();
@@ -633,6 +633,15 @@ export default function ChatSessionPage() {
       if (result.wasAborted) return;
       setIsModelThinking(false);
 
+      // The server discards a reply cut short by the token cap, so drop the placeholder too
+      if (result.discardedReason === 'max_tokens') {
+        reveal.reset();
+        revertVariantPlaceholder(messageId);
+        showChatError(describeChatError('MAX_TOKENS', { maxTokens: result.settings.maxTokens }));
+        stopStreamingFollow();
+        return;
+      }
+
       // For streaming: fetch the real variant record to replace the placeholder
       if (result.wasStreaming) {
         try {
@@ -649,7 +658,7 @@ export default function ChatSessionPage() {
     } catch (error) {
       console.error('Failed to generate variant:', error);
       showChatError(describeChatError('UPSTREAM_ERROR', {
-        detail: sanitizeErrorMessage(extractUsefulError((error as any)?.message || JSON.stringify(error))),
+        detail: toErrorDetail((error as any)?.message || JSON.stringify(error)),
       }));
       revertVariantPlaceholder(messageId);
       
@@ -1647,7 +1656,7 @@ export default function ChatSessionPage() {
           
         } catch (error) {
           console.error('Failed to save edited variant:', error);
-          alert('Failed to save variant changes. Please try again.');
+        showToast('Could not save the variant changes. Please try again.', 'error');
           return;
         }
       }
@@ -1739,7 +1748,7 @@ export default function ChatSessionPage() {
         }
         
         // Show error to user (you could use a toast notification here)
-        alert('Failed to save changes. Please try again.');
+        showToast('Could not save your changes. Please try again.', 'error');
         return;
       }
     }
@@ -1829,7 +1838,7 @@ export default function ChatSessionPage() {
           smoothScrollToBottom();
         } else if (data?.error) {
           showChatError(describeChatError('UPSTREAM_ERROR', {
-            detail: sanitizeErrorMessage(extractUsefulError(String(data.error))),
+            detail: toErrorDetail(String(data.error)),
           }));
         }
       },
@@ -1923,7 +1932,7 @@ export default function ChatSessionPage() {
     } catch (error) {
       console.error('Failed to delete messages:', error);
       setMessages(prevMessages);
-      alert('Failed to delete messages. Please try again.');
+      showToast('Could not delete those messages. Please try again.', 'error');
       return;
     }
   };
@@ -2064,7 +2073,7 @@ export default function ChatSessionPage() {
           smoothScrollToBottom();
         } else if (data?.error) {
           showChatError(describeChatError('UPSTREAM_ERROR', {
-            detail: sanitizeErrorMessage(extractUsefulError(data.error?.message || JSON.stringify(data.error))),
+            detail: toErrorDetail(data.error?.message || JSON.stringify(data.error)),
           }));
         }
       },
@@ -2081,25 +2090,27 @@ export default function ChatSessionPage() {
 
     if (result.wasAborted) { stopStreamingFollow(); return; }
 
-    // A timeout (or any zero-content failure) leaves the user message "sent" so Retry works.
+    // A failed or discarded stream leaves the user message "sent" so Retry works, but the server
+    // never persists a half-written reply, so the assistant bubble goes either way.
     // Only an explicit Stop returns the text to the input box.
-    const failedWithNoContent = result.wasStreaming && streamingMessageRef.current.length === 0;
-    if (failedWithNoContent) {
+    const hitTokenCap = result.discardedReason === 'max_tokens';
+    const streamFailed = result.wasStreaming
+      && (result.errorShown || hitTokenCap || streamingMessageRef.current.length === 0);
+    if (streamFailed) {
       if (!result.errorShown) {
-        // Reasoning without a reply is a different failure to a wholly silent provider,
-        // and the token cap only shows up in the response log, so show then upgrade.
         const ctx = { provider: result.settings.aiProvider, maxTokens: result.settings.maxTokens };
-        showChatError(describeChatError(result.sawThinking ? 'THINKING_ONLY' : 'EMPTY_RESPONSE', ctx));
-        if (result.sawThinking) {
-          checkMaxTokensHit().then(hit => {
-            if (hit) setChatError(describeChatError('THINKING_TRUNCATED', ctx));
-          }).catch(() => {});
-        }
+        // Reasoning that ate the whole budget reads very differently to a plain cut-off reply.
+        const code = hitTokenCap
+          ? (result.sawThinking && !streamingMessageRef.current ? 'THINKING_TRUNCATED' : 'MAX_TOKENS')
+          : (result.sawThinking ? 'THINKING_ONLY' : 'EMPTY_RESPONSE');
+        showChatError(describeChatError(code, ctx));
       }
-      // Drop the empty assistant bubble but keep the user message in place
+      // Drop the streaming placeholder (never has a server id) but keep the user message
+      reveal.reset();
       setMessages(prev => {
         const copy = [...prev];
-        if (copy.length > 0 && copy[copy.length - 1]?.role === 'assistant' && !copy[copy.length - 1]?.content) copy.pop();
+        const last = copy[copy.length - 1];
+        if (last?.role === 'assistant' && !last.messageId) copy.pop();
         return copy;
       });
       shouldRestoreInputRef.current = false;
@@ -2115,12 +2126,9 @@ export default function ChatSessionPage() {
       return;
     }
 
-    // Post-request: truncation & max-token warnings
-    await maybeShowTruncationWarning();
-    setTimeout(async () => {
-      const hitLimit = await checkMaxTokensHit();
-      if (hitLimit) showChatError(describeChatError('MAX_TOKENS', { maxTokens: result.settings.maxTokens }));
-    }, 1200);
+    // Post-request: refresh the truncation banner and nudge once if the window is nearly full
+    await refreshTruncationInfo();
+    void maybeWarnContextNearlyFull();
 
     stopStreamingFollow();
     setLoading(false);
@@ -2160,69 +2168,16 @@ export default function ChatSessionPage() {
   };
   // download the stored API request payload as JSON
   const handleDownloadRequest = async () => {
-    if (!id) {
-      console.error('No session ID available for request download');
-      alert('No session ID available');
-      return;
-    }
-    
-    try {
-      console.log(`Attempting to fetch request log for session ${id}`);
-      const res = await fetch(`/api/chat/request-log/${id}`);
-      
-      if (!res.ok) {
-        console.error(`Request failed with status ${res.status}`);
-        const errorText = await res.text();
-        console.error('Error response:', errorText);
-        alert(`Failed to download request log: ${res.status} ${errorText}`);
-        return;
-      }
-      
-      const payload = await res.json();
-      console.log('Request payload retrieved:', payload);
-      
-      const json = JSON.stringify(payload, null, 2);
-      const blob = new Blob([json], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `chat-request-${id}.json`;
-      a.click();
-      URL.revokeObjectURL(url);
-      console.log('Request log downloaded successfully');
-    } catch (error) {
-      console.error('Error downloading request log:', error);
-      alert(`Error downloading request log: ${error}`);
-    }
+    if (!id) return;
+    const failure = await downloadSessionLog('request', String(id));
+    if (failure) showToast(failure, 'error');
   };
 
   // download the stored API response payload as JSON
   const handleDownloadResponse = async () => {
-    if (!id) {
-      console.error('No session ID available for response download');
-      alert('No session ID available');
-      return;
-    }
-    try {
-      const res = await fetch(`/api/chat/response-log/${id}`);
-      if (!res.ok) {
-        const text = await res.text();
-        alert(`Failed to download response log: ${res.status} ${text}`);
-        return;
-      }
-      const payload = await res.json();
-      const json = JSON.stringify(payload, null, 2);
-      const blob = new Blob([json], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `chat-response-${id}.json`;
-      a.click();
-      URL.revokeObjectURL(url);
-    } catch (error) {
-      console.error('Error downloading response log:', error);
-      alert(`Error downloading response log: ${error}`);
-    }
+    if (!id) return;
+    const failure = await downloadSessionLog('response', String(id));
+    if (failure) showToast(failure, 'error');
   };
 
   if (error) return (
@@ -2268,6 +2223,8 @@ export default function ChatSessionPage() {
         onDownloadLog={handleDownloadLog}
         onDownloadRequest={handleDownloadRequest}
         onDownloadResponse={handleDownloadResponse}
+        truncationActive={!!truncationInfo?.wasTruncated}
+        onOpenTruncationInfo={() => setShowTruncationModal(true)}
       />
 
       {/* Chat Messages */}
@@ -2505,10 +2462,25 @@ export default function ChatSessionPage() {
       {showErrorModal && chatError && (
         <ErrorModal
           error={chatError}
-          onDownloadRequest={handleDownloadRequest}
-          onDownloadResponse={handleDownloadResponse}
+          sessionId={id ? String(id) : undefined}
           onClose={() => setShowErrorModal(false)}
           devMode={devMode}
+        />
+      )}
+
+      {showTruncationModal && truncationInfo && (
+        <TruncationModal
+          info={truncationInfo}
+          onClose={() => setShowTruncationModal(false)}
+          onOpenSummary={() => { setShowTruncationModal(false); setShowSummaryModal(true); }}
+        />
+      )}
+
+      {contextWarningPercent !== null && (
+        <ContextWarningModal
+          percentage={contextWarningPercent}
+          onClose={() => setContextWarningPercent(null)}
+          onOpenSummary={() => { setContextWarningPercent(null); setShowSummaryModal(true); }}
         />
       )}
 

@@ -1,4 +1,4 @@
-import { apiKeyNotConfigured, serverError } from '../../../lib/apiErrors';
+import { apiKeyNotConfigured, serverError, upstreamError, classifyUpstreamStatus } from '../../../lib/apiErrors';
 import { getAIConfig, tokenFieldFor, normalizeTemperature, getMaxTokens, buildDeepSeekThinking } from '../../../lib/aiProvider';
 import type { AIConfig } from '../../../lib/aiProvider';
 import { callUpstreamAI, upstreamTimeoutMs } from '../../../lib/upstreamAI';
@@ -6,6 +6,7 @@ import prisma from '../../../lib/prisma';
 import { schemas, validateBody } from '../../../lib/validate';
 import { z } from 'zod';
 import { withApiHandler } from '../../../lib/withApiHandler';
+import { redactString } from '../../../lib/redact';
 
 // This endpoint does NOT persist a character; it returns generated fields so the client can review/edit then save.
 // POST /api/characters/generate
@@ -96,12 +97,17 @@ Perspective: ${perspective.toUpperCase()} POV. ${perspectiveLine}
     });
 
     if (!upstream.ok) {
-      return serverError(res, 'Generation API error: ' + (upstream.rawText || 'Unknown error'), 'UPSTREAM_API_ERROR');
+      const message = redactString(upstream.data?.error?.message || upstream.rawText || 'Unknown error');
+      return upstreamError(res, {
+        code: classifyUpstreamStatus(upstream.status, message),
+        message,
+        upstreamStatus: upstream.status,
+      });
     }
 
     const data = upstream.data;
     const content: string | undefined = data?.choices?.[0]?.message?.content;
-    if (!content) return serverError(res, 'Malformed upstream response', 'INVALID_UPSTREAM');
+    if (!content) return upstreamError(res, { code: 'UPSTREAM_NO_CONTENT', message: 'The model returned no character text' });
 
     // Attempt to parse JSON block; if model wrapped it in markdown fences, strip them.
     const cleaned = content.replace(/^```json\n?|```$/g, '').trim();

@@ -13,12 +13,16 @@ interface ChatHeaderProps {
   onDownloadLog: () => void;
   onDownloadRequest: () => void;
   onDownloadResponse: () => void;
+  /** Truncation is only active once the history stopped fitting in the context window. */
+  truncationActive?: boolean;
+  onOpenTruncationInfo?: () => void;
 }
 
 export function ChatHeader({
   session, isBurgerMenuOpen, setIsBurgerMenuOpen, devMode,
   headerRef, onOpenNotes, onOpenSummary,
   onDownloadLog, onDownloadRequest, onDownloadResponse,
+  truncationActive, onOpenTruncationInfo,
 }: ChatHeaderProps) {
   const router = useRouter();
 
@@ -69,6 +73,20 @@ export function ChatHeader({
               </button>
             </div>
           </div>
+
+          {truncationActive && onOpenTruncationInfo && (
+            <div className="burger-menu-section">
+              <div className="burger-menu-label">Warnings</div>
+              <div className="burger-menu-buttons">
+                <button
+                  className="btn btn-menu-item btn-warning-item"
+                  onClick={() => { onOpenTruncationInfo(); setIsBurgerMenuOpen(false); }}
+                >
+                  ⚠️ Truncation enabled
+                </button>
+              </div>
+            </div>
+          )}
 
           {devMode && (
             <div className="burger-menu-section">

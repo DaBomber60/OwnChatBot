@@ -3,8 +3,7 @@
  */
 import {
   safeJson,
-  sanitizeErrorMessage,
-  extractUsefulError,
+  toErrorDetail,
   extractErrorFromResponse,
 } from '../lib/chat/errorUtils';
 
@@ -41,79 +40,55 @@ describe('safeJson', () => {
 });
 
 // ---------------------------------------------------------------------------
-// sanitizeErrorMessage
 // ---------------------------------------------------------------------------
-describe('sanitizeErrorMessage', () => {
-  it('masks characters in API key values', () => {
-    const msg = 'Failed: api key: sk-abcdefghijkl1234567890';
-    const result = sanitizeErrorMessage(msg);
-    // The function replaces chars before the last 4 with *, producing partial masking
-    expect(result).toContain('api key:');
-    expect(result).toContain('*');
-    expect(result).not.toBe(msg); // something was masked
-  });
-
-  it('returns empty string for empty input', () => {
-    expect(sanitizeErrorMessage('')).toBe('');
-  });
-
-  it('returns empty string for null/undefined-like input', () => {
-    expect(sanitizeErrorMessage(null as any)).toBe('');
-    expect(sanitizeErrorMessage(undefined as any)).toBe('');
-  });
-
-  it('preserves messages without API keys', () => {
-    const msg = 'Connection timed out';
-    expect(sanitizeErrorMessage(msg)).toBe('Connection timed out');
-  });
-
-  it('is case-insensitive for "api key"', () => {
-    const msg = 'Error: API Key: sk-test1234567890';
-    const result = sanitizeErrorMessage(msg);
-    expect(result).toContain('*');
-    expect(result).not.toBe(msg);
-  });
-
-  it('handles short api key values with full masking', () => {
-    const msg = 'api key: abcd';
-    const result = sanitizeErrorMessage(msg);
-    // key.length <= 4, so full masking to ****
-    expect(result).toContain('****');
-  });
-});
-
+// toErrorDetail
 // ---------------------------------------------------------------------------
-// extractUsefulError
-// ---------------------------------------------------------------------------
-describe('extractUsefulError', () => {
-  it('returns empty string for empty input', () => {
-    expect(extractUsefulError('')).toBe('');
+describe('toErrorDetail', () => {
+  it('returns empty string for empty or nullish input', () => {
+    expect(toErrorDetail('')).toBe('');
+    expect(toErrorDetail(null)).toBe('');
+    expect(toErrorDetail(undefined)).toBe('');
   });
 
   it('strips leading [Tag] markers', () => {
-    const result = extractUsefulError('[Stream] Something went wrong');
-    expect(result).not.toMatch(/^\[Stream\]/);
-    expect(result).toContain('Something went wrong');
+    const result = toErrorDetail('[Stream] Something went wrong');
+    expect(result).toBe('Something went wrong');
   });
 
   it('normalizes "input stream" errors', () => {
-    const result = extractUsefulError('Error: input stream was reset');
+    const result = toErrorDetail('Error: input stream was reset');
     expect(result).toContain('AI stream was interrupted');
   });
 
-  it('extracts "Authentication Fails" suffix', () => {
-    const result = extractUsefulError('Some prefix: Authentication Fails: bad key');
-    expect(result).toMatch(/^Authentication Fails/);
+  it('keeps the whole message instead of slicing at the last colon', () => {
+    // The old heuristic turned this into just "gpt-5", losing what actually went wrong.
+    expect(toErrorDetail('Error: model not found: gpt-5')).toBe('Error: model not found: gpt-5');
+    expect(toErrorDetail('Rate limit exceeded: retry in 30s')).toBe('Rate limit exceeded: retry in 30s');
   });
 
-  it('extracts text after the last colon for generic errors', () => {
-    const result = extractUsefulError('Module: SubModule: actual error message');
-    expect(result).toBe('actual error message');
+  it('returns the full message when no colon is present', () => {
+    expect(toErrorDetail('Simple error')).toBe('Simple error');
   });
 
-  it('returns the full message if no colon present', () => {
-    const result = extractUsefulError('Simple error');
-    expect(result).toBe('Simple error');
+  it('redacts secrets using the shared patterns', () => {
+    const result = toErrorDetail('Invalid credentials for sk-proj-AbCdEfGhIjKlMnOpQrStUv');
+    expect(result).not.toContain('AbCdEfGhIjKlMnOpQrStUv');
+    expect(result).toContain('****REDACTED****');
+  });
+
+  it('redacts an Authorization header the old regex would have missed', () => {
+    const result = toErrorDetail('Rejected request with Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.abc.def');
+    expect(result).not.toContain('eyJhbGciOiJIUzI1NiJ9');
+  });
+
+  it('caps runaway messages so an HTML error page cannot fill the modal', () => {
+    const result = toErrorDetail('<p>The gateway returned an unexpected response.</p> '.repeat(60));
+    expect(result.length).toBeLessThanOrEqual(501);
+    expect(result.endsWith('…')).toBe(true);
+  });
+
+  it('stringifies non-string input', () => {
+    expect(toErrorDetail({ message: 'boom' })).toContain('boom');
   });
 });
 
@@ -121,21 +96,18 @@ describe('extractUsefulError', () => {
 // extractErrorFromResponse
 // ---------------------------------------------------------------------------
 describe('extractErrorFromResponse', () => {
-  it('extracts from error.message in error data', () => {
-    const errData = { error: { message: 'Rate limit exceeded' } };
-    const result = extractErrorFromResponse(errData);
-    expect(result).toContain('Rate limit exceeded');
+  it('reads the flat envelope every LLM route now sends', () => {
+    const result = extractErrorFromResponse({ error: 'Something failed', code: 'UPSTREAM_AUTH' });
+    expect(result).toBe('Something failed');
   });
 
-  it('extracts from error string in error data', () => {
-    const errData = { error: 'Something failed' };
-    const result = extractErrorFromResponse(errData);
-    expect(result).toContain('Something failed');
+  it('still reads the legacy nested shape', () => {
+    const result = extractErrorFromResponse({ error: { message: 'Rate limit exceeded' } });
+    expect(result).toBe('Rate limit exceeded');
   });
 
-  it('uses __rawText when present', () => {
-    const errData = { __rawText: 'Raw error text' };
-    const result = extractErrorFromResponse(errData);
+  it('uses __rawText for non-JSON bodies', () => {
+    const result = extractErrorFromResponse({ __rawText: 'Raw error text' });
     expect(result).toContain('Raw error text');
   });
 
@@ -149,20 +121,10 @@ describe('extractErrorFromResponse', () => {
     expect(result).toContain('Unknown error');
   });
 
-  it('applies extractUsefulError then sanitizeErrorMessage', () => {
-    // extractUsefulError strips prefix before last colon, so "api key: value"
-    // becomes just "value" and sanitizeErrorMessage won't see the "api key:" prefix.
-    // This tests the pipeline works end-to-end without error.
-    const errData = { error: { message: 'api key: sk-supersecretkey1234' } };
+  it('redacts a key echoed back in the provider message', () => {
+    const errData = { error: { message: 'Invalid api_key: AbCdEfGhIjKlMnOpQrSt' } };
     const result = extractErrorFromResponse(errData);
-    expect(typeof result).toBe('string');
-    expect(result.length).toBeGreaterThan(0);
-  });
-
-  it('sanitizes directly via sanitizeErrorMessage on api key pattern', () => {
-    // Test sanitizeErrorMessage independently to verify masking works
-    // when the full "api key: value" pattern is preserved
-    const result = sanitizeErrorMessage('api key: sk-supersecretkey1234');
-    expect(result).toContain('*');
+    expect(result).not.toContain('AbCdEfGhIjKlMnOpQrSt');
+    expect(result).toContain('****REDACTED****');
   });
 });

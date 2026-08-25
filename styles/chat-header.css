@@ -152,6 +152,16 @@
   width: 100%;
 }
 
+.btn-warning-item {
+  background: color-mix(in srgb, var(--warning) 16%, transparent);
+  border: 1px solid var(--warning);
+  color: var(--text-primary);
+}
+
+.btn-warning-item:hover {
+  background: color-mix(in srgb, var(--warning) 28%, transparent);
+}
+
 /* Focus styles for menu items */
 .btn-menu-item:focus {
   outline: 2px solid var(--primary);

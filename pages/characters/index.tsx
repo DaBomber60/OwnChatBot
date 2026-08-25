@@ -28,6 +28,7 @@ import { renderMultiline } from '../../components/RenderMultiline';
 import { useClickOutside } from '../../hooks/useClickOutside';
 import { PageHeader } from '../../components/PageHeader';
 import { Modal } from '../../components/Modal';
+import { useToast } from '../../components/ToastProvider';
 import { DropdownMenu, DropdownMenuItem, DropdownMenuDivider, ConfirmDeleteItem } from '../../components/DropdownMenu';
 
 // Utility to get preview text for character cards
@@ -529,6 +530,7 @@ function DroppableArea({
 }
 
 export default function CharactersPage() {
+  const { showToast } = useToast();
   const { data: chars, error, mutate } = useSWR<Character[]>('/api/characters', fetcher);
   const { data: groups, error: groupsError, mutate: mutateGroups } = useSWR<CharacterGroup[]>('/api/character-groups', fetcher);
   
@@ -616,7 +618,7 @@ export default function CharactersPage() {
       exitSelectMode();
     } catch (err) {
       console.error('Error deleting characters:', err);
-      alert('Failed to delete the selected characters. Please try again.');
+      showToast('Could not delete the selected characters. Please try again.', 'error');
     } finally {
       setBulkDeleting(false);
     }
@@ -735,7 +737,7 @@ export default function CharactersPage() {
 
   const handleSaveAndRegenerate = async () => {
     if (genLoading || savingVariant) return;
-    if (!name.trim()) { alert('Name is required to save.'); return; }
+    if (!name.trim()) { showToast('Give the character a name before saving.', 'warning'); return; }
     setSavingVariant(true);
     try {
       const res = await fetch('/api/characters', {
@@ -754,7 +756,7 @@ export default function CharactersPage() {
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        alert('Error saving character before regeneration: ' + (err.error || 'Unknown error'));
+        showToast(`Could not save the character before regenerating: ${err.error || 'unknown error'}`, 'error');
         return;
       }
       mutate();
@@ -762,7 +764,7 @@ export default function CharactersPage() {
       setProfileName(nextProfile);
       await performGeneration({ profileNameOverride: nextProfile });
     } catch (e: any) {
-      alert('Unexpected error saving & regenerating: ' + (e.message || e.toString()));
+      showToast(`Could not save and regenerate: ${e.message || e.toString()}`, 'error');
     } finally {
       setSavingVariant(false);
     }
@@ -860,7 +862,7 @@ export default function CharactersPage() {
   const createGroup = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newGroupName.trim()) {
-      alert('Please enter a group name.');
+      showToast('Enter a group name first.', 'warning');
       return;
     }
 
@@ -874,7 +876,7 @@ export default function CharactersPage() {
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         console.error('Failed to create group', err);
-        alert('Error creating group: ' + (err.error || 'Unknown error'));
+        showToast(`Could not create the group: ${err.error || 'unknown error'}`, 'error');
         return;
       }
 
@@ -884,7 +886,7 @@ export default function CharactersPage() {
       mutateGroups();
     } catch (error) {
       console.error('Error creating group:', error);
-      alert('Error creating group');
+      showToast('Could not create the group. Please try again.', 'error');
     }
   };
 
@@ -899,14 +901,14 @@ export default function CharactersPage() {
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         console.error('Failed to update group', err);
-        alert('Error updating group: ' + (err.error || 'Unknown error'));
+        showToast(`Could not update the group: ${err.error || 'unknown error'}`, 'error');
         return;
       }
 
       mutateGroups();
     } catch (error) {
       console.error('Error updating group:', error);
-      alert('Error updating group');
+      showToast('Could not update the group. Please try again.', 'error');
     }
   };
 
@@ -919,7 +921,7 @@ export default function CharactersPage() {
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         console.error('Failed to delete group', err);
-        alert('Error deleting group: ' + (err.error || 'Unknown error'));
+        showToast(`Could not delete the group: ${err.error || 'unknown error'}`, 'error');
         return;
       }
 
@@ -928,7 +930,7 @@ export default function CharactersPage() {
       mutate(); // Refresh characters too since they'll be ungrouped
     } catch (error) {
       console.error('Error deleting group:', error);
-      alert('Error deleting group');
+      showToast('Could not delete the group. Please try again.', 'error');
     }
   };
 
@@ -1074,7 +1076,7 @@ export default function CharactersPage() {
       mutateGroups();
     } catch (error: any) {
       console.error('Error moving character:', error);
-      alert('Error moving character: ' + (error?.message || 'Unknown error'));
+      showToast(`Could not move the character: ${error?.message || 'unknown error'}`, 'error');
     }
   };
 
@@ -1165,7 +1167,7 @@ export default function CharactersPage() {
     e.preventDefault();
     // client-side validation - only name is required
     if (!name.trim()) {
-      alert('Please enter a character name.');
+      showToast('Enter a character name first.', 'warning');
       return;
     }
     const res = await fetch('/api/characters', {
@@ -1185,7 +1187,7 @@ export default function CharactersPage() {
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
       console.error('Failed to add character', err);
-      alert('Error adding character: ' + (err.error || 'Unknown error'));
+      showToast(`Could not add the character: ${err.error || 'unknown error'}`, 'error');
       return;
     }
     setIsAdding(false);

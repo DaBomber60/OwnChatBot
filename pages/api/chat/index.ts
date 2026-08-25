@@ -1,6 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import prisma from '../../../lib/prisma';
-import { badRequest, notFound, serverError, tooManyRequests } from '../../../lib/apiErrors';
+import { badRequest, notFound, serverError, tooManyRequests, upstreamError } from '../../../lib/apiErrors';
 import { clampMaxTokens, stripThinkTags } from '../../../lib/aiProvider';
 import { startUpstreamRequest, type UpstreamRequestHandle } from '../../../lib/upstreamAI';
 import {
@@ -19,6 +19,27 @@ const isContinuationPlaceholder = (msg?: string) => !!msg && msg.startsWith(CONT
 
 export default withApiHandler({}, {
   POST: async (req: NextApiRequest, res: NextApiResponse) => {
+
+  let clientDisconnected = false;
+  let upstreamHandle: UpstreamRequestHandle | null = null;
+  let stopHeartbeat: () => void = () => {};
+
+  const handleEarlyClose = (label: string) => {
+    // `writableEnded` distinguishes a real disconnect from the socket closing after we finish.
+    if (clientDisconnected || res.writableEnded) return;
+    clientDisconnected = true;
+    console.log(`[Stream] ${label} during streaming`);
+    stopHeartbeat();
+    upstreamHandle?.dispose(label);
+    // A half-written reply is discarded rather than persisted. The user message is
+    // deliberately kept: a disconnect may be a timeout, and Retry needs it to stay.
+  };
+
+  // Attach before any await. Node does not replay 'close' for a listener added later, so a
+  // client that gives up while we are still waiting on the provider would go unnoticed and
+  // the upstream call would run to completion and save a reply the user never saw.
+  res.on('close', () => handleEarlyClose('client disconnect'));
+  req.on('aborted', () => handleEarlyClose('request aborted'));
 
   // Get API key from database settings
   // Basic per-IP rate limiting (Item 10). Limits bursts of generation attempts.
@@ -181,6 +202,12 @@ export default withApiHandler({}, {
     }
     throw err;
   }
+  upstreamHandle = upstream;
+  // The client may already have timed out while we waited for the provider's headers.
+  if (clientDisconnected) {
+    upstream.dispose('client gone before upstream responded');
+    return;
+  }
   const apiRes = upstream.response;
 
   if (!stream) {
@@ -199,6 +226,12 @@ export default withApiHandler({}, {
     }
     // save AI response
     if (data.choices && data.choices[0]?.message?.content) {
+      if (data.choices[0]?.finish_reason === 'length') {
+        return upstreamError(res, {
+          code: 'UPSTREAM_MAX_TOKENS',
+          message: 'The reply was cut short by the max tokens limit and was discarded',
+        });
+      }
       // Strip <think> tags before saving to DB (non-streaming path)
       const contentToSave = isDeepSeekThinking ? stripThinkTags(data.choices[0].message.content) : data.choices[0].message.content;
       if (contentToSave.trim()) {
@@ -305,12 +338,13 @@ export default withApiHandler({}, {
       }
     }, HEARTBEAT_INTERVAL_MS);
   };
-  const stopHeartbeat = () => {
+  const stopHeartbeatTimer = () => {
     if (heartbeatTimer) {
       clearInterval(heartbeatTimer);
       heartbeatTimer = null;
     }
   };
+  stopHeartbeat = stopHeartbeatTimer;
   startHeartbeat();
 
   const reader = apiRes.body?.getReader();
@@ -322,45 +356,12 @@ export default withApiHandler({}, {
   let assistantText = '';
   let assistantThinkingText = '';   // Thinking/reasoning content for logs only
   let streamCompleted = false;
-  let messageSaved = false;            // Indicates content persisted (full or partial)
-  let clientDisconnected = false;
-  let partialSaveInitiated = false;    // Guard to prevent double partial save attempts
+  let messageSaved = false;
   // Optional capture of raw SSE payloads for debugging
   const sseCapture: string[] | null = DEBUG_CAPTURE ? [] : null;
   // Always capture frames for persistence
   const responseFrames: string[] = [];
 
-  // Helper function to save partial message (idempotent)
-  const savePartialMessage = async (reason: string) => {
-    if (partialSaveInitiated || messageSaved) return; // already saving or saved
-    if (!assistantText.trim()) return; // nothing to save
-    // Optimistic lock BEFORE awaiting DB to avoid race between 'close' and 'aborted'
-    partialSaveInitiated = true;
-  console.log(`[Partial] Saving partial message due to ${reason}:`, assistantText.substring(0, 100) + '...');
-    try {
-      await saveAssistantMessage(assistantText);
-      messageSaved = true;
-    } catch (error) {
-      console.error('Error saving partial message:', error);
-    }
-  };
-  
-  const handleEarlyClose = async (label: string) => {
-    if (clientDisconnected) return; // ensure single execution path
-  console.log(`[Stream] ${label} during streaming`);
-    clientDisconnected = true;
-  stopHeartbeat();
-    upstream.dispose(label);
-    if (!streamCompleted) {
-      await savePartialMessage(label);
-    }
-    // The user message is deliberately kept: a disconnect may be a timeout, and the
-    // client needs it to stay for Retry. An explicit Stop deletes it via the API.
-  };
-
-  req.on('close', () => { void handleEarlyClose('client disconnect'); });
-  req.on('aborted', () => { void handleEarlyClose('request aborted'); });
-  
   // Function to check if we can still write to response
   const canWriteToResponse = () => {
     try {
@@ -391,10 +392,9 @@ export default withApiHandler({}, {
         });
       },
       onReadError: async (_err, s) => {
-        // Keep whatever streamed before the failure so it can be persisted
+        // Kept for the response log only — the text itself is not persisted as a message.
         assistantText = s.assistantText;
         assistantThinkingText = s.assistantThinkingText;
-        await savePartialMessage('reader error');
       },
     });
     stopHeartbeat();
@@ -418,23 +418,27 @@ export default withApiHandler({}, {
       } catch {}
     }
     
-    // Save complete message only if we completed normally and haven't saved a partial yet
-    if (!messageSaved && !clientDisconnected && assistantText.trim()) {
+    // Save the reply only when the stream finished with the client still attached.
+    // A `length` finish means the model was cut mid-sentence, so it goes the same way
+    // as any other half-written reply — Continue only makes sense on a complete one.
+    const hitTokenCap = relay.finishReason === 'length';
+    if (hitTokenCap) {
+      console.log(`[Stream] Discarded ${assistantText.length} characters cut short by max_tokens`);
+      if (canWriteToResponse()) {
+        try { res.write(`data: ${JSON.stringify({ status: 'discarded', reason: 'max_tokens' })}\n\n`); } catch {}
+      }
+    } else if (!messageSaved && !clientDisconnected && assistantText.trim()) {
       await saveAssistantMessage(assistantText);
       messageSaved = true;
     } else if (!assistantText.trim() && !clientDisconnected) {
       console.warn('[Stream] Completed normally but assistantText was empty; nothing to save');
-    } else if (clientDisconnected && !messageSaved) {
-      // Fallback (should normally already be saved by disconnect handler)
-      await savePartialMessage('post-disconnect finalize');
+    } else if (clientDisconnected) {
+      console.log(`[Stream] Discarded ${assistantText.length} partial characters after client disconnect`);
     }
     
   } catch (error) {
     console.error('Streaming error:', error);
-    // Save partial message if we have content and haven't completed
-    if (!streamCompleted && !messageSaved) {
-      await savePartialMessage('stream error');
-    }
+    console.log(`[Stream] Discarded ${assistantText.length} partial characters after stream error`);
   }
   
   stopHeartbeat();

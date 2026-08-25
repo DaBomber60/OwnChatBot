@@ -43,13 +43,6 @@ describe('describeChatError', () => {
     expect(describeChatError('UPSTREAM_STALLED', { stallSeconds: 40 }).body).toContain('40 seconds');
   });
 
-  it('reports how much history was dropped', () => {
-    const copy = describeChatError('CONTEXT_TRUNCATED', { sentCount: 12, baseCount: 90 });
-    expect(copy.title).toContain('12');
-    expect(copy.title).toContain('90');
-    expect(copy.body).toMatch(/Max Characters/);
-  });
-
   it('carries raw upstream text in detail, never in the title', () => {
     const copy = describeChatError('UPSTREAM_ERROR', { provider: 'deepseek', detail: 'HTTP 402 insufficient balance' });
     expect(copy.detail).toBe('HTTP 402 insufficient balance');
@@ -65,7 +58,8 @@ describe('describeChatError', () => {
     const codes = [
       'THINKING_ONLY', 'THINKING_TRUNCATED', 'EMPTY_RESPONSE', 'UPSTREAM_DOWN',
       'UPSTREAM_STALLED', 'UPSTREAM_UNPARSEABLE', 'STREAM_INTERRUPTED',
-      'CONTEXT_TRUNCATED', 'MAX_TOKENS', 'UPSTREAM_ERROR',
+      'MAX_TOKENS', 'BAD_API_KEY', 'OUT_OF_CREDIT',
+      'RATE_LIMITED', 'CONTEXT_TOO_LONG', 'PROVIDER_UNAVAILABLE', 'UPSTREAM_ERROR',
     ] as const;
     for (const code of codes) {
       const copy = describeChatError(code, { provider: 'deepseek', maxTokens: 4096 });
@@ -74,6 +68,20 @@ describe('describeChatError', () => {
       expect(copy.title).not.toMatch(/\p{Extended_Pictographic}/u);
       expect(copy.title.length).toBeGreaterThan(0);
       expect(copy.body.length).toBeGreaterThan(0);
+    }
+  });
+
+  it('never leaks an uninterpolated template placeholder', () => {
+    const codes = [
+      'THINKING_ONLY', 'THINKING_TRUNCATED', 'EMPTY_RESPONSE', 'UPSTREAM_DOWN',
+      'UPSTREAM_STALLED', 'UPSTREAM_UNPARSEABLE', 'STREAM_INTERRUPTED',
+      'MAX_TOKENS', 'BAD_API_KEY', 'OUT_OF_CREDIT',
+      'RATE_LIMITED', 'CONTEXT_TOO_LONG', 'PROVIDER_UNAVAILABLE', 'UPSTREAM_ERROR',
+    ] as const;
+    for (const code of codes) {
+      const copy = describeChatError(code, { provider: 'openai', maxTokens: 100, retryAfterSeconds: 5 });
+      expect(copy.title).not.toContain('${');
+      expect(copy.body).not.toContain('${');
     }
   });
 });
@@ -95,9 +103,32 @@ describe('describeServerError', () => {
   });
 
   it('keeps the raw server text for codes it does not recognise', () => {
-    const copy = describeServerError('RATE_LIMITED', { detail: 'Slow down' });
+    const copy = describeServerError('SOMETHING_WE_HAVE_NEVER_SEEN', { detail: 'Slow down' });
     expect(copy.code).toBe('UPSTREAM_ERROR');
     expect(copy.detail).toBe('Slow down');
+  });
+
+  it.each([
+    ['UPSTREAM_AUTH', 'BAD_API_KEY'],
+    ['API_KEY_NOT_CONFIGURED', 'BAD_API_KEY'],
+    ['UPSTREAM_QUOTA', 'OUT_OF_CREDIT'],
+    ['UPSTREAM_RATE_LIMITED', 'RATE_LIMITED'],
+    ['RATE_LIMITED', 'RATE_LIMITED'],
+    ['UPSTREAM_CONTEXT_TOO_LONG', 'CONTEXT_TOO_LONG'],
+    ['UPSTREAM_UNAVAILABLE', 'PROVIDER_UNAVAILABLE'],
+    ['UPSTREAM_ABORTED', 'UPSTREAM_DOWN'],
+  ])('maps server code %s to %s', (serverCode, expected) => {
+    expect(describeServerError(serverCode).code).toBe(expected);
+  });
+
+  it('tells the user how long to wait when the provider says so', () => {
+    const copy = describeServerError('UPSTREAM_RATE_LIMITED', { retryAfterSeconds: 30 });
+    expect(copy.body).toContain('30');
+  });
+
+  it('still reads sensibly with no retry-after', () => {
+    const copy = describeServerError('UPSTREAM_RATE_LIMITED');
+    expect(copy.body).not.toMatch(/undefined|NaN/);
   });
 
   it('handles a missing code', () => {

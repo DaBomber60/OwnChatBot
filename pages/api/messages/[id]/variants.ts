@@ -1,6 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import prisma from '../../../../lib/prisma';
-import { badRequest, conflict, notFound, serverError, tooManyRequests, validationError } from '../../../../lib/apiErrors';
+import { badRequest, conflict, notFound, serverError, tooManyRequests, validationError, upstreamError } from '../../../../lib/apiErrors';
 import { limiters, clientIp } from '../../../../lib/rateLimit';
 import { enforceBodySize } from '../../../../lib/bodyLimit';
 import { schemas, validateBody } from '../../../../lib/validate';
@@ -178,6 +178,23 @@ export default withApiHandler({ parseId: true }, {
       await persistRequestWithMeta(message.session.id, requestBody, prompt, truncationLimit);
 
       let upstream: UpstreamRequestHandle;
+      let clientDisconnected = false;
+      let upstreamHandle: UpstreamRequestHandle | null = null;
+
+      const handleEarlyClose = (label: string) => {
+        // `writableEnded` distinguishes a real disconnect from the socket closing after we finish.
+        if (clientDisconnected || res.writableEnded) return;
+        clientDisconnected = true;
+        console.log(`[Variant] ${label} during variant generation`);
+        upstreamHandle?.dispose(label);
+      };
+
+      // Attach before the await: Node will not replay 'close' for a listener added afterwards,
+      // so a client that times out while we wait on the provider would otherwise go unnoticed
+      // and the upstream call would run to completion.
+      res.on('close', () => handleEarlyClose('client disconnect'));
+      req.on('aborted', () => handleEarlyClose('request aborted'));
+
       try {
         upstream = await startUpstreamRequest(aiCfg, { body: requestBody, streaming: stream, logLabel: '[Variant]' });
       } catch (err) {
@@ -185,6 +202,12 @@ export default withApiHandler({ parseId: true }, {
           return serverError(res, 'Upstream model request aborted', 'UPSTREAM_ABORTED');
         }
         throw err;
+      }
+      upstreamHandle = upstream;
+      // The client may already have timed out while we waited for the provider's headers.
+      if (clientDisconnected) {
+        upstream.dispose('client gone before upstream responded');
+        return;
       }
       const response = upstream.response;
       
@@ -200,6 +223,13 @@ export default withApiHandler({ parseId: true }, {
           return forwardUpstreamError(res, response.status, data, rawText, '[Variant][non-stream]');
         }
         const newContent = extractUpstreamContent(data, isDeepSeekThinking);
+
+        if (data?.choices?.[0]?.finish_reason === 'length') {
+          return upstreamError(res, {
+            code: 'UPSTREAM_MAX_TOKENS',
+            message: 'The variant was cut short by the max tokens limit and was discarded',
+          });
+        }
 
         if (!newContent) {
           if (upstreamReasonedWithoutReplying(data, isDeepSeekThinking)) {
@@ -289,21 +319,9 @@ export default withApiHandler({ parseId: true }, {
   let assistantText = '';
   let assistantThinkingText = '';   // Thinking/reasoning content for logs only
   let responseFrames: string[] = [];
-      let clientDisconnected = false;
       let streamCompletedNaturally = false;
-      
-      // Handle client disconnect — also drop the upstream call so it can't keep streaming
-      req.on('close', () => {
-  console.log(`[Variant] Client disconnected during variant streaming`);
-        clientDisconnected = true;
-        upstream.dispose('client disconnect');
-      });
-      
-      req.on('aborted', () => {
-  console.log(`[Variant] Request aborted during variant streaming`);
-        clientDisconnected = true;
-        upstream.dispose('request aborted');
-      });
+      let streamErrored = false;
+      let hitTokenCap = false;
       
       // Function to check if we can still write to response
       const canWriteToResponse = () => {
@@ -322,17 +340,26 @@ export default withApiHandler({ parseId: true }, {
           canWrite: canWriteToResponse,
           logLabel: '[Variant]',
           onChunk: () => upstream.keepAlive(),
+          // The throw below loses `relay`, so grab what streamed before the failure.
+          onReadError: (_err, state) => {
+            assistantText = state.assistantText;
+            assistantThinkingText = state.assistantThinkingText;
+            responseFrames = state.frames;
+          },
         });
         assistantText = relay.assistantText;
         assistantThinkingText = relay.assistantThinkingText;
         responseFrames = relay.frames;
         if (relay.writeFailed) clientDisconnected = true;
+        // A `length` finish means a half-sentence, which we discard like any other partial
+        if (relay.finishReason === 'length') hitTokenCap = true;
         // Only count as a natural completion if [DONE] arrived while the client was still attached
         streamCompletedNaturally = relay.sawDone && !clientDisconnected;
       } catch (error) {
   console.error(`[Variant] Streaming error during variant generation:`, error);
         // Mark as not completed naturally due to error
         streamCompletedNaturally = false;
+        streamErrored = true;
       } finally {
         upstream.dispose('stream finished');
         try { await reader.cancel(); } catch {}
@@ -359,7 +386,7 @@ export default withApiHandler({ parseId: true }, {
         if (canWriteToResponse()) {
           res.write(`data: ${JSON.stringify({ status: "variant_not_saved", reason: "client_disconnected", message: "Variant generation was stopped and not saved" })}\n\n`);
         }
-      } else if (streamCompletedNaturally && assistantText && assistantText.length > 0) {
+      } else if (streamCompletedNaturally && !hitTokenCap && assistantText && assistantText.trim().length > 0) {
         // Stream completed successfully AND client didn't disconnect - save the variant
         // assistantText is already clean (thinking content stored separately)
         const variantContent = assistantText;
@@ -407,7 +434,11 @@ export default withApiHandler({ parseId: true }, {
         
         // Send a final status message to inform frontend that no variant was saved
         if (canWriteToResponse()) {
-          res.write(`data: ${JSON.stringify({ status: "variant_not_saved", reason: "no_content", message: "No content to save" })}\n\n`);
+          if (hitTokenCap) {
+            res.write(`data: ${JSON.stringify({ status: 'discarded', reason: 'max_tokens' })}\n\n`);
+          }
+          const reason = hitTokenCap ? 'max_tokens' : streamErrored ? 'stream_error' : upstream.timedOut ? 'timeout' : 'no_content';
+          res.write(`data: ${JSON.stringify({ status: "variant_not_saved", reason, message: "Partial variant discarded" })}\n\n`);
         }
       }
       

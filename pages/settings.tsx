@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useReducer, useMemo } from 'react';
 import UserPromptsManager from '../components/UserPromptsManager';
 import { Modal } from '../components/Modal';
+import { useToast } from '../components/ToastProvider';
 import { DEFAULT_USER_PROMPT_TITLE } from '../lib/defaultUserPrompt';
 import useSWR from 'swr';
 import { useRouter } from 'next/router';
@@ -263,13 +264,7 @@ export default function SettingsPage() {
   );
   const purgeAction = PURGE_ACTIONS.find(a => a.target === purgeTarget) ?? null;
 
-  // Toast notification state (standalone)
-  const [toast, setToast] = useState<null | { message: string; type?: 'success' | 'error' }>(null);
-
-  const showToast = (message: string, type: 'success' | 'error' = 'success') => {
-    setToast({ message, type });
-    setTimeout(() => setToast(null), 3000);
-  };
+  const { showToast } = useToast();
   const router = useRouter();
 
   const closeAccountModal = () => {
@@ -805,13 +800,6 @@ export default function SettingsPage() {
 
   return (
     <>
-      {toast && (
-        <div className="toast-container">
-          <div className={`toast ${toast.type === 'error' ? 'toast-error' : 'toast-success'}`}>
-            {toast.message}
-          </div>
-        </div>
-      )}
       <Head>
         <title>Settings - OwnChatBot Configuration</title>
         <meta name="description" content="Configure your AI API settings, manage user prompts, and update security settings." />

@@ -7,6 +7,7 @@ import { renderMultiline } from '../../components/RenderMultiline';
 import { useClickOutside } from '../../hooks/useClickOutside';
 import { PageHeader } from '../../components/PageHeader';
 import { Modal } from '../../components/Modal';
+import { useToast } from '../../components/ToastProvider';
 import { DropdownMenu, DropdownMenuItem, DropdownMenuDivider, ConfirmDeleteItem } from '../../components/DropdownMenu';
 
 // Utility to get preview text for persona cards
@@ -19,6 +20,7 @@ function getPersonaPreview(persona: Persona): { text: string; label: string } | 
 }
 
 export default function PersonasPage() {
+  const { showToast } = useToast();
   const { data: personas, error, mutate } = useSWR<Persona[]>('/api/personas', fetcher);
   const [name, setName] = useState('');
   const [profileName, setProfileName] = useState('');
@@ -79,7 +81,7 @@ export default function PersonasPage() {
       exitSelectMode();
     } catch (err) {
       console.error('Error deleting personas:', err);
-      alert('Failed to delete the selected personas. Please try again.');
+      showToast('Could not delete the selected personas. Please try again.', 'error');
     } finally {
       setBulkDeleting(false);
     }

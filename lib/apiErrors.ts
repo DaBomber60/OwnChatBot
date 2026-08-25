@@ -66,6 +66,73 @@ export function apiKeyNotConfigured(res: NextApiResponse) {
   return unauthorized(res, 'API key not configured in settings', 'API_KEY_NOT_CONFIGURED');
 }
 
+/**
+ * Codes describing an upstream AI provider failure. The client switches on these to pick
+ * its wording, so treat them as a wire contract — don't rename one without updating
+ * `describeServerError` in lib/chat/errorCopy.ts.
+ */
+export type UpstreamErrorCode =
+  | 'UPSTREAM_AUTH'
+  | 'UPSTREAM_QUOTA'
+  | 'UPSTREAM_RATE_LIMITED'
+  | 'UPSTREAM_CONTEXT_TOO_LONG'
+  | 'UPSTREAM_UNAVAILABLE'
+  | 'UPSTREAM_BAD_REQUEST'
+  | 'UPSTREAM_TIMEOUT'
+  | 'UPSTREAM_ABORTED'
+  | 'UPSTREAM_MAX_TOKENS'
+  | 'UPSTREAM_THINKING_ONLY'
+  | 'UPSTREAM_NO_CONTENT'
+  | 'UPSTREAM_UNPARSEABLE'
+  | 'UPSTREAM_API_ERROR';
+
+export interface UpstreamErrorOptions {
+  code: UpstreamErrorCode;
+  message: string;
+  /** Status the provider gave us, preserved for debugging. Not our own response status. */
+  upstreamStatus?: number;
+  /** Status to send the client. Defaults to 502 — the failure is upstream, not the caller's. */
+  status?: number;
+  retryAfterSeconds?: number;
+  /** Route-specific fields merged into the response alongside the envelope. */
+  extra?: Record<string, any>;
+}
+
+/**
+ * The single response shape for every upstream AI failure:
+ * `{ error, code, upstreamStatus?, retryAfter? }` — flat, matching the rest of this module.
+ */
+export function upstreamError(res: NextApiResponse, opts: UpstreamErrorOptions) {
+  const { code, message, upstreamStatus, status = 502, retryAfterSeconds, extra } = opts;
+  if (retryAfterSeconds) {
+    res.setHeader('Retry-After', String(Math.max(0, Math.ceil(retryAfterSeconds))));
+  }
+  return send(res, status, code, message, {
+    ...(upstreamStatus ? { upstreamStatus } : {}),
+    ...(retryAfterSeconds ? { retryAfter: Math.max(0, Math.ceil(retryAfterSeconds)) } : {}),
+    ...(extra || {}),
+  });
+}
+
+/** Maps a provider HTTP status (plus its message) onto a semantic code. */
+export function classifyUpstreamStatus(status: number, message = ''): UpstreamErrorCode {
+  if (status === 401 || status === 403) return 'UPSTREAM_AUTH';
+  if (status === 402) return 'UPSTREAM_QUOTA';
+  if (status === 429) {
+    // Providers reuse 429 for "out of credit" as well as genuine throttling.
+    return /quota|billing|credit|balance/i.test(message) ? 'UPSTREAM_QUOTA' : 'UPSTREAM_RATE_LIMITED';
+  }
+  if (status >= 500) return 'UPSTREAM_UNAVAILABLE';
+  if (status >= 400) {
+    if (/context length|context_length|too many tokens|maximum context|reduce the length/i.test(message)) {
+      return 'UPSTREAM_CONTEXT_TOO_LONG';
+    }
+    if (/insufficient balance|insufficient_quota|quota/i.test(message)) return 'UPSTREAM_QUOTA';
+    return 'UPSTREAM_BAD_REQUEST';
+  }
+  return 'UPSTREAM_API_ERROR';
+}
+
 // Generic responder factory if we want to unify later
 export const apiError = {
   badRequest,
@@ -80,4 +147,5 @@ export const apiError = {
   failedDependency,
   payloadTooLarge,
   apiKeyNotConfigured,
+  upstreamError,
 };

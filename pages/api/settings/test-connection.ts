@@ -1,8 +1,9 @@
 import { getAIConfig, buildDeepSeekThinking } from '../../../lib/aiProvider';
 import type { AIConfig } from '../../../lib/aiProvider';
-import { callUpstreamAI } from '../../../lib/upstreamAI';
+import { callUpstreamAI, upstreamTimeoutMs } from '../../../lib/upstreamAI';
 import { withApiHandler } from '../../../lib/withApiHandler';
-import { serverError, apiKeyNotConfigured } from '../../../lib/apiErrors';
+import { apiKeyNotConfigured, upstreamError, classifyUpstreamStatus } from '../../../lib/apiErrors';
+import { redactString } from '../../../lib/redact';
 
 export default withApiHandler({}, {
   POST: async (_req, res) => {
@@ -25,27 +26,24 @@ export default withApiHandler({}, {
     };
 
     const start = Date.now();
+    const timeoutMs = upstreamTimeoutMs(cfg as AIConfig, false);
     try {
-      const controller = new AbortController();
-      // Hard 15-second server-side timeout
-      const timeout = setTimeout(() => controller.abort(), 15_000);
-
       const upstream = await callUpstreamAI({
         url: cfg.url,
         apiKey: cfg.apiKey,
         body,
-        signal: controller.signal,
+        timeoutMs,
       });
-      clearTimeout(timeout);
 
       const latencyMs = Date.now() - start;
 
       if (!upstream.ok) {
-        return res.status(502).json({
-          ok: false,
-          latencyMs,
-          provider: cfg.provider,
-          error: upstream.data?.error?.message || upstream.rawText || 'Upstream error',
+        const message = redactString(upstream.data?.error?.message || upstream.rawText || 'Upstream error');
+        return upstreamError(res, {
+          code: classifyUpstreamStatus(upstream.status, message),
+          message,
+          upstreamStatus: upstream.status,
+          extra: { ok: false, latencyMs, provider: cfg.provider },
         });
       }
 
@@ -61,15 +59,15 @@ export default withApiHandler({}, {
       });
     } catch (err: any) {
       const latencyMs = Date.now() - start;
-      if (err?.name === 'AbortError') {
-        return res.status(504).json({
-          ok: false,
-          latencyMs,
-          provider: cfg.provider,
-          error: 'Request timed out after 15 seconds',
-        });
-      }
-      return serverError(res, err);
+      const timedOut = err?.name === 'AbortError' || err?.name === 'TimeoutError';
+      return upstreamError(res, {
+        code: timedOut ? 'UPSTREAM_TIMEOUT' : 'UPSTREAM_API_ERROR',
+        message: timedOut
+          ? `Request timed out after ${Math.round(timeoutMs / 1000)} seconds`
+          : redactString(err?.message || 'Connection test failed'),
+        status: timedOut ? 504 : 502,
+        extra: { ok: false, latencyMs, provider: cfg.provider },
+      });
     }
   },
 });

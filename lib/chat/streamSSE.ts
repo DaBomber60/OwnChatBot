@@ -10,6 +10,7 @@ export async function readSSEStream(
   body: ReadableStream<Uint8Array>,
   onContent: (accumulated: string, delta: string) => void,
   onThinking?: (isThinking: boolean) => void,
+  onStatus?: (status: string, payload: any) => void,
 ): Promise<string> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
@@ -29,6 +30,10 @@ export async function readSSEStream(
       // Handle thinking state frames
       if (typeof parsed.thinking === 'boolean') {
         if (onThinking) onThinking(parsed.thinking);
+        return false;
+      }
+      if (typeof parsed.status === 'string') {
+        if (onStatus) onStatus(parsed.status, parsed);
         return false;
       }
       const content: string = parsed.content || '';
@@ -85,7 +90,7 @@ export function isSSEResponse(res: Response): boolean {
 import type React from 'react';
 import { fetchChatSettings, type ChatSettings } from './chatSettings';
 import { failureTimeoutMs, STREAM_TIMEOUT_MULTIPLIER } from '../aiProvider';
-import { safeJson, extractErrorFromResponse, sanitizeErrorMessage, extractUsefulError } from './errorUtils';
+import { safeJson, extractErrorFromResponse, toErrorDetail } from './errorUtils';
 import { describeChatError, describeServerError, type ChatErrorCode, type ChatErrorContext, type ChatErrorCopy } from './errorCopy';
 
 /** Options for performStreamingRequest. Each caller provides its specific callbacks. */
@@ -142,6 +147,8 @@ export interface StreamingRequestResult {
   sawThinking: boolean;
   /** How long the model spent in thinking mode, in milliseconds. */
   thinkingMs: number;
+  /** Set when the server threw the reply away, e.g. `max_tokens`. */
+  discardedReason?: string;
 }
 
 /**
@@ -159,15 +166,26 @@ export async function performStreamingRequest(opts: StreamingRequestOpts): Promi
     skipSettingsInBody,
   } = opts;
 
+  // Created before the settings fetch below: the caller already shows a Stop button, and
+  // until this is assigned there is nothing for it to abort.
+  const abortController = new AbortController();
+  abortControllerRef.current = abortController;
+
   // 1. Fetch settings (or use provided)
   const settings = opts.chatSettings ?? await fetchChatSettings();
   const { stream: streamSetting } = settings;
 
   let errorShown = false;
   let timedOut = false;
+  let userAborted = abortController.signal.aborted;
   let sawThinking = false;
   let thinkingStartedAt = 0;
   let thinkingEndedAt = 0;
+  let discardedReason: string | undefined;
+
+  const trackStatus = (status: string, payload: any) => {
+    if (status === 'discarded') discardedReason = payload?.reason || 'unknown';
+  };
 
   // The model can still be thinking when the stream dies, so fall back to "now".
   const thinkingElapsed = () =>
@@ -199,14 +217,15 @@ export async function performStreamingRequest(opts: StreamingRequestOpts): Promi
     errorShown,
     sawThinking,
     thinkingMs: thinkingElapsed(),
+    discardedReason,
     ...over,
   });
 
-  // 2. Abort controller
-  let abortController: AbortController | undefined;
-  if (streamSetting) {
-    abortController = new AbortController();
-    abortControllerRef.current = abortController;
+  // 2. Bail if Stop was pressed while the settings were loading
+  if (userAborted) {
+    abortControllerRef.current = null;
+    if (onAbort) onAbort();
+    return result({ wasAborted: true });
   }
 
   // 3. Build request body
@@ -222,32 +241,52 @@ export async function performStreamingRequest(opts: StreamingRequestOpts): Promi
 
   // 4. Fetch
   const timeoutMs = failureTimeoutMs(settings.apiFailureTimeout, false);
+  // Non-streaming gets its deadline from our own timer rather than AbortSignal.timeout, so the
+  // same controller serves both the deadline and the user's Stop button.
+  let deadlineTimer: ReturnType<typeof setTimeout> | null = null;
+  if (!streamSetting) {
+    deadlineTimer = setTimeout(() => {
+      timedOut = true;
+      abortController.abort();
+    }, timeoutMs);
+  }
   const res = await (async () => {
     try {
       return await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(requestBody),
-        ...(streamSetting && abortController ? { signal: abortController.signal } : {}),
-        ...(!streamSetting ? { signal: AbortSignal.timeout(timeoutMs) } : {}),
+        signal: abortController.signal,
       });
     } catch (err: any) {
-      if (!streamSetting && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
-        timedOut = true;
+      if (err?.name === 'TimeoutError' || err?.name === 'AbortError') {
+        // Nothing else can abort this first leg, so an abort without our deadline is a Stop.
+        if (!timedOut) {
+          userAborted = true;
+          return null;
+        }
         await fail('UPSTREAM_DOWN', { timeoutSeconds: settings.apiFailureTimeout });
         return null;
       }
       throw err;
+    } finally {
+      if (deadlineTimer) { clearTimeout(deadlineTimer); deadlineTimer = null; }
     }
   })();
-  if (!res) return result();
+  if (!res) {
+    abortControllerRef.current = null;
+    if (userAborted && onAbort) onAbort();
+    return result({ wasAborted: userAborted });
+  }
 
   // 5. Non-OK + non-SSE → immediate error
   if (!res.ok && (!streamSetting || !res.body || !isSSEResponse(res))) {
     const errData = await safeJson(res);
+    const headerRetry = Number(res.headers.get('retry-after'));
     await reportError(describeServerError(errData?.code, {
       provider: settings.aiProvider,
       maxTokens: settings.maxTokens,
+      retryAfterSeconds: errData?.retryAfter ?? (Number.isFinite(headerRetry) ? headerRetry : undefined),
       detail: extractErrorFromResponse(errData, res.statusText),
     }));
     return result();
@@ -292,7 +331,7 @@ export async function performStreamingRequest(opts: StreamingRequestOpts): Promi
         firstContentReceived = true;
         armStallTimer(idleMs);
         onStreamChunk(accumulated);
-      }, trackThinking);
+      }, trackThinking, trackStatus);
       clearStallTimer();
       // The stream can close cleanly in the same tick our timer fires; still a timeout.
       if (timedOut) {
@@ -320,7 +359,7 @@ export async function performStreamingRequest(opts: StreamingRequestOpts): Promi
           }
         } else {
           await fail('UPSTREAM_ERROR', {
-            detail: sanitizeErrorMessage(extractUsefulError(err?.message || 'Streaming error')),
+            detail: toErrorDetail(err?.message || 'Streaming error'),
           });
         }
       }

@@ -2,6 +2,7 @@ import type { NextApiRequest, NextApiResponse, NextApiHandler } from 'next';
 import { requireAuth } from './apiAuth';
 import { badRequest, methodNotAllowed, serverError } from './apiErrors';
 import { parseId } from './validate';
+import { redactString } from './redact';
 
 type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'OPTIONS';
 
@@ -64,7 +65,7 @@ export function withApiHandler(
     try {
       await handler(req, res, ctx);
     } catch (error) {
-      console.error(`[${req.method} ${req.url}] Unhandled error:`, error);
+      console.error(`[${req.method} ${req.url}] Unhandled error:`, redactString(error instanceof Error ? error.stack || error.message : error));
       if (!res.headersSent) {
         return serverError(res);
       }

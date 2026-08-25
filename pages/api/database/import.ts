@@ -441,6 +441,7 @@ export default withApiHandler({}, {
               description: session.description,
               lastSummary: session.lastSummary,
               notes: session.notes,
+              contextWarnedAt: session.contextWarnedAt ? new Date(session.contextWarnedAt) : null,
               createdAt,
               updatedAt: new Date(session.updatedAt),
               messages: {

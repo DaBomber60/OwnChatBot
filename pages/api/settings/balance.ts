@@ -1,6 +1,9 @@
 import { getAIConfig } from '../../../lib/aiProvider';
+import type { AIConfig } from '../../../lib/aiProvider';
+import { upstreamTimeoutMs } from '../../../lib/upstreamAI';
 import { withApiHandler } from '../../../lib/withApiHandler';
-import { apiKeyNotConfigured } from '../../../lib/apiErrors';
+import { apiKeyNotConfigured, badRequest, upstreamError, classifyUpstreamStatus } from '../../../lib/apiErrors';
+import { redactString } from '../../../lib/redact';
 
 export default withApiHandler({}, {
   GET: async (_req, res) => {
@@ -8,37 +11,40 @@ export default withApiHandler({}, {
     if ('error' in cfg) return apiKeyNotConfigured(res);
 
     if (cfg.provider !== 'deepseek') {
-      return res.status(400).json({ error: 'Balance check is only available for the DeepSeek provider' });
+      return badRequest(res, 'Balance check is only available for the DeepSeek provider', 'PROVIDER_UNSUPPORTED');
     }
 
+    const timeoutMs = upstreamTimeoutMs(cfg as AIConfig, false);
     try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 10_000);
-
+      // Not a completions call, so it can't go through callUpstreamAI.
       const upstream = await fetch('https://api.deepseek.com/user/balance', {
         method: 'GET',
         headers: {
           'Accept': 'application/json',
           'Authorization': `Bearer ${cfg.apiKey}`,
         },
-        signal: controller.signal,
+        signal: AbortSignal.timeout(timeoutMs),
       });
-      clearTimeout(timeout);
 
-      const data = await upstream.json();
+      const data = await upstream.json().catch(() => undefined);
 
       if (!upstream.ok) {
-        return res.status(502).json({
-          error: data?.error?.message || data?.detail || 'Failed to fetch balance',
+        const message = redactString(data?.error?.message || data?.detail || 'Failed to fetch balance');
+        return upstreamError(res, {
+          code: classifyUpstreamStatus(upstream.status, message),
+          message,
+          upstreamStatus: upstream.status,
         });
       }
 
       return res.status(200).json(data);
     } catch (err: any) {
-      if (err?.name === 'AbortError') {
-        return res.status(504).json({ error: 'Balance request timed out' });
-      }
-      return res.status(500).json({ error: 'Failed to fetch balance' });
+      const timedOut = err?.name === 'AbortError' || err?.name === 'TimeoutError';
+      return upstreamError(res, {
+        code: timedOut ? 'UPSTREAM_TIMEOUT' : 'UPSTREAM_API_ERROR',
+        message: timedOut ? 'Balance request timed out' : 'Failed to fetch balance',
+        status: timedOut ? 504 : 502,
+      });
     }
   },
 });

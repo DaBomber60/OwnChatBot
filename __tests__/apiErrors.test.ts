@@ -11,6 +11,8 @@ import {
   failedDependency,
   payloadTooLarge,
   apiKeyNotConfigured,
+  upstreamError,
+  classifyUpstreamStatus,
 } from '../lib/apiErrors';
 
 /** Create a minimal mock NextApiResponse for testing */
@@ -199,6 +201,65 @@ describe('apiErrors', () => {
       expect(res._status).toBe(401);
       expect(res._body.error).toContain('API key not configured');
       expect(res._body.code).toBe('API_KEY_NOT_CONFIGURED');
+    });
+  });
+
+  describe('upstreamError', () => {
+    it('sends the flat envelope every LLM route shares', () => {
+      const res = mockRes();
+      upstreamError(res, { code: 'UPSTREAM_AUTH', message: 'Invalid key', upstreamStatus: 401 });
+      expect(res._status).toBe(502);
+      expect(res._body).toEqual({ error: 'Invalid key', code: 'UPSTREAM_AUTH', upstreamStatus: 401 });
+    });
+
+    it('keeps `error` a string and `code` top-level, never nested', () => {
+      const res = mockRes();
+      upstreamError(res, { code: 'UPSTREAM_UNAVAILABLE', message: 'boom', upstreamStatus: 503 });
+      expect(typeof res._body.error).toBe('string');
+      expect(res._body.code).toBe('UPSTREAM_UNAVAILABLE');
+      expect(res._body.upstream).toBeUndefined();
+    });
+
+    it('sets Retry-After as both header and body field', () => {
+      const res = mockRes();
+      upstreamError(res, { code: 'UPSTREAM_RATE_LIMITED', message: 'slow down', retryAfterSeconds: 12.4 });
+      expect(res._headers['Retry-After']).toBe('13');
+      expect(res._body.retryAfter).toBe(13);
+    });
+
+    it('merges route-specific extras alongside the envelope', () => {
+      const res = mockRes();
+      upstreamError(res, {
+        code: 'UPSTREAM_TIMEOUT',
+        message: 'timed out',
+        status: 504,
+        extra: { ok: false, latencyMs: 900, provider: 'deepseek' },
+      });
+      expect(res._status).toBe(504);
+      expect(res._body).toMatchObject({ error: 'timed out', code: 'UPSTREAM_TIMEOUT', ok: false, provider: 'deepseek' });
+    });
+
+    it('omits optional fields when absent', () => {
+      const res = mockRes();
+      upstreamError(res, { code: 'UPSTREAM_NO_CONTENT', message: 'nothing' });
+      expect(res._body).toEqual({ error: 'nothing', code: 'UPSTREAM_NO_CONTENT' });
+    });
+  });
+
+  describe('classifyUpstreamStatus', () => {
+    it.each([
+      [401, '', 'UPSTREAM_AUTH'],
+      [403, '', 'UPSTREAM_AUTH'],
+      [402, '', 'UPSTREAM_QUOTA'],
+      [429, 'Too many requests', 'UPSTREAM_RATE_LIMITED'],
+      [429, 'You exceeded your current quota', 'UPSTREAM_QUOTA'],
+      [500, '', 'UPSTREAM_UNAVAILABLE'],
+      [503, '', 'UPSTREAM_UNAVAILABLE'],
+      [400, 'Insufficient Balance', 'UPSTREAM_QUOTA'],
+      [400, 'This model maximum context length is 8192 tokens', 'UPSTREAM_CONTEXT_TOO_LONG'],
+      [400, 'unsupported parameter', 'UPSTREAM_BAD_REQUEST'],
+    ])('maps %i (%s) to %s', (status, message, expected) => {
+      expect(classifyUpstreamStatus(status as number, message as string)).toBe(expected);
     });
   });
 });

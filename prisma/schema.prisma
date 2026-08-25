@@ -66,6 +66,7 @@ model ChatSession {
   description     String?
   lastSummary     Int?
   notes           String?
+  contextWarnedAt DateTime?
   messages        ChatMessage[]
   character       Character     @relation(fields: [characterId], references: [id], onDelete: Cascade)
   persona         Persona       @relation(fields: [personaId], references: [id], onDelete: Cascade)

@@ -39,6 +39,8 @@ export interface SSERelayState {
   assistantThinkingText: string;
   /** Raw upstream payloads, in order. */
   frames: string[];
+  /** Last `finish_reason` seen; `length` means the model hit the token ceiling. */
+  finishReason?: string;
 }
 
 export interface SSERelayResult extends SSERelayState {
@@ -193,6 +195,10 @@ export async function relayUpstreamSSE(opts: SSERelayOptions): Promise<SSERelayR
 
       state.frames.push(payload);
       if (onFrame) onFrame(payload);
+
+      // Read before the `!delta` bail below — the frame carrying finish_reason has no content.
+      const finishReason: string | undefined = parsed.choices?.[0]?.finish_reason;
+      if (finishReason) state.finishReason = finishReason;
 
       const delta: string = parsed.choices?.[0]?.delta?.content || '';
       const reasoningDelta: string = parsed.choices?.[0]?.delta?.reasoning_content || '';

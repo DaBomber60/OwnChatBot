@@ -3,11 +3,12 @@
 // summary is part of the system prompt, and the wording of the instruction.
 import type { NextApiResponse } from 'next';
 import prisma from './prisma';
-import { notFound, serverError } from './apiErrors';
+import { notFound, serverError, upstreamError, classifyUpstreamStatus } from './apiErrors';
 import { buildSystemPrompt, replacePlaceholders } from './systemPrompt';
 import { truncateMessagesIfNeeded, injectTruncationNote } from './messageUtils';
 import { callUpstreamAI, upstreamTimeoutMs } from './upstreamAI';
 import { resolveAIConfig, buildUpstreamBody, type PromptMessage } from './aiRequest';
+import { redactString } from './redact';
 
 export interface SummaryRunResult {
   /** Text produced by this run. */
@@ -103,18 +104,27 @@ export async function runSummary(
   });
 
   if (!upstream) {
-    serverError(res, `Summary request timed out after ${cfg.apiFailureTimeout}s`, 'UPSTREAM_TIMEOUT');
+    upstreamError(res, {
+      code: 'UPSTREAM_TIMEOUT',
+      message: `Summary request timed out after ${cfg.apiFailureTimeout}s`,
+      status: 504,
+    });
     return null;
   }
 
   if (!upstream.ok) {
-    serverError(res, `API request failed: ${upstream.rawText || 'Unknown error'}`, 'UPSTREAM_API_ERROR');
+    const message = redactString(upstream.data?.error?.message || upstream.rawText || 'Unknown error');
+    upstreamError(res, {
+      code: classifyUpstreamStatus(upstream.status, message),
+      message,
+      upstreamStatus: upstream.status,
+    });
     return null;
   }
 
   const generated: unknown = upstream.data?.choices?.[0]?.message?.content;
   if (typeof generated !== 'string' || !generated.trim()) {
-    serverError(res, 'Invalid API response format', 'INVALID_UPSTREAM_FORMAT');
+    upstreamError(res, { code: 'UPSTREAM_NO_CONTENT', message: 'The model returned no summary text' });
     return null;
   }
 
