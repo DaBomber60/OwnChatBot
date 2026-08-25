@@ -83,9 +83,10 @@ export function isSSEResponse(res: Response): boolean {
 // ---------------------------------------------------------------------------
 
 import type React from 'react';
-import { fetchChatSettings, type ChatSettings, PROVIDER_DISPLAY_NAMES } from './chatSettings';
+import { fetchChatSettings, type ChatSettings } from './chatSettings';
 import { failureTimeoutMs, STREAM_TIMEOUT_MULTIPLIER } from '../aiProvider';
 import { safeJson, extractErrorFromResponse, sanitizeErrorMessage, extractUsefulError } from './errorUtils';
+import { describeChatError, describeServerError, type ChatErrorCode, type ChatErrorContext, type ChatErrorCopy } from './errorCopy';
 
 /** Options for performStreamingRequest. Each caller provides its specific callbacks. */
 export interface StreamingRequestOpts {
@@ -108,7 +109,7 @@ export interface StreamingRequestOpts {
 
   // --- Error handling ---
   /** Called when an error should be shown to the user. Awaited before the request resolves. */
-  onError: (message: string) => void | Promise<void>;
+  onError: (error: ChatErrorCopy) => void | Promise<void>;
   /** Called on AbortError (user cancelled). Return value controls whether normal cleanup runs. */
   onAbort?: () => void;
   /**
@@ -137,6 +138,10 @@ export interface StreamingRequestResult {
   timedOut: boolean;
   /** Whether `onError` was already invoked (so callers don't double-report). */
   errorShown: boolean;
+  /** Whether the model streamed any reasoning, even if it never produced a visible reply. */
+  sawThinking: boolean;
+  /** How long the model spent in thinking mode, in milliseconds. */
+  thinkingMs: number;
 }
 
 /**
@@ -160,10 +165,31 @@ export async function performStreamingRequest(opts: StreamingRequestOpts): Promi
 
   let errorShown = false;
   let timedOut = false;
-  const reportError = async (message: string) => {
-    errorShown = true;
-    await onError(message);
+  let sawThinking = false;
+  let thinkingStartedAt = 0;
+  let thinkingEndedAt = 0;
+
+  // The model can still be thinking when the stream dies, so fall back to "now".
+  const thinkingElapsed = () =>
+    thinkingStartedAt ? (thinkingEndedAt || Date.now()) - thinkingStartedAt : 0;
+
+  const trackThinking = (isThinking: boolean) => {
+    if (isThinking) {
+      if (!sawThinking) { sawThinking = true; thinkingStartedAt = Date.now(); }
+      thinkingEndedAt = 0;
+    } else if (thinkingStartedAt) {
+      thinkingEndedAt = Date.now();
+    }
+    if (onThinking) onThinking(isThinking);
   };
+
+  const reportError = async (error: ChatErrorCopy) => {
+    errorShown = true;
+    await onError(error);
+  };
+  const fail = (code: ChatErrorCode, ctx: ChatErrorContext = {}) =>
+    reportError(describeChatError(code, { provider: settings.aiProvider, ...ctx }));
+
   const result = (over: Partial<StreamingRequestResult> = {}): StreamingRequestResult => ({
     settings,
     streamedContent: '',
@@ -171,6 +197,8 @@ export async function performStreamingRequest(opts: StreamingRequestOpts): Promi
     wasAborted: false,
     timedOut,
     errorShown,
+    sawThinking,
+    thinkingMs: thinkingElapsed(),
     ...over,
   });
 
@@ -206,8 +234,7 @@ export async function performStreamingRequest(opts: StreamingRequestOpts): Promi
     } catch (err: any) {
       if (!streamSetting && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
         timedOut = true;
-        const providerName = PROVIDER_DISPLAY_NAMES[settings.aiProvider] || settings.aiProvider;
-        await reportError(`OwnChatBot is working, but the ${providerName} API is down.\n\nNo response was received within ${settings.apiFailureTimeout} seconds. You can adjust this timeout in Settings.`);
+        await fail('UPSTREAM_DOWN', { timeoutSeconds: settings.apiFailureTimeout });
         return null;
       }
       throw err;
@@ -218,7 +245,11 @@ export async function performStreamingRequest(opts: StreamingRequestOpts): Promi
   // 5. Non-OK + non-SSE → immediate error
   if (!res.ok && (!streamSetting || !res.body || !isSSEResponse(res))) {
     const errData = await safeJson(res);
-    await reportError(extractErrorFromResponse(errData, res.statusText));
+    await reportError(describeServerError(errData?.code, {
+      provider: settings.aiProvider,
+      maxTokens: settings.maxTokens,
+      detail: extractErrorFromResponse(errData, res.statusText),
+    }));
     return result();
   }
 
@@ -247,12 +278,11 @@ export async function performStreamingRequest(opts: StreamingRequestOpts): Promi
       if (stallTimer) { clearTimeout(stallTimer); stallTimer = null; }
     };
     const reportTimeout = async () => {
-      const providerName = PROVIDER_DISPLAY_NAMES[settings.aiProvider] || settings.aiProvider;
       if (firstContentReceived) {
         // Content had started, so surface it as a stalled stream rather than "API is down"
-        await reportError(`The ${providerName} API stopped responding part-way through the reply.\n\nNo new content arrived for ${settings.apiFailureTimeout * STREAM_TIMEOUT_MULTIPLIER} seconds, so the request was cancelled. You can adjust this timeout in Settings.`);
+        await fail('UPSTREAM_STALLED', { stallSeconds: settings.apiFailureTimeout * STREAM_TIMEOUT_MULTIPLIER });
       } else {
-        await reportError(`OwnChatBot is working, but the ${providerName} API is down.\n\nNo response was received within ${settings.apiFailureTimeout} seconds. You can adjust this timeout in Settings.`);
+        await fail('UPSTREAM_DOWN', { timeoutSeconds: settings.apiFailureTimeout });
       }
     };
     armStallTimer(firstContentMs);
@@ -262,7 +292,7 @@ export async function performStreamingRequest(opts: StreamingRequestOpts): Promi
         firstContentReceived = true;
         armStallTimer(idleMs);
         onStreamChunk(accumulated);
-      }, onThinking);
+      }, trackThinking);
       clearStallTimer();
       // The stream can close cleanly in the same tick our timer fires; still a timeout.
       if (timedOut) {
@@ -289,7 +319,9 @@ export async function performStreamingRequest(opts: StreamingRequestOpts): Promi
             console.warn('Stream ended early after partial content; no modal');
           }
         } else {
-          await reportError(sanitizeErrorMessage(extractUsefulError(err?.message || 'Streaming error')));
+          await fail('UPSTREAM_ERROR', {
+            detail: sanitizeErrorMessage(extractUsefulError(err?.message || 'Streaming error')),
+          });
         }
       }
     } finally {
@@ -303,7 +335,7 @@ export async function performStreamingRequest(opts: StreamingRequestOpts): Promi
       if (onComplete) await onComplete();
     } catch (error) {
       console.error('Failed to parse response:', error);
-      await reportError('Failed to get response from AI');
+      await fail('UPSTREAM_UNPARSEABLE');
     }
   }
 

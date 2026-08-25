@@ -20,6 +20,7 @@ import { VariantTempPopover } from '../../components/chat/VariantTempPopover';
 import { readSSEStream, isSSEResponse, performStreamingRequest } from '../../lib/chat/streamSSE';
 import { fetchChatSettings } from '../../lib/chat/chatSettings';
 import { safeJson, sanitizeErrorMessage, extractUsefulError, extractErrorFromResponse } from '../../lib/chat/errorUtils';
+import { describeChatError, type ChatErrorCopy } from '../../lib/chat/errorCopy';
 import {
   CHAT_INPUT_MIN_HEIGHT, CHAT_INPUT_MAX_HEIGHT,
   EDIT_INPUT_MIN_HEIGHT, EDIT_VIEWPORT_MARGIN, editTextareaMaxHeight,
@@ -102,7 +103,7 @@ export default function ChatSessionPage() {
   const variantButtonPressTimerRef = useRef<NodeJS.Timeout | null>(null);
   // API error modal
   const [showErrorModal, setShowErrorModal] = useState(false);
-  const [apiErrorMessage, setApiErrorMessage] = useState('');
+  const [chatError, setChatError] = useState<ChatErrorCopy | null>(null);
   // reusing error modal for truncation warnings
   const [isBurgerMenuOpen, setIsBurgerMenuOpen] = useState(false);
   const headerRef = useRef<HTMLElement>(null);
@@ -166,6 +167,11 @@ export default function ChatSessionPage() {
     } catch {}
   };
 
+  const showChatError = (error: ChatErrorCopy) => {
+    setChatError(error);
+    setShowErrorModal(true);
+  };
+
   // Show warning if the last API request was heavily truncated (<=16 messages sent)
   const maybeShowTruncationWarning = async () => {
     try {
@@ -178,9 +184,7 @@ export default function ChatSessionPage() {
       const sentCount = typeof meta?.sentCount === 'number' ? meta.sentCount : undefined;
       if (wasTruncated && typeof sentCount === 'number' && sentCount <= 16) {
         const baseCount = typeof meta?.baseCount === 'number' ? meta.baseCount : undefined;
-        const detail = baseCount ? ` (${sentCount} of ${baseCount})` : ` (${sentCount})`;
-        setApiErrorMessage(`Context was heavily truncated${detail}. Increase Max Characters in Settings if you want more history included.`);
-        setShowErrorModal(true);
+        showChatError(describeChatError('CONTEXT_TRUNCATED', { sentCount, baseCount }));
       }
     } catch {}
   };
@@ -188,10 +192,7 @@ export default function ChatSessionPage() {
   // Show modal if the last API response hit the max_tokens limit
   const maybeShowMaxTokensCutoff = async () => {
     const hit = await checkMaxTokensHit();
-    if (hit) {
-      setApiErrorMessage('The response stopped early because it hit your Max Tokens limit. You can increase Max Tokens in Settings or press Continue to keep going.');
-      setShowErrorModal(true);
-    }
+    if (hit) showChatError(describeChatError('MAX_TOKENS'));
   };
 
   // Check if last API response ended due to hitting max tokens (finish_reason = 'length')
@@ -613,10 +614,9 @@ export default function ChatSessionPage() {
           await maybeShowTruncationWarning();
           await maybeShowMaxTokensCutoff();
         },
-        onError: (msg) => {
+        onError: (error) => {
           reveal.reset();
-          setApiErrorMessage(msg);
-          setShowErrorModal(true);
+          showChatError(error);
           revertVariantPlaceholder(messageId);
         },
         onAbort: () => {
@@ -648,8 +648,9 @@ export default function ChatSessionPage() {
       
     } catch (error) {
       console.error('Failed to generate variant:', error);
-      setApiErrorMessage(sanitizeErrorMessage(extractUsefulError((error as any)?.message || JSON.stringify(error))));
-      setShowErrorModal(true);
+      showChatError(describeChatError('UPSTREAM_ERROR', {
+        detail: sanitizeErrorMessage(extractUsefulError((error as any)?.message || JSON.stringify(error))),
+      }));
       revertVariantPlaceholder(messageId);
       
     } finally {
@@ -1827,11 +1828,12 @@ export default function ChatSessionPage() {
           });
           smoothScrollToBottom();
         } else if (data?.error) {
-          setApiErrorMessage(sanitizeErrorMessage(extractUsefulError(String(data.error))));
-          setShowErrorModal(true);
+          showChatError(describeChatError('UPSTREAM_ERROR', {
+            detail: sanitizeErrorMessage(extractUsefulError(String(data.error))),
+          }));
         }
       },
-      onError: (msg) => { setApiErrorMessage(msg); setShowErrorModal(true); },
+      onError: (error) => showChatError(error),
       onAbort: () => {
         reveal.flush();
         setLoading(false);
@@ -2037,8 +2039,6 @@ export default function ChatSessionPage() {
       maybeStartStreamingFollow();
     });
 
-    const showError = (msg: string) => { setApiErrorMessage(msg); setShowErrorModal(true); };
-
     const result = await performStreamingRequest({
       url: '/api/chat',
       body: {
@@ -2063,14 +2063,16 @@ export default function ChatSessionPage() {
           });
           smoothScrollToBottom();
         } else if (data?.error) {
-          showError(sanitizeErrorMessage(extractUsefulError(data.error?.message || JSON.stringify(data.error))));
+          showChatError(describeChatError('UPSTREAM_ERROR', {
+            detail: sanitizeErrorMessage(extractUsefulError(data.error?.message || JSON.stringify(data.error))),
+          }));
         }
       },
-      onError: async (msg) => {
+      onError: async (error) => {
         // Show immediately, then enrich — the size lookup must never gate the modal
-        showError(msg);
+        showChatError(error);
         const note = await buildRequestSizeNote();
-        if (note) setApiErrorMessage(`${msg}\n\n${note}`);
+        if (note) setChatError({ ...error, detail: [error.detail, note].filter(Boolean).join('\n\n') });
       },
       onAbort: () => { reveal.flush(); setLoading(false); setIsStreaming(false); setIsModelThinking(false); },
     });
@@ -2084,7 +2086,15 @@ export default function ChatSessionPage() {
     const failedWithNoContent = result.wasStreaming && streamingMessageRef.current.length === 0;
     if (failedWithNoContent) {
       if (!result.errorShown) {
-        showError('The AI returned an empty response. You can press Retry to try again.');
+        // Reasoning without a reply is a different failure to a wholly silent provider,
+        // and the token cap only shows up in the response log, so show then upgrade.
+        const ctx = { provider: result.settings.aiProvider, maxTokens: result.settings.maxTokens };
+        showChatError(describeChatError(result.sawThinking ? 'THINKING_ONLY' : 'EMPTY_RESPONSE', ctx));
+        if (result.sawThinking) {
+          checkMaxTokensHit().then(hit => {
+            if (hit) setChatError(describeChatError('THINKING_TRUNCATED', ctx));
+          }).catch(() => {});
+        }
       }
       // Drop the empty assistant bubble but keep the user message in place
       setMessages(prev => {
@@ -2109,11 +2119,7 @@ export default function ChatSessionPage() {
     await maybeShowTruncationWarning();
     setTimeout(async () => {
       const hitLimit = await checkMaxTokensHit();
-      if (hitLimit) {
-        const suffix = typeof result.settings.maxTokens === 'number' ? ` (${result.settings.maxTokens})` : '';
-        const note = `Response stopped early: reached Max Tokens${suffix}. Increase Max Tokens in Settings or use Continue to resume.`;
-        showError(note);
-      }
+      if (hitLimit) showChatError(describeChatError('MAX_TOKENS', { maxTokens: result.settings.maxTokens }));
     }, 1200);
 
     stopStreamingFollow();
@@ -2496,9 +2502,9 @@ export default function ChatSessionPage() {
         />
       )}
 
-      {showErrorModal && (
+      {showErrorModal && chatError && (
         <ErrorModal
-          apiErrorMessage={apiErrorMessage}
+          error={chatError}
           onDownloadRequest={handleDownloadRequest}
           onDownloadResponse={handleDownloadResponse}
           onClose={() => setShowErrorModal(false)}

@@ -208,3 +208,16 @@ export function extractUpstreamContent(data: any, thinkingEnabled: boolean): str
   if (typeof raw !== 'string' || !raw) return undefined;
   return thinkingEnabled ? stripThinkTags(raw) : raw;
 }
+
+/**
+ * True when the model emitted reasoning but never produced a visible reply.
+ * Streaming clients infer this from `thinking` frames; non-streaming ones need it from the body.
+ */
+export function upstreamReasonedWithoutReplying(data: any, thinkingEnabled: boolean): boolean {
+  if (extractUpstreamContent(data, thinkingEnabled)?.trim()) return false;
+  const message = data?.choices?.[0]?.message;
+  const reasoning = message?.reasoning_content;
+  if (typeof reasoning === 'string' && reasoning.trim()) return true;
+  const raw: unknown = message?.content ?? data?.content;
+  return typeof raw === 'string' && /<think>/i.test(raw);
+}

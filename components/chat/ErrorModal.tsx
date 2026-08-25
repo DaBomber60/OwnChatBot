@@ -1,20 +1,21 @@
 import React from 'react';
 import { Modal } from '../Modal';
+import type { ChatErrorCopy } from '../../lib/chat/errorCopy';
 
 interface ErrorModalProps {
-  apiErrorMessage: string;
+  error: ChatErrorCopy;
   onDownloadRequest: () => void;
   onDownloadResponse: () => void;
   onClose: () => void;
   devMode?: boolean;
 }
 
-export function ErrorModal({ apiErrorMessage, onDownloadRequest, onDownloadResponse, onClose, devMode }: ErrorModalProps) {
+export function ErrorModal({ error, onDownloadRequest, onDownloadResponse, onClose, devMode }: ErrorModalProps) {
   return (
     <Modal
       open
       onClose={onClose}
-      title="⚠️ API Error"
+      title={error.title}
       maxWidth="560px"
       footer={
         <div className="flex gap-3 justify-center">
@@ -24,10 +25,12 @@ export function ErrorModal({ apiErrorMessage, onDownloadRequest, onDownloadRespo
         </div>
       }
     >
-      <p className="mb-4">The API encountered an error.</p>
-      <div className="card card-compact error-details">
-        <code>{apiErrorMessage}</code>
-      </div>
+      <p className="mb-4">{error.body}</p>
+      {error.detail && (
+        <div className="card card-compact error-details">
+          <code>{error.detail}</code>
+        </div>
+      )}
     </Modal>
   );
 }

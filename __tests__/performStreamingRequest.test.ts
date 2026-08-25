@@ -89,7 +89,8 @@ describe('performStreamingRequest — stall timeout', () => {
     expect(result.errorShown).toBe(true);
     expect(onAbort).not.toHaveBeenCalled();
     expect(onError).toHaveBeenCalledTimes(1);
-    expect(onError.mock.calls[0][0]).toContain('DeepSeek API is down');
+    expect(onError.mock.calls[0][0].code).toBe('UPSTREAM_DOWN');
+    expect(onError.mock.calls[0][0].title).toContain('DeepSeek');
   });
 
   it('reports a stalled stream when content started then stopped', async () => {
@@ -100,7 +101,7 @@ describe('performStreamingRequest — stall timeout', () => {
 
     expect(result.timedOut).toBe(true);
     expect(result.wasAborted).toBe(false);
-    expect(onError.mock.calls[0][0]).toContain('stopped responding part-way');
+    expect(onError.mock.calls[0][0].code).toBe('UPSTREAM_STALLED');
   });
 
   it('still reports a timeout when the stream closes cleanly as the timer fires', async () => {
@@ -146,6 +147,54 @@ describe('performStreamingRequest — stall timeout', () => {
     expect(result.errorShown).toBe(false);
     expect(onError).not.toHaveBeenCalled();
     expect(result.streamedContent).toBe('chunk1 chunk2 chunk3 chunk4 ');
+  });
+});
+
+describe('performStreamingRequest — thinking detection', () => {
+  const thinkingFrame = (thinking: boolean) =>
+    encoder.encode(`data: ${JSON.stringify({ thinking })}\n\n`);
+
+  it('records that the model reasoned even when it never replies', async () => {
+    // The reported failure: reasoning streamed, zero content frames, clean [DONE].
+    stubSSE((controller) => {
+      controller.enqueue(thinkingFrame(true));
+      controller.enqueue(thinkingFrame(false));
+      controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+    }, false);
+    const onThinking = jest.fn();
+
+    const result = await performStreamingRequest(baseOpts({ onThinking }));
+
+    expect(result.sawThinking).toBe(true);
+    expect(result.streamedContent).toBe('');
+    expect(result.errorShown).toBe(false);
+    expect(onThinking).toHaveBeenCalledWith(true);
+    expect(onThinking).toHaveBeenCalledWith(false);
+  });
+
+  it('stays false when the model never reasons', async () => {
+    stubSSE((controller) => {
+      controller.enqueue(frame('hello'));
+      controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+    }, false);
+
+    const result = await performStreamingRequest(baseOpts());
+
+    expect(result.sawThinking).toBe(false);
+    expect(result.thinkingMs).toBe(0);
+    expect(result.streamedContent).toBe('hello');
+  });
+
+  it('measures thinking time even when the stream dies mid-thought', async () => {
+    stubSSE((controller) => {
+      controller.enqueue(thinkingFrame(true));
+      setTimeout(() => { try { controller.close(); } catch {} }, 60);
+    }, false);
+
+    const result = await performStreamingRequest(baseOpts());
+
+    expect(result.sawThinking).toBe(true);
+    expect(result.thinkingMs).toBeGreaterThan(0);
   });
 });
 

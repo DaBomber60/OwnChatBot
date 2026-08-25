@@ -6,6 +6,7 @@ import { startUpstreamRequest, type UpstreamRequestHandle } from '../../../lib/u
 import {
   resolveAIConfig, isThinkingEnabled, buildUpstreamBody, buildConversationPrompt,
   persistRequestWithMeta, loadUserPromptBody, parseUpstreamBody, forwardUpstreamError,
+  upstreamReasonedWithoutReplying,
 } from '../../../lib/aiRequest';
 import { relayUpstreamSSE } from '../../../lib/sseRelay';
 import { limiters, clientIp } from '../../../lib/rateLimit';
@@ -200,7 +201,13 @@ export default withApiHandler({}, {
     if (data.choices && data.choices[0]?.message?.content) {
       // Strip <think> tags before saving to DB (non-streaming path)
       const contentToSave = isDeepSeekThinking ? stripThinkTags(data.choices[0].message.content) : data.choices[0].message.content;
-      if (contentToSave.trim()) await saveAssistantMessage(contentToSave);
+      if (contentToSave.trim()) {
+        await saveAssistantMessage(contentToSave);
+      } else if (upstreamReasonedWithoutReplying(data, isDeepSeekThinking)) {
+        return serverError(res, 'The model returned reasoning but no reply', 'UPSTREAM_THINKING_ONLY');
+      } else {
+        return serverError(res, 'No content received from API', 'UPSTREAM_NO_CONTENT');
+      }
       // Strip <think> tags from non-streaming response sent to client
       if (isDeepSeekThinking) {
         data.choices[0].message.content = contentToSave;

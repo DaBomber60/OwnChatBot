@@ -7,7 +7,7 @@ import { schemas, validateBody } from '../../../../lib/validate';
 import {
   resolveAIConfig, isThinkingEnabled, buildUpstreamBody, buildConversationPrompt,
   persistRequestWithMeta, loadUserPromptBody, parseUpstreamBody, forwardUpstreamError,
-  extractUpstreamContent,
+  extractUpstreamContent, upstreamReasonedWithoutReplying,
 } from '../../../../lib/aiRequest';
 import { relayUpstreamSSE } from '../../../../lib/sseRelay';
 import { startUpstreamRequest, type UpstreamRequestHandle } from '../../../../lib/upstreamAI';
@@ -202,6 +202,9 @@ export default withApiHandler({ parseId: true }, {
         const newContent = extractUpstreamContent(data, isDeepSeekThinking);
 
         if (!newContent) {
+          if (upstreamReasonedWithoutReplying(data, isDeepSeekThinking)) {
+            return serverError(res, 'The model returned reasoning but no reply', 'UPSTREAM_THINKING_ONLY');
+          }
           return serverError(res, 'No content received from API', 'UPSTREAM_NO_CONTENT');
         }
 
