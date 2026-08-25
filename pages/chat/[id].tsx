@@ -540,11 +540,12 @@ export default function ChatSessionPage() {
     // Helper to revert a placeholder variant on error/abort
     const revertVariantPlaceholder = (mid: number) => {
       setMessageVariants(prev => {
+        const existing = prev.get(mid) || [];
+        // Idempotent: Stop reverts here and in stopStreaming, and without a placeholder left
+        // to remove this would otherwise discard a real variant.
+        if (!existing.some(v => v.id === -1)) return prev;
+        const trimmed = existing.filter(v => v.id !== -1);
         const newMap = new Map(prev);
-        const existing = newMap.get(mid) || [];
-        const trimmed = existing.filter(v => v.id !== -1 ? true : false).length === existing.length
-          ? existing.slice(0, -1)
-          : existing.filter(v => v.id !== -1);
         newMap.set(mid, trimmed);
         const newCount = trimmed.length;
         setCurrentVariantIndex(ci => { const m = new Map(ci); m.set(mid, newCount); return m; });
