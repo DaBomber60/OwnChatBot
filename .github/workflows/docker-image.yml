@@ -9,8 +9,17 @@ env:
   IMAGE_NAME: ${{ secrets.DOCKERHUB_USERNAME }}/ownchatbot
 
 jobs:
-  docker:
-    runs-on: ubuntu-latest
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            # Native ARM: Node 24 on musl dies with SIGILL (exit 132) under QEMU emulation.
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
       packages: write
@@ -18,20 +27,75 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
       - name: Derive version
         id: ver
+        env:
+          PLATFORM: ${{ matrix.platform }}
         run: |
           if [[ "${GITHUB_REF_NAME}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+.*$ ]]; then
             echo "APP_VERSION=${GITHUB_REF_NAME}" >> $GITHUB_OUTPUT
           else
             echo "APP_VERSION=0.0.0-untagged" >> $GITHUB_OUTPUT
           fi
+          echo "PLATFORM_PAIR=${PLATFORM//\//-}" >> $GITHUB_ENV
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # Pushed by digest only — the merge job assembles the tagged manifest list from both arches.
+      - name: Build & push by digest
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          platforms: ${{ matrix.platform }}
+          build-args: |
+            APP_VERSION=${{ steps.ver.outputs.APP_VERSION }}
+          outputs: type=image,name=${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
+          # Cache is scoped per platform as well as per release; a shared scope would thrash.
+          cache-from: type=gha,scope=ownchatbot-${{ steps.ver.outputs.APP_VERSION }}-${{ env.PLATFORM_PAIR }}
+          cache-to: type=gha,mode=min,scope=ownchatbot-${{ steps.ver.outputs.APP_VERSION }}-${{ env.PLATFORM_PAIR }}
+          # Disable provenance/SBOM generation to shave a little time (reenable if you need supply-chain metadata)
+          provenance: false
+
+      - name: Export digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          mkdir -p /tmp/digests
+          touch "/tmp/digests/${DIGEST#sha256:}"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ env.PLATFORM_PAIR }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    runs-on: ubuntu-latest
+    needs: [build]
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digests-*
+          merge-multiple: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
       - name: Log in to Docker Hub
         uses: docker/login-action@v3
@@ -49,25 +113,15 @@ jobs:
             type=semver,pattern={{version}}
             type=sha
 
-      - name: Build & Push
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: Dockerfile
-          push: true
-          platforms: linux/amd64,linux/arm64
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          build-args: |
-            APP_VERSION=${{ steps.ver.outputs.APP_VERSION }}
-          # Use GitHub Actions cache backend (fast, ephemeral).
-          # Scope is tied to APP_VERSION so each release gets a fresh cache.
-          cache-from: type=gha,scope=ownchatbot-${{ steps.ver.outputs.APP_VERSION }}
-          cache-to: type=gha,mode=min,scope=ownchatbot-${{ steps.ver.outputs.APP_VERSION }}
-          # Disable provenance/SBOM generation to shave a little time (reenable if you need supply-chain metadata)
-          provenance: false
+      - name: Create manifest list and push
+        working-directory: /tmp/digests
+        run: |
+          docker buildx imagetools create \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf '${{ env.IMAGE_NAME }}@sha256:%s ' *)
 
       - name: Summary
         run: |
+          docker buildx imagetools inspect "${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}"
           echo "Published tags:" >> $GITHUB_STEP_SUMMARY
           echo "${{ steps.meta.outputs.tags }}" >> $GITHUB_STEP_SUMMARY
