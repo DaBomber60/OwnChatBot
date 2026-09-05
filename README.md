@@ -367,7 +367,7 @@ The Character Generation Tool streamlines creating rich character profiles by us
 ### Backend Mechanics
 - Endpoint: `POST /api/characters/generate`
 - Body shape (simplified):
-	```jsonc
+	```
 	{
 		"name": "String",
 		"profileName": "Optional String",
