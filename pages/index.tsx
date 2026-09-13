@@ -153,7 +153,7 @@ export default function Home() {
                 </div>
                 <div className="space-y-4 text-sm leading-relaxed">
                   <p>
-                    Head over to <strong>Settings</strong> to add an API key for your preferred provider (DeepSeek, OpenAI, OpenRouter, Anthropic, or a custom-compatible endpoint). Without a key, chats can&apos;t generate responses.
+                    Head over to <strong>Settings</strong> to add an API key for your preferred provider (DeepSeek, OpenAI, OpenRouter, or a custom-compatible endpoint). Without a key, chats can&apos;t generate responses.
                   </p>
                   <ol className="list-decimal list-inside space-y-1 text-muted">
                     <li>Open Settings</li>

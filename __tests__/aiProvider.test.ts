@@ -1,6 +1,6 @@
 import {
   tokenFieldFor, normalizeTemperature, clampMaxTokens, DEFAULT_FALLBACK_URL,
-  clampApiFailureTimeout, failureTimeoutMs,
+  clampApiFailureTimeout, failureTimeoutMs, filterProviderModels, isModelListProvider,
   DEFAULT_API_FAILURE_TIMEOUT, API_FAILURE_TIMEOUT_MIN, API_FAILURE_TIMEOUT_MAX, STREAM_TIMEOUT_MULTIPLIER,
 } from '../lib/aiProvider';
 import type { AIProvider } from '../lib/aiProvider';
@@ -29,13 +29,51 @@ describe('tokenFieldFor', () => {
   it('returns max_tokens for non-OpenAI providers', () => {
     expect(tokenFieldFor('deepseek', 'deepseek-chat')).toBe('max_tokens');
     expect(tokenFieldFor('openrouter', 'anything')).toBe('max_tokens');
-    expect(tokenFieldFor('anthropic', 'claude-3')).toBe('max_tokens');
     expect(tokenFieldFor('custom', 'my-model')).toBe('max_tokens');
   });
 
   it('returns override when provided', () => {
     expect(tokenFieldFor('openai', 'gpt-5', 'my_custom_field')).toBe('my_custom_field');
     expect(tokenFieldFor('deepseek', 'dc', 'override')).toBe('override');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// filterProviderModels / isModelListProvider
+// ---------------------------------------------------------------------------
+describe('filterProviderModels', () => {
+  it('keeps undated gpt models for OpenAI', () => {
+    expect(filterProviderModels('openai', ['gpt-4.1-mini', 'gpt-5', 'gpt-4o-mini'])).toEqual([
+      'gpt-4.1-mini', 'gpt-4o-mini', 'gpt-5',
+    ]);
+  });
+
+  it('drops OpenAI models with a date in the name', () => {
+    expect(filterProviderModels('openai', [
+      'gpt-4.1-mini-2025-04-14',
+      'gpt-4-0613',
+      'gpt-4-1106-preview',
+    ])).toEqual([]);
+  });
+
+  it('drops OpenAI models without gpt in the name', () => {
+    expect(filterProviderModels('openai', ['o4-mini', 'whisper-1', 'text-embedding-ada-002'])).toEqual([]);
+  });
+
+  it('keeps every DeepSeek model and de-duplicates', () => {
+    expect(filterProviderModels('deepseek', ['deepseek-v4-pro', 'deepseek-flash', 'deepseek-flash'])).toEqual([
+      'deepseek-flash', 'deepseek-v4-pro',
+    ]);
+  });
+});
+
+describe('isModelListProvider', () => {
+  it('accepts only providers with a model catalogue', () => {
+    expect(isModelListProvider('deepseek')).toBe(true);
+    expect(isModelListProvider('openai')).toBe(true);
+    expect(isModelListProvider('openrouter')).toBe(false);
+    expect(isModelListProvider('custom')).toBe(false);
+    expect(isModelListProvider('__proto__')).toBe(false);
   });
 });
 

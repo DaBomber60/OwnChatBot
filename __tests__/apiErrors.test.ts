@@ -257,6 +257,8 @@ describe('apiErrors', () => {
       [503, '', 'UPSTREAM_UNAVAILABLE'],
       [400, 'Insufficient Balance', 'UPSTREAM_QUOTA'],
       [400, 'This model maximum context length is 8192 tokens', 'UPSTREAM_CONTEXT_TOO_LONG'],
+      [400, 'The supported API model names are deepseek-flash, deepseek-v4-pro, but you passed deepseek-v4.1-flash.', 'UPSTREAM_MODEL_NOT_FOUND'],
+      [404, 'The model `gpt-5-turbo` does not exist', 'UPSTREAM_MODEL_NOT_FOUND'],
       [400, 'unsupported parameter', 'UPSTREAM_BAD_REQUEST'],
     ])('maps %i (%s) to %s', (status, message, expected) => {
       expect(classifyUpstreamStatus(status as number, message as string)).toBe(expected);

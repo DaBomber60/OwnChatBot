@@ -76,6 +76,7 @@ export type UpstreamErrorCode =
   | 'UPSTREAM_QUOTA'
   | 'UPSTREAM_RATE_LIMITED'
   | 'UPSTREAM_CONTEXT_TOO_LONG'
+  | 'UPSTREAM_MODEL_NOT_FOUND'
   | 'UPSTREAM_UNAVAILABLE'
   | 'UPSTREAM_BAD_REQUEST'
   | 'UPSTREAM_TIMEOUT'
@@ -114,6 +115,9 @@ export function upstreamError(res: NextApiResponse, opts: UpstreamErrorOptions) 
   });
 }
 
+/** The ways providers say "that model name is not one of ours". */
+const MODEL_NOT_FOUND_RE = /supported (?:api )?model names|model_not_found|invalid_?\s?model|unknown model|no such model|model .{0,80}?(?:does not exist|doesn't exist|not found|is not (?:a )?valid|is invalid)/i;
+
 /** Maps a provider HTTP status (plus its message) onto a semantic code. */
 export function classifyUpstreamStatus(status: number, message = ''): UpstreamErrorCode {
   if (status === 401 || status === 403) return 'UPSTREAM_AUTH';
@@ -128,6 +132,7 @@ export function classifyUpstreamStatus(status: number, message = ''): UpstreamEr
       return 'UPSTREAM_CONTEXT_TOO_LONG';
     }
     if (/insufficient balance|insufficient_quota|quota/i.test(message)) return 'UPSTREAM_QUOTA';
+    if (MODEL_NOT_FOUND_RE.test(message)) return 'UPSTREAM_MODEL_NOT_FOUND';
     return 'UPSTREAM_BAD_REQUEST';
   }
   return 'UPSTREAM_API_ERROR';

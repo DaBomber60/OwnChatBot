@@ -40,9 +40,40 @@ interface RawSettingsMap { [k: string]: string | undefined }
 const PRESET_CONFIG: Record<Exclude<AIProvider, 'custom'>, { url: string; model: string; }> = {
   deepseek: { url: 'https://api.deepseek.com/chat/completions', model: 'deepseek-v4-flash' },
   openai: { url: 'https://api.openai.com/v1/chat/completions', model: 'gpt-5-mini' },
-  openrouter: { url: 'https://openrouter.ai/api/v1/chat/completions', model: 'openrouter/auto' },
-  anthropic: { url: 'https://api.anthropic.com/v1/messages', model: 'claude-3-5-haiku-20241022' }
+  openrouter: { url: 'https://openrouter.ai/api/v1/chat/completions', model: 'openrouter/auto' }
 };
+
+/** Settings key holding each provider's API key. */
+export const PROVIDER_KEY_SETTING: Record<AIProvider, string> = {
+  deepseek: 'apiKey_deepseek',
+  openai: 'apiKey_openai',
+  openrouter: 'apiKey_openrouter',
+  custom: 'apiKey_custom',
+};
+
+/** Providers exposing a model catalogue the settings dropdown can be prefilled from. */
+export const MODEL_LIST_PROVIDERS = ['deepseek', 'openai'] as const;
+export type ModelListProvider = typeof MODEL_LIST_PROVIDERS[number];
+
+export const PROVIDER_MODELS_URL: Record<ModelListProvider, string> = {
+  deepseek: 'https://api.deepseek.com/models',
+  openai: 'https://api.openai.com/v1/models',
+};
+
+export function isModelListProvider(value: string): value is ModelListProvider {
+  return (MODEL_LIST_PROVIDERS as readonly string[]).includes(value);
+}
+
+// OpenAI dates its snapshots as `-2025-04-14` or in the older `-0613` / `-1106` form.
+const OPENAI_DATED_SNAPSHOT = /-(?:\d{4}-\d{2}-\d{2}|\d{4})(?=-|$)/;
+
+/** OpenAI returns its entire catalogue, so keep only the undated gpt-* entries. */
+export function filterProviderModels(provider: ModelListProvider, ids: string[]): string[] {
+  const kept = provider === 'openai'
+    ? ids.filter(id => id.includes('gpt') && !OPENAI_DATED_SNAPSHOT.test(id))
+    : ids;
+  return Array.from(new Set(kept)).sort();
+}
 
 export async function getAIConfig(): Promise<AIConfig | { error: string; code: string }> {
   // Pull ALL relevant settings in a single query — includes AI provider config
@@ -53,7 +84,6 @@ export async function getAIConfig(): Promise<AIConfig | { error: string; code: s
       'apiKey_deepseek',
       'apiKey_openai',
       'apiKey_openrouter',
-      'apiKey_anthropic',
       'apiKey_custom',
       'aiProvider', 'apiBaseUrl', 'modelName',
       'modelEnableTemperature', 'maxTokenFieldName',
@@ -69,14 +99,7 @@ export async function getAIConfig(): Promise<AIConfig | { error: string; code: s
   const provider = (map.aiProvider as AIProvider) || 'deepseek';
 
   // Determine provider-specific key name precedence
-  const providerKeyName = (
-    provider === 'custom' ? 'apiKey_custom'
-    : provider === 'deepseek' ? 'apiKey_deepseek'
-    : provider === 'openai' ? 'apiKey_openai'
-    : provider === 'openrouter' ? 'apiKey_openrouter'
-    : provider === 'anthropic' ? 'apiKey_anthropic'
-    : 'apiKey'
-  );
+  const providerKeyName = PROVIDER_KEY_SETTING[provider] || 'apiKey';
 
   const apiKey = map[providerKeyName] || map.apiKey || '';
   if (!apiKey) return { error: 'API key not configured for selected provider', code: 'NO_API_KEY' };

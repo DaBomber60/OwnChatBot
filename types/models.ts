@@ -1,6 +1,6 @@
 /** Centralized model types shared across pages and components. */
 
-export type AIProvider = 'deepseek' | 'openai' | 'openrouter' | 'anthropic' | 'custom';
+export type AIProvider = 'deepseek' | 'openai' | 'openrouter' | 'custom';
 
 export interface Persona {
   id: number;

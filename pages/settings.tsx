@@ -8,7 +8,10 @@ import { useRouter } from 'next/router';
 import { logout } from '../lib/auth';
 import Head from 'next/head';
 import type { AIProvider } from '../types/models';
-import { DEFAULT_THINKING_GUIDANCE, DEFAULT_API_FAILURE_TIMEOUT, clampApiFailureTimeout } from '../lib/aiProvider';
+import { DEFAULT_THINKING_GUIDANCE, DEFAULT_API_FAILURE_TIMEOUT, clampApiFailureTimeout, isModelListProvider } from '../lib/aiProvider';
+
+/** Sentinel <option> value that switches the model field back to free text. */
+const CUSTOM_MODEL_OPTION = '__custom__';
 
 // --- Settings reducer (single state object replaces 24 individual useState calls) ---
 
@@ -87,10 +90,11 @@ function settingsFromDb(db: Record<string, string>): SettingsState {
     deepseek: db.apiKey_deepseek || '',
     openai: db.apiKey_openai || '',
     openrouter: db.apiKey_openrouter || '',
-    anthropic: db.apiKey_anthropic || '',
     custom: db.apiKey_custom || '',
   };
-  const storedProvider = (db.aiProvider as AIProvider) || 'deepseek';
+  // 'anthropic' is a retired provider value that may still be persisted from older installs.
+  const rawProvider = db.aiProvider === 'anthropic' ? 'deepseek' : db.aiProvider;
+  const storedProvider = (rawProvider as AIProvider) || 'deepseek';
   // Migrate legacy apiKey into the selected provider slot if that slot is empty
   if (db.apiKey && !loaded[storedProvider]) loaded[storedProvider] = db.apiKey;
   const currentKey = loaded[storedProvider] || '';
@@ -99,8 +103,7 @@ function settingsFromDb(db: Record<string, string>): SettingsState {
     ...initialSettingsState,
     apiKey: currentKey,
     keysByProvider: loaded,
-    // Temporarily hide anthropic; coerce to deepseek if encountered
-    aiProvider: storedProvider === 'anthropic' ? 'deepseek' : storedProvider,
+    aiProvider: storedProvider,
     apiBaseUrl: db.apiBaseUrl || '',
     modelName: db.modelName || '',
     enableTemperatureOverride: db.modelEnableTemperature === undefined ? true : db.modelEnableTemperature === 'true',
@@ -198,6 +201,7 @@ export default function SettingsPage() {
   const [modelSettingsOpen, setModelSettingsOpen] = useState(false);
   const [limitsOpen, setLimitsOpen] = useState(false);
   const [apiKeyEditing, setApiKeyEditing] = useState(false);
+  const [customModelMode, setCustomModelMode] = useState(false);
 
   // Unsaved-change tracking for the floating save bar
   const [baseline, setBaseline] = useState<string | null>(null);
@@ -218,6 +222,33 @@ export default function SettingsPage() {
   const [dsBalanceError, setDsBalanceError] = useState<string>('');
 
   const isFixedTemp = (prov: string, model: string) => prov === 'openai' && /^gpt-5/i.test(model || '');
+
+  const presetModelPlaceholder =
+    state.aiProvider === 'deepseek' ? 'deepseek-v4-flash'
+    : state.aiProvider === 'openai' ? 'gpt-5-mini'
+    : state.aiProvider === 'openrouter' ? 'openrouter/auto'
+    : 'your-model-name';
+
+  // Keyed off originalApiKey so the list is fetched once a key actually exists for the provider.
+  const { data: modelListData, error: modelListFetchError, isLoading: modelListLoading } = useSWR<{ models?: string[]; error?: string }>(
+    isModelListProvider(state.aiProvider) && state.originalApiKey ? `/api/settings/models?provider=${state.aiProvider}` : null,
+    (url: string) => fetch(url).then(res => res.json())
+  );
+  const models = useMemo(() => modelListData?.models ?? [], [modelListData]);
+  const modelListErrorText = modelListFetchError ? 'network error' : (modelListData?.error ?? '');
+  const showModelSelect = models.length > 0 && !customModelMode;
+
+  // A saved override that the provider no longer lists can only be edited as free text.
+  const modelsKey = models.join('\u0000');
+  useEffect(() => {
+    if (!models.length) return;
+    if (!state.modelName) {
+      dispatch({ type: 'SET_FIELD', field: 'modelName', value: models[0] });
+    } else if (!models.includes(state.modelName)) {
+      setCustomModelMode(true);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [modelsKey]);
 
   const connStatusModifier =
     connStatus === 'ok' ? 'settings-status--ok' :
@@ -431,7 +462,6 @@ export default function SettingsPage() {
           apiKey_deepseek: state.keysByProvider.deepseek || '',
           apiKey_openai: state.keysByProvider.openai || '',
           apiKey_openrouter: state.keysByProvider.openrouter || '',
-          apiKey_anthropic: state.keysByProvider.anthropic || '',
           apiKey_custom: state.keysByProvider.custom || '',
           aiProvider: state.aiProvider,
           apiBaseUrl: state.aiProvider === 'custom' ? state.apiBaseUrl : '',
@@ -836,6 +866,7 @@ export default function SettingsPage() {
                 const newKey = state.keysByProvider[next] || '';
                 dispatch({ type: 'LOAD_ALL', payload: { aiProvider: next, originalApiKey: newKey, apiKey: newKey } });
                 setApiKeyEditing(false);
+                setCustomModelMode(false);
               }}
             >
               <option value="deepseek">DeepSeek</option>
@@ -921,19 +952,55 @@ export default function SettingsPage() {
           )}
 
           <div className="form-group">
-            <label className="form-label">Model Override (optional)</label>
-            <input
-              type="text"
-              className="form-input"
-              value={state.modelName}
-              onChange={e => dispatch({ type: 'SET_FIELD', field: 'modelName', value: e.target.value })}
-              placeholder={state.aiProvider === 'deepseek' ? 'deepseek-v4-flash'
-                : state.aiProvider === 'openai' ? 'gpt-5-mini'
-                : state.aiProvider === 'openrouter' ? 'openrouter/auto'
-                : 'your-model-name'}
-              style={{ fontFamily: 'monospace' }}
-            />
-            <p className="settings-hint">Leave blank to use the preset default for the selected provider.</p>
+            <label className="form-label flex items-center justify-between">
+              <span>Model Override (optional)</span>
+              {models.length > 0 && customModelMode && (
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-small"
+                  onClick={() => {
+                    setCustomModelMode(false);
+                    if (!models.includes(state.modelName)) dispatch({ type: 'SET_FIELD', field: 'modelName', value: models[0] });
+                  }}
+                >
+                  Choose from list
+                </button>
+              )}
+            </label>
+            {showModelSelect ? (
+              <select
+                className="form-select"
+                value={state.modelName}
+                onChange={e => {
+                  if (e.target.value === CUSTOM_MODEL_OPTION) {
+                    setCustomModelMode(true);
+                    return;
+                  }
+                  dispatch({ type: 'SET_FIELD', field: 'modelName', value: e.target.value });
+                }}
+                style={{ fontFamily: 'monospace' }}
+              >
+                {models.map(m => (
+                  <option key={m} value={m}>{m}</option>
+                ))}
+                <option value={CUSTOM_MODEL_OPTION}>Custom model name...</option>
+              </select>
+            ) : (
+              <input
+                type="text"
+                className="form-input"
+                value={state.modelName}
+                onChange={e => dispatch({ type: 'SET_FIELD', field: 'modelName', value: e.target.value })}
+                placeholder={presetModelPlaceholder}
+                style={{ fontFamily: 'monospace' }}
+              />
+            )}
+            <p className="settings-hint">
+              {modelListLoading ? 'Loading available models...'
+                : modelListErrorText ? `Couldn't load the model list (${modelListErrorText}). Enter a model name manually.`
+                : showModelSelect ? 'Pick a model your provider offers, or choose Custom to type one in.'
+                : 'Leave blank to use the preset default for the selected provider.'}
+            </p>
           </div>
 
           <div className={`settings-status ${connStatusModifier}`}>

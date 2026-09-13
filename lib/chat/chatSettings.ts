@@ -21,7 +21,6 @@ export const PROVIDER_DISPLAY_NAMES: Record<AIProvider, string> = {
   deepseek: 'DeepSeek',
   openai: 'OpenAI',
   openrouter: 'OpenRouter',
-  anthropic: 'Anthropic',
   custom: 'Custom',
 };
 

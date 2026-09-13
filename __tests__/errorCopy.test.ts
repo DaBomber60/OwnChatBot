@@ -3,7 +3,7 @@
  * These assert on `code` and on the facts each message must carry, not on exact prose,
  * so the wording stays free to change.
  */
-import { describeChatError, describeServerError } from '../lib/chat/errorCopy';
+import { describeChatError, describeServerError, parseModelError } from '../lib/chat/errorCopy';
 
 describe('describeChatError', () => {
   it('distinguishes a thinking-only reply from a wholly empty one', () => {
@@ -29,7 +29,7 @@ describe('describeChatError', () => {
 
   it('names the provider when one is known', () => {
     expect(describeChatError('UPSTREAM_DOWN', { provider: 'openai' }).title).toContain('OpenAI');
-    expect(describeChatError('EMPTY_RESPONSE', { provider: 'anthropic' }).body).toContain('Anthropic');
+    expect(describeChatError('EMPTY_RESPONSE', { provider: 'openrouter' }).body).toContain('OpenRouter');
   });
 
   it('reads correctly with no provider at all', () => {
@@ -58,7 +58,7 @@ describe('describeChatError', () => {
     const codes = [
       'THINKING_ONLY', 'THINKING_TRUNCATED', 'EMPTY_RESPONSE', 'UPSTREAM_DOWN',
       'UPSTREAM_STALLED', 'UPSTREAM_UNPARSEABLE', 'STREAM_INTERRUPTED',
-      'MAX_TOKENS', 'BAD_API_KEY', 'OUT_OF_CREDIT',
+      'MAX_TOKENS', 'BAD_API_KEY', 'BAD_MODEL', 'OUT_OF_CREDIT',
       'RATE_LIMITED', 'CONTEXT_TOO_LONG', 'PROVIDER_UNAVAILABLE', 'UPSTREAM_ERROR',
     ] as const;
     for (const code of codes) {
@@ -75,7 +75,7 @@ describe('describeChatError', () => {
     const codes = [
       'THINKING_ONLY', 'THINKING_TRUNCATED', 'EMPTY_RESPONSE', 'UPSTREAM_DOWN',
       'UPSTREAM_STALLED', 'UPSTREAM_UNPARSEABLE', 'STREAM_INTERRUPTED',
-      'MAX_TOKENS', 'BAD_API_KEY', 'OUT_OF_CREDIT',
+      'MAX_TOKENS', 'BAD_API_KEY', 'BAD_MODEL', 'OUT_OF_CREDIT',
       'RATE_LIMITED', 'CONTEXT_TOO_LONG', 'PROVIDER_UNAVAILABLE', 'UPSTREAM_ERROR',
     ] as const;
     for (const code of codes) {
@@ -115,6 +115,7 @@ describe('describeServerError', () => {
     ['UPSTREAM_RATE_LIMITED', 'RATE_LIMITED'],
     ['RATE_LIMITED', 'RATE_LIMITED'],
     ['UPSTREAM_CONTEXT_TOO_LONG', 'CONTEXT_TOO_LONG'],
+    ['UPSTREAM_MODEL_NOT_FOUND', 'BAD_MODEL'],
     ['UPSTREAM_UNAVAILABLE', 'PROVIDER_UNAVAILABLE'],
     ['UPSTREAM_ABORTED', 'UPSTREAM_DOWN'],
   ])('maps server code %s to %s', (serverCode, expected) => {
@@ -133,5 +134,39 @@ describe('describeServerError', () => {
 
   it('handles a missing code', () => {
     expect(describeServerError(undefined, { detail: 'boom' }).code).toBe('UPSTREAM_ERROR');
+  });
+
+  it('names the rejected model and the accepted ones', () => {
+    const copy = describeServerError('UPSTREAM_MODEL_NOT_FOUND', {
+      provider: 'deepseek',
+      detail: 'The supported API model names are deepseek-flash, deepseek-v4-pro, but you passed deepseek-v4.1-flash.',
+    });
+    expect(copy.code).toBe('BAD_MODEL');
+    expect(copy.body).toContain('deepseek-v4.1-flash');
+    expect(copy.body).toContain('deepseek-flash, deepseek-v4-pro');
+    expect(copy.body).toMatch(/Model Override/);
+    expect(copy.detail).toContain('deepseek-v4-pro');
+  });
+
+  it('still reads sensibly when the model message is phrased differently', () => {
+    const copy = describeServerError('UPSTREAM_MODEL_NOT_FOUND', { detail: 'Bad model.' });
+    expect(copy.body).toMatch(/that model name/);
+    expect(copy.body).not.toMatch(/undefined/);
+  });
+});
+
+describe('parseModelError', () => {
+  it('reads the DeepSeek supported-model rejection', () => {
+    expect(parseModelError('The supported API model names are deepseek-flash, deepseek-v4-pro, but you passed deepseek-v4.1-flash.'))
+      .toEqual({ model: 'deepseek-v4.1-flash', supportedModels: ['deepseek-flash', 'deepseek-v4-pro'] });
+  });
+
+  it('reads a quoted model name with no list', () => {
+    expect(parseModelError('The model `gpt-5-turbo` does not exist')).toEqual({ model: 'gpt-5-turbo' });
+  });
+
+  it('returns nothing for an unrelated message', () => {
+    expect(parseModelError('Insufficient Balance')).toEqual({});
+    expect(parseModelError(undefined)).toEqual({});
   });
 });

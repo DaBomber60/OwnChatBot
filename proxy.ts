@@ -175,7 +175,7 @@ function originOf(url: string): string {
 // Security headers (Item 9 implementation)
 function attachSecurityHeaders(res: NextResponse, req: NextRequest) {
   // Build connect-src: known providers + optional custom AI_BASE_URL from env
-  const knownProviders = 'https://api.deepseek.com https://api.openai.com https://openrouter.ai https://api.anthropic.com';
+  const knownProviders = 'https://api.deepseek.com https://api.openai.com https://openrouter.ai';
   const extraOrigin = originOf(process.env.AI_BASE_URL || '');
   const connectSrc = `connect-src 'self' ${knownProviders}${extraOrigin ? ' ' + extraOrigin : ''}`;
 

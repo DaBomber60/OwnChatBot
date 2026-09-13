@@ -19,6 +19,7 @@ export type ChatErrorCode =
   | 'STREAM_INTERRUPTED'
   | 'MAX_TOKENS'
   | 'BAD_API_KEY'
+  | 'BAD_MODEL'
   | 'OUT_OF_CREDIT'
   | 'RATE_LIMITED'
   | 'CONTEXT_TOO_LONG'
@@ -34,8 +35,31 @@ export interface ChatErrorContext {
   /** Seconds the provider asked us to wait before trying again. */
   retryAfterSeconds?: number;
   maxTokens?: number;
+  /** Model name the provider rejected. */
+  model?: string;
+  /** Model names the provider says it does accept. */
+  supportedModels?: string[];
   /** Raw upstream/technical text, rendered verbatim in a code block. */
   detail?: string;
+}
+
+/**
+ * Pull the rejected model and the accepted list out of a provider's complaint, e.g.
+ * "The supported API model names are a, b, but you passed c."
+ * Returns empty fields when the message is phrased some other way.
+ */
+export function parseModelError(message?: string): { model?: string; supportedModels?: string[] } {
+  if (!message) return {};
+  const passed = message.match(/you passed ['"`]?([^\s'"`]+?)['"`]?[.,]?(?:\s|$)/i)
+    ?? message.match(/(?:model|the model) ['"`]([^'"`]+)['"`]/i);
+  const listed = message.match(/supported (?:api )?model names (?:are|is) (.+?)(?:[,;]?\s+but\b|\.\s*$|$)/i);
+  const supportedModels = listed?.[1]
+    ? listed[1].split(/\s*(?:,|\bor\b|\band\b)\s*/).map(s => s.trim()).filter(Boolean)
+    : undefined;
+  return {
+    ...(passed?.[1] ? { model: passed[1] } : {}),
+    ...(supportedModels?.length ? { supportedModels } : {}),
+  };
 }
 
 export interface ChatErrorCopy {
@@ -128,6 +152,17 @@ export function describeChatError(code: ChatErrorCode, ctx: ChatErrorContext = {
         'Check the API key in Settings — it may be mistyped, revoked, or from a different provider.',
       );
 
+    case 'BAD_MODEL': {
+      const named = ctx.model ? `"${ctx.model}"` : 'that model name';
+      const list = ctx.supportedModels?.length
+        ? ` It accepts: ${ctx.supportedModels.join(', ')}.`
+        : '';
+      return copy(
+        `${cap(api)} does not recognise the model you asked for.`,
+        `It was sent ${named}, which the provider rejected.${list} Fix Model Override in Settings, or clear it to fall back to the provider default.`,
+      );
+    }
+
     case 'OUT_OF_CREDIT':
       return copy(
         'The AI is willing, but the wallet is empty.',
@@ -188,6 +223,9 @@ export function describeServerError(code: unknown, ctx: ChatErrorContext = {}): 
       return describeChatError('RATE_LIMITED', mapped);
     case 'UPSTREAM_CONTEXT_TOO_LONG':
       return describeChatError('CONTEXT_TOO_LONG', mapped);
+    case 'UPSTREAM_MODEL_NOT_FOUND':
+      // Keep the raw text: it is short and usually the authoritative list of valid models.
+      return describeChatError('BAD_MODEL', { ...ctx, ...parseModelError(ctx.detail) });
     case 'UPSTREAM_UNAVAILABLE':
       return describeChatError('PROVIDER_UNAVAILABLE', mapped);
     case 'UPSTREAM_UNPARSEABLE':
