@@ -20,8 +20,8 @@ RUN set -eux; \
         apk list --installed busybox >&2; \
         exit 1; \
     fi; \
-    apk upgrade --no-cache openssl; \
-    apk list --installed busybox openssl
+    apk upgrade --no-cache openssl zlib; \
+    apk list --installed busybox openssl zlib
 
 # Copy only manifests + prisma schema first for better dependency layer caching
 COPY package.json package-lock.json* ./
@@ -88,7 +88,7 @@ RUN set -eux; \
         apk list --installed busybox >&2; \
         exit 1; \
     fi; \
-    apk upgrade --no-cache openssl; \
+    apk upgrade --no-cache openssl zlib; \
     rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx; \
     addgroup --system --gid 1001 nodejs; \
     adduser --system --uid 1001 nextjs
