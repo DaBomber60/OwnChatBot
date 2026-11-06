@@ -58,10 +58,13 @@
     "typescript": "^5.7.2"
   },
   "overrides": {
-    "glob": "11.1.0",
+    "glob": "14.0.4",
     "tar": "7.5.2",
     "js-yaml": "4.3.2",
-    "sharp": "^0.35.5"
+    "sharp": "^0.35.5",
+    "@typescript-eslint/typescript-estree": {
+      "minimatch": "^11.0.1"
+    }
   },
   "engines": {
     "node": ">=20.9.0"
