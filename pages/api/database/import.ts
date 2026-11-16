@@ -31,6 +31,9 @@ interface ImportData {
     messageVersions: any[];
     userPrompts: any[];
     settings: any[];
+    lorebooks: any[];
+    loreEntries: any[];
+    characterLorebooks: any[];
   };
   metadata?: any;
 }
@@ -174,7 +177,10 @@ export default withApiHandler({}, {
         chatMessages: 0,
         messageVersions: 0,
         userPrompts: 0,
-        settings: 0
+        settings: 0,
+        lorebooks: 0,
+        loreEntries: 0,
+        characterLorebooks: 0
       },
       skipped: {
         personas: 0,
@@ -184,7 +190,10 @@ export default withApiHandler({}, {
         chatMessages: 0,
         messageVersions: 0,
         userPrompts: 0,
-        settings: 0
+        settings: 0,
+        lorebooks: 0,
+        loreEntries: 0,
+        characterLorebooks: 0
       },
       renamedCharacters: [] as string[],
       errors: [] as string[]
@@ -389,7 +398,120 @@ export default withApiHandler({}, {
       }
     }
 
-    // 6. Import ChatSessions with their whole history. A chat is all-or-nothing: if the
+    // 6. Import Lorebooks (no dependencies on user data; Global Lorebook (ID 0) is skipped)
+    const lorebookIdMap = new Map<number, number>();
+    if (importData.data.lorebooks?.length) {
+      for (const lorebook of importData.data.lorebooks) {
+        // Skip the global lorebook (ID 0); it's managed separately
+        if (lorebook.id === 0) {
+          continue;
+        }
+        try {
+          const existing = await prisma.lorebook.findUnique({
+            where: { id: lorebook.id }
+          });
+
+          if (!existing) {
+            const created = await prisma.lorebook.create({
+              data: {
+                name: lorebook.name,
+                description: lorebook.description,
+                createdAt: new Date(lorebook.createdAt),
+                updatedAt: new Date(lorebook.updatedAt)
+              }
+            });
+            lorebookIdMap.set(lorebook.id, created.id);
+            results.imported.lorebooks++;
+          } else {
+            lorebookIdMap.set(lorebook.id, existing.id);
+            results.skipped.lorebooks++;
+          }
+        } catch (error) {
+          results.errors.push(`Lorebook '${lorebook.name}': ${error instanceof Error ? error.message : 'Unknown error'}`);
+        }
+      }
+    }
+
+    // 7. Import LoreEntries (depends on Lorebooks)
+    const loreEntryIdMap = new Map<number, number>();
+    if (importData.data.loreEntries?.length) {
+      for (const entry of importData.data.loreEntries) {
+        try {
+          const lorebookId = lorebookIdMap.get(entry.lorebookId);
+          if (!lorebookId) {
+            results.errors.push(`LoreEntry '${entry.title}': missing lorebook reference`);
+            continue;
+          }
+
+          const existing = await prisma.loreEntry.findFirst({
+            where: {
+              lorebookId,
+              title: entry.title
+            }
+          });
+
+          if (!existing) {
+            const created = await prisma.loreEntry.create({
+              data: {
+                lorebookId,
+                title: entry.title,
+                content: entry.content,
+                keys: entry.keys ?? entry.keywords ?? '',
+                priority: entry.priority,
+                constant: entry.constant ?? entry.isConstant ?? false,
+                enabled: entry.enabled !== false,
+                createdAt: new Date(entry.createdAt),
+                updatedAt: new Date(entry.updatedAt)
+              }
+            });
+            loreEntryIdMap.set(entry.id, created.id);
+            results.imported.loreEntries++;
+          } else {
+            loreEntryIdMap.set(entry.id, existing.id);
+            results.skipped.loreEntries++;
+          }
+        } catch (error) {
+          results.errors.push(`LoreEntry '${entry.title}': ${error instanceof Error ? error.message : 'Unknown error'}`);
+        }
+      }
+    }
+
+    // 8. Import CharacterLorebooks (depends on Characters and Lorebooks)
+    if (importData.data.characterLorebooks?.length) {
+      for (const charLore of importData.data.characterLorebooks) {
+        try {
+          const characterId = characterIdMap.get(charLore.characterId);
+          const lorebookId = lorebookIdMap.get(charLore.lorebookId);
+
+          if (!characterId || !lorebookId) {
+            results.errors.push(`CharacterLorebook: missing character or lorebook reference`);
+            continue;
+          }
+
+          const existing = await prisma.characterLorebook.findUnique({
+            where: {
+              characterId_lorebookId: { characterId, lorebookId }
+            }
+          });
+
+          if (!existing) {
+            await prisma.characterLorebook.create({
+              data: {
+                characterId,
+                lorebookId
+              }
+            });
+            results.imported.characterLorebooks++;
+          } else {
+            results.skipped.characterLorebooks++;
+          }
+        } catch (error) {
+          results.errors.push(`CharacterLorebook: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        }
+      }
+    }
+
+    // 9. Import ChatSessions with their whole history. A chat is all-or-nothing: if the
     // session already exists we import none of it, so two histories can never be merged.
     if (importData.data.chatSessions?.length) {
       const messagesBySession = new Map<number, any[]>();

@@ -24,7 +24,10 @@ export default withApiHandler({}, {
       characters,
       chatSessions,
       userPrompts,
-      settings
+      settings,
+      lorebooks,
+      loreEntries,
+      characterLorebooks
     ] = await Promise.all([
       prisma.persona.findMany({
         orderBy: { id: 'asc' }
@@ -53,6 +56,15 @@ export default withApiHandler({}, {
       }),
       prisma.setting.findMany({
         orderBy: { key: 'asc' }
+      }),
+      prisma.lorebook.findMany({
+        orderBy: { id: 'asc' }
+      }),
+      prisma.loreEntry.findMany({
+        orderBy: { id: 'asc' }
+      }),
+      prisma.characterLorebook.findMany({
+        orderBy: { id: 'asc' }
       })
     ]);
 
@@ -75,7 +87,10 @@ export default withApiHandler({}, {
         chatMessages: flatMessages,
         messageVersions,
         userPrompts,
-        settings
+        settings,
+        lorebooks,
+        loreEntries,
+        characterLorebooks
       },
       metadata: {
         totalRecords: {
@@ -86,7 +101,10 @@ export default withApiHandler({}, {
           chatMessages: chatMessages.length,
           messageVersions: messageVersions.length,
           userPrompts: userPrompts.length,
-          settings: settings.length
+          settings: settings.length,
+          lorebooks: lorebooks.length,
+          loreEntries: loreEntries.length,
+          characterLorebooks: characterLorebooks.length
         }
       }
     };

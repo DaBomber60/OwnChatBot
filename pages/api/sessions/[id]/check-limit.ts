@@ -1,7 +1,10 @@
 import prisma from '../../../../lib/prisma';
 import { notFound } from '../../../../lib/apiErrors';
-import { getTruncationLimit } from '../../../../lib/aiProvider';
+import { getTruncationLimit, getAIConfig } from '../../../../lib/aiProvider';
 import { buildSystemPrompt } from '../../../../lib/systemPrompt';
+import { injectConstantLoreIntoSystemPrompt, buildTriggeredLoreInjection } from '../../../../lib/lorebook/injection';
+import { collectConstantEntries, collectActiveEntries, type TriggerContext } from '../../../../lib/lorebook/trigger';
+import { loadUserPromptBody } from '../../../../lib/aiRequest';
 import { withApiHandler } from '../../../../lib/withApiHandler';
 
 export default withApiHandler({ parseId: true }, {
@@ -23,11 +26,24 @@ export default withApiHandler({ parseId: true }, {
     }
 
     const { persona, character, messages } = session;
+    const aiCfg = await getAIConfig();
+    const truncationLimit = 'error' in aiCfg ? 400000 : aiCfg.truncationLimit;
 
     // Build system prompt (including summary if present)
-    const systemContent = buildSystemPrompt(persona, character, {
+    let systemContent = buildSystemPrompt(persona, character, {
       summary: session.summary || undefined,
     });
+
+    // Load and append user prompt if configured
+    const userPromptBody = await loadUserPromptBody().catch(() => '');
+
+    // Inject constant lore into system prompt
+    try {
+      const constantEntries = await collectConstantEntries(character.id);
+      systemContent = injectConstantLoreIntoSystemPrompt(systemContent, constantEntries);
+    } catch (err) {
+      console.warn('[check-limit] Failed to load constant lore:', err);
+    }
 
     // Format history with persona name prefix for user messages
     const formattedHistory = messages.map((m) => {
@@ -40,16 +56,42 @@ export default withApiHandler({ parseId: true }, {
       return { role: m.role, content: m.content };
     });
 
+    // Estimate lore injection for the most recent user message
+    let loreInjectionContent = '';
+    if (formattedHistory.length > 0) {
+      const lastUserMsg = [...formattedHistory].reverse().find(m => m.role === 'user');
+      if (lastUserMsg) {
+        try {
+          const triggerContext: TriggerContext = {
+            sessionId: session.id,
+            characterId: character.id,
+            currentMessageText: lastUserMsg.content,
+            history: formattedHistory,
+            keepActiveTurns: 'error' in aiCfg ? 2 : aiCfg.loreKeepActiveTurns,
+          };
+          const triggeredEntries = await collectActiveEntries(triggerContext);
+          const { content } = buildTriggeredLoreInjection(triggeredEntries);
+          loreInjectionContent = content;
+        } catch (err) {
+          console.warn('[check-limit] Failed to load triggered lore:', err);
+        }
+      }
+    }
+
     // Calculate total character count as it would be sent to API
     const allMessages = [
       { role: 'system', content: systemContent },
-      ...formattedHistory
+      ...formattedHistory.map((m, idx) => {
+        // Add lore injection estimate to the last user message
+        if (idx === formattedHistory.length - 1 && m.role === 'user') {
+          return { role: m.role, content: m.content + loreInjectionContent };
+        }
+        return m;
+      })
     ];
 
     const totalCharacters = allMessages.reduce((sum, msg) => sum + msg.content.length, 0);
-    // Use settings-based limit with defaults
-    const limit = await getTruncationLimit();
-    const warningThreshold = Math.floor(limit * 0.9); // 90% of limit
+    const warningThreshold = Math.floor(truncationLimit * 0.9); // 90% of limit
     
     const isApproachingLimit = totalCharacters >= warningThreshold;
     const hasNoSummary = !session.summary || session.summary.trim() === '';
@@ -57,9 +99,9 @@ export default withApiHandler({ parseId: true }, {
 
     return res.status(200).json({
       totalCharacters,
-      limit,
+      limit: truncationLimit,
       warningThreshold,
-      percentage: Math.round((totalCharacters / limit) * 100),
+      percentage: Math.round((totalCharacters / truncationLimit) * 100),
       isApproachingLimit,
       hasNoSummary,
       shouldBlock,
