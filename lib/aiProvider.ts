@@ -23,9 +23,12 @@ export interface AIConfig {
   // Batched settings — fetched in the same query to avoid extra DB round-trips
   temperature: number;        // Default 0.7
   maxTokens: number;          // Default 4096, clamped [256, 8192]
-  truncationLimit: number;    // Default 150000, clamped [30000, 320000]
+  truncationLimit: number;    // Default 400000, clamped [30000, 400000]
   summaryPrompt: string;      // Default long prompt
   apiFailureTimeout: number;  // Seconds of inactivity before giving up. Default 20, clamped [5, 240]
+  // Lorebook settings
+  loreLimit: number;          // Default 4000 chars, clamped [0, 50000]
+  loreKeepActiveTurns: number; // Default 3 turns, clamped [0, 20]
   // DeepSeek thinking/reasoning mode
   deepseekThinking: 'disabled' | 'enabled';  // Default 'disabled'
   deepseekReasoningEffort: 'high' | 'max';   // Default 'high' (only used when thinking is enabled)
@@ -77,7 +80,7 @@ export function filterProviderModels(provider: ModelListProvider, ids: string[])
 
 export async function getAIConfig(): Promise<AIConfig | { error: string; code: string }> {
   // Pull ALL relevant settings in a single query — includes AI provider config
-  // plus temperature, maxTokens, maxCharacters, and summaryPrompt to avoid extra round-trips.
+  // plus temperature, maxTokens, maxCharacters, summaryPrompt, and lore settings to avoid extra round-trips.
   const rows = await prisma.setting.findMany({
     where: { key: { in: [
       'apiKey', // legacy / fallback
@@ -90,7 +93,9 @@ export async function getAIConfig(): Promise<AIConfig | { error: string; code: s
       // DeepSeek thinking/reasoning mode
       'deepseekThinking', 'deepseekReasoningEffort', 'deepseekThinkingGuidance',
       // Batched settings (previously separate queries)
-      'temperature', 'maxTokens', 'maxCharacters', 'summaryPrompt', 'apiFailureTimeout'
+      'temperature', 'maxTokens', 'maxCharacters', 'summaryPrompt', 'apiFailureTimeout',
+      // Lorebook settings
+      'loreLimit', 'loreKeepActiveTurns'
     ] } }
   });
   const map: RawSettingsMap = {};
@@ -137,6 +142,10 @@ export async function getAIConfig(): Promise<AIConfig | { error: string; code: s
   const deepseekReasoningEffort = (map.deepseekReasoningEffort === 'max' ? 'max' : 'high') as 'high' | 'max';
   const deepseekThinkingGuidance = map.deepseekThinkingGuidance ?? DEFAULT_THINKING_GUIDANCE;
 
+  // Lorebook settings
+  const loreLimitRaw = map.loreLimit ? parseInt(map.loreLimit, 10) : NaN;
+  const loreKeepActiveTurnsRaw = map.loreKeepActiveTurns ? parseInt(map.loreKeepActiveTurns, 10) : NaN;
+
   return {
     apiKey, provider, url, model, enableTemperature, tokenFieldOverride,
     temperature: !isNaN(temperature) ? temperature : DEFAULT_TEMPERATURE,
@@ -147,6 +156,8 @@ export async function getAIConfig(): Promise<AIConfig | { error: string; code: s
     deepseekThinking,
     deepseekReasoningEffort,
     deepseekThinkingGuidance,
+    loreLimit: !isNaN(loreLimitRaw) ? clampLoreLimit(loreLimitRaw) : DEFAULT_LORE_LIMIT,
+    loreKeepActiveTurns: !isNaN(loreKeepActiveTurnsRaw) ? clampLoreKeepActiveTurns(loreKeepActiveTurnsRaw) : DEFAULT_LORE_KEEP_ACTIVE_TURNS,
   };
 }
 
@@ -190,7 +201,7 @@ export function normalizeTemperature(provider: AIProvider, model: string, reques
 // Each returns a sensible default on missing/invalid data or DB error.
 // ---------------------------------------------------------------------------
 
-const DEFAULT_TRUNCATION_LIMIT = 150000;
+const DEFAULT_TRUNCATION_LIMIT = 400000; // Updated for DeepSeek v4-Pro (128K context window)
 const TRUNCATION_MIN = 30000;
 const TRUNCATION_MAX = 2500000;
 
@@ -206,7 +217,7 @@ export async function getTruncationLimit(): Promise<number> {
   return DEFAULT_TRUNCATION_LIMIT;
 }
 
-export const DEFAULT_MAX_TOKENS = 4096;
+export const DEFAULT_MAX_TOKENS = 8192; // Updated for DeepSeek v4-Pro
 export const MAX_TOKENS_MIN = 256;
 export const MAX_TOKENS_MAX = 256000;
 
@@ -282,6 +293,54 @@ export async function getSummaryPrompt(): Promise<string> {
     if (row?.value) return row.value;
   } catch { /* DB error — use default */ }
   return DEFAULT_SUMMARY_PROMPT;
+}
+
+// ---------------------------------------------------------------------------
+// Lorebook settings
+// ---------------------------------------------------------------------------
+
+export const DEFAULT_LORE_LIMIT = 4000;
+export const LORE_LIMIT_MIN = 0;
+export const LORE_LIMIT_MAX = 50000;
+
+/** Clamp a lore limit value. */
+export function clampLoreLimit(n: number): number {
+  if (isNaN(n)) return DEFAULT_LORE_LIMIT;
+  return Math.max(LORE_LIMIT_MIN, Math.min(LORE_LIMIT_MAX, n));
+}
+
+/** Read the lore character limit from DB. Default: 4000 chars. Clamped [0, 50000]. */
+export async function getLoreLimit(): Promise<number> {
+  try {
+    const row = await prisma.setting.findUnique({ where: { key: 'loreLimit' } });
+    if (row?.value) {
+      const parsed = parseInt(row.value, 10);
+      if (!isNaN(parsed)) return clampLoreLimit(parsed);
+    }
+  } catch { /* DB error — use default */ }
+  return DEFAULT_LORE_LIMIT;
+}
+
+export const DEFAULT_LORE_KEEP_ACTIVE_TURNS = 3;
+export const LORE_KEEP_ACTIVE_MIN = 0;
+export const LORE_KEEP_ACTIVE_MAX = 20;
+
+/** Clamp a keep-active turns value. */
+export function clampLoreKeepActiveTurns(n: number): number {
+  if (isNaN(n)) return DEFAULT_LORE_KEEP_ACTIVE_TURNS;
+  return Math.max(LORE_KEEP_ACTIVE_MIN, Math.min(LORE_KEEP_ACTIVE_MAX, n));
+}
+
+/** Read how many turns to keep a triggered lore entry active. Default: 3 turns. Clamped [0, 20]. */
+export async function getLoreKeepActiveTurns(): Promise<number> {
+  try {
+    const row = await prisma.setting.findUnique({ where: { key: 'loreKeepActiveTurns' } });
+    if (row?.value) {
+      const parsed = parseInt(row.value, 10);
+      if (!isNaN(parsed)) return clampLoreKeepActiveTurns(parsed);
+    }
+  } catch { /* DB error — use default */ }
+  return DEFAULT_LORE_KEEP_ACTIVE_TURNS;
 }
 
 // ---------------------------------------------------------------------------

@@ -139,8 +139,17 @@ function applySchema(envVars) {
     });
 
     console.log('✅ Database schema ready via migrations!');
+
+    console.log('🌱 Running database seed...');
+    execSync('npx prisma db seed', {
+      stdio: 'inherit',
+      cwd: path.join(__dirname, '..'),
+      env: { ...process.env, ...envVars }
+    });
+
+    console.log('✅ Database seeded!');
   } catch (error) {
-    console.log('❌ Failed to run migrations:', error.message);
+    console.log('❌ Failed to run migrations or seed:', error.message);
     process.exit(1);
   }
 }

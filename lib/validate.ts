@@ -229,6 +229,38 @@ export const schemas = {
       content: z.string(),
     })).min(1),
   }),
+
+  // Lorebook CRUD
+  createLorebook: z.object({
+    name: z.string().trim().min(1).max(200),
+    description: z.string().trim().max(2000).optional(),
+  }),
+  updateLorebook: z.object({
+    name: z.string().trim().min(1).max(200).optional(),
+    description: z.string().trim().max(2000).optional().nullable(),
+  }),
+  createLoreEntry: z.object({
+    title: z.string().trim().min(1).max(200),
+    content: z.string().trim().min(1).max(50000),
+    keys: z.array(z.string().trim().min(1)).optional(),
+    constant: z.boolean().optional(),
+    enabled: z.boolean().optional(),
+    priority: z.number().int().min(0).max(1000).optional(),
+  }),
+  updateLoreEntry: z.object({
+    title: z.string().trim().min(1).max(200).optional(),
+    content: z.string().trim().min(1).max(50000).optional(),
+    keys: z.array(z.string().trim().min(1)).optional(),
+    constant: z.boolean().optional(),
+    enabled: z.boolean().optional(),
+    priority: z.number().int().min(0).max(1000).optional(),
+  }),
+  linkLorebook: z.object({
+    characterId: z.number().int().positive(),
+  }),
+  unlinkLorebook: z.object({
+    characterId: z.number().int().positive(),
+  }),
 };
 
 /**

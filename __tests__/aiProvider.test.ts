@@ -2,6 +2,9 @@ import {
   tokenFieldFor, normalizeTemperature, clampMaxTokens, DEFAULT_FALLBACK_URL,
   clampApiFailureTimeout, failureTimeoutMs, filterProviderModels, isModelListProvider,
   DEFAULT_API_FAILURE_TIMEOUT, API_FAILURE_TIMEOUT_MIN, API_FAILURE_TIMEOUT_MAX, STREAM_TIMEOUT_MULTIPLIER,
+  clampLoreLimit, clampLoreKeepActiveTurns,
+  DEFAULT_LORE_LIMIT, LORE_LIMIT_MIN, LORE_LIMIT_MAX,
+  DEFAULT_LORE_KEEP_ACTIVE_TURNS, LORE_KEEP_ACTIVE_MIN, LORE_KEEP_ACTIVE_MAX,
 } from '../lib/aiProvider';
 import type { AIProvider } from '../lib/aiProvider';
 
@@ -183,5 +186,48 @@ describe('failureTimeoutMs', () => {
   it('clamps before converting to milliseconds', () => {
     expect(failureTimeoutMs(9999, false)).toBe(240000);
     expect(failureTimeoutMs(0, false)).toBe(5000);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Lorebook settings
+// ---------------------------------------------------------------------------
+describe('clampLoreLimit', () => {
+  it('allows the full supported range', () => {
+    expect(LORE_LIMIT_MIN).toBe(0);
+    expect(LORE_LIMIT_MAX).toBe(50000);
+    expect(clampLoreLimit(0)).toBe(0);
+    expect(clampLoreLimit(50000)).toBe(50000);
+    expect(clampLoreLimit(4000)).toBe(4000);
+  });
+
+  it('clamps out-of-range values', () => {
+    expect(clampLoreLimit(-100)).toBe(0);
+    expect(clampLoreLimit(99999)).toBe(50000);
+  });
+
+  it('falls back to the default for NaN', () => {
+    expect(clampLoreLimit(NaN)).toBe(DEFAULT_LORE_LIMIT);
+    expect(DEFAULT_LORE_LIMIT).toBe(4000);
+  });
+});
+
+describe('clampLoreKeepActiveTurns', () => {
+  it('allows the full supported range', () => {
+    expect(LORE_KEEP_ACTIVE_MIN).toBe(0);
+    expect(LORE_KEEP_ACTIVE_MAX).toBe(20);
+    expect(clampLoreKeepActiveTurns(0)).toBe(0);
+    expect(clampLoreKeepActiveTurns(20)).toBe(20);
+    expect(clampLoreKeepActiveTurns(3)).toBe(3);
+  });
+
+  it('clamps out-of-range values', () => {
+    expect(clampLoreKeepActiveTurns(-5)).toBe(0);
+    expect(clampLoreKeepActiveTurns(100)).toBe(20);
+  });
+
+  it('falls back to the default for NaN', () => {
+    expect(clampLoreKeepActiveTurns(NaN)).toBe(DEFAULT_LORE_KEEP_ACTIVE_TURNS);
+    expect(DEFAULT_LORE_KEEP_ACTIVE_TURNS).toBe(3);
   });
 });
