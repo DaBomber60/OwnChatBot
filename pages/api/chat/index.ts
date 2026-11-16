@@ -8,6 +8,7 @@ import {
   persistRequestWithMeta, loadUserPromptBody, parseUpstreamBody, forwardUpstreamError,
   upstreamReasonedWithoutReplying,
 } from '../../../lib/aiRequest';
+import { integrateLorebookIntoPrompt } from '../../../lib/lorebook/integration';
 import { relayUpstreamSSE } from '../../../lib/sseRelay';
 import { limiters, clientIp } from '../../../lib/rateLimit';
 import { enforceBodySize } from '../../../lib/bodyLimit';
@@ -122,6 +123,30 @@ export default withApiHandler({}, {
     console.log(`[Truncation] Removed ${prompt.removedCount} messages (${prompt.baseMessages.length} -> ${prompt.messages.length})`);
   }
 
+  // Integrate lorebook: inject constant entries into system prompt and trigger on current message
+  let triggeredLoreIds: number[] = [];
+  if (userMessage && !isContinuationPlaceholder(userMessage)) {
+    try {
+      const loreResult = await integrateLorebookIntoPrompt({
+        sessionId: sessionIdToUse,
+        characterId,
+        personaName: persona.name,
+        keepActiveTurns: aiCfg.loreKeepActiveTurns,
+        history: history as any,
+        userMessage,
+      }, prompt.messages[0]?.content || '');
+
+      // Update system prompt with lore injected
+      if (prompt.messages[0]) {
+        prompt.messages[0].content = loreResult.systemPromptWithLore;
+      }
+      triggeredLoreIds = loreResult.triggeredEntryIds;
+    } catch (err) {
+      console.warn('[Lorebook] Failed to integrate lore:', err);
+      // Continue without lore on error (graceful degradation)
+    }
+  }
+
   // Now, if this is a continuation request, append the ephemeral continuation directive as the LAST message.
   // This guarantees it's kept (not subject to truncation) and not prefixed with persona name.
   if (isContinuationPlaceholder(userMessage)) {
@@ -147,7 +172,7 @@ export default withApiHandler({}, {
     maxTokens: computedMaxTokens,
   });
 
-  await persistRequestWithMeta(sessionIdToUse, body, prompt, truncationLimit);
+  await persistRequestWithMeta(sessionIdToUse, body, prompt, truncationLimit, triggeredLoreIds);
 
   // (Removed verbose full JSON debug logging per user request)
   const DEBUG_CAPTURE = process.env.DEBUG_CHAT_CAPTURE === 'true' || process.env.DEBUG_FULL_CHAT_LOG === 'true';

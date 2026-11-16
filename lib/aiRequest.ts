@@ -141,6 +141,7 @@ export async function persistRequestWithMeta(
   body: Record<string, unknown>,
   prompt: ConversationPrompt,
   truncationLimit: number,
+  triggeredLoreIds?: number[],
 ): Promise<void> {
   await persistApiRequest(sessionId, {
     ...body,
@@ -149,6 +150,7 @@ export async function persistRequestWithMeta(
       sentCount: prompt.messages.length,
       baseCount: prompt.baseMessages.length,
       truncationLimit,
+      ...(triggeredLoreIds && triggeredLoreIds.length > 0 ? { triggeredLoreIds } : {}),
     },
   });
 }
