@@ -21,7 +21,15 @@ export default withApiHandler({}, {
           summary: true,
           description: true,
           persona: { select: { id: true, name: true, profileName: true } },
-          character: { select: { id: true, name: true, profileName: true } },
+          character: {
+            select: {
+              id: true,
+              name: true,
+              profileName: true,
+              avatarUpdatedAt: true,
+              group: { select: { id: true, avatarUpdatedAt: true } }
+            }
+          },
           _count: { select: { messages: true } }
         },
         orderBy: { [sortField]: 'desc' },

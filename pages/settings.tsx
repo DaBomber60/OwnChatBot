@@ -757,6 +757,13 @@ export default function SettingsPage() {
           message += `\n`;
         }
         
+        // Character & group pictures (absent from older servers' results)
+        if (imported.pictures > 0 || skipped.pictures > 0) {
+          message += `🖼️ Pictures: ${imported.pictures} imported`;
+          if (skipped.pictures > 0) message += `, ${skipped.pictures} skipped (already set)`;
+          message += `\n`;
+        }
+        
         // Global Prompts
         if (imported.userPrompts > 0 || skipped.userPrompts > 0) {
           message += `📝 Global Prompts: ${imported.userPrompts} imported`;

@@ -32,6 +32,10 @@ export function mockRes() {
       res._body = body;
       return res;
     },
+    send(body: any) {
+      res._body = body;
+      return res;
+    },
     end() {
       return res;
     },

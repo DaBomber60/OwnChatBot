@@ -5,6 +5,8 @@ import useSWR from 'swr';
 import { useEffect, useMemo, useState } from 'react';
 import { fetcher } from '../lib/fetcher';
 import { formatRelativeTime, textSnippet } from '../lib/displayFormat';
+import { characterAvatarUrl } from '../lib/avatar';
+import { Avatar } from '../components/Avatar';
 import type { Session } from '../types/models';
 
 const RECENT_COUNT = 3;
@@ -17,23 +19,6 @@ const TILES = [
   { href: '/settings', icon: '⚙️', title: 'Settings', desc: 'API keys, prompts and preferences' },
 ];
 
-/** Two-letter monogram from a name, ignoring punctuation like quotes. */
-function initials(name: string): string {
-  const words = name.split(/\s+/).map(w => w.replace(/[^\p{L}\p{N}]/gu, '')).filter(Boolean);
-  if (words.length === 0) return '?';
-  const first = words[0]!.charAt(0);
-  const last = words.length > 1 ? words[words.length - 1]!.charAt(0) : '';
-  return (first + last).toUpperCase();
-}
-
-/** Stable per-character gradient so the same character always gets the same colour. */
-function avatarGradient(seed: string): string {
-  let hash = 0;
-  for (let i = 0; i < seed.length; i++) hash = (hash * 31 + seed.charCodeAt(i)) | 0;
-  const hue = Math.abs(hash) % 360;
-  return `linear-gradient(135deg, hsl(${hue} 70% 58%), hsl(${(hue + 40) % 360} 65% 38%))`;
-}
-
 function RecentChatCard({ session, now }: { session: Session; now: number }) {
   const snippet = textSnippet(session.description);
   const profiles = [session.persona.profileName, session.character.profileName].filter(Boolean).join(' & ');
@@ -41,9 +26,7 @@ function RecentChatCard({ session, now }: { session: Session; now: number }) {
   return (
     <Link href={`/chat/${session.id}`} className="recent-card">
       <div className="recent-card-top">
-        <div className="recent-avatar" style={{ background: avatarGradient(session.character.name) }} aria-hidden="true">
-          {initials(session.character.name)}
-        </div>
+        <Avatar name={session.character.name} src={characterAvatarUrl(session.character)} size="2.75rem" />
         <div className="recent-card-heading">
           <h3 className="recent-card-title">{session.character.name}</h3>
           <p className="recent-card-sub">with {session.persona.name}{profiles ? ` · ${profiles}` : ''}</p>

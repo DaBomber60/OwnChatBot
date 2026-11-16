@@ -31,6 +31,9 @@ import { Modal } from '../../components/Modal';
 import { useToast } from '../../components/ToastProvider';
 import { DropdownMenu, DropdownMenuItem, DropdownMenuDivider, ConfirmDeleteItem } from '../../components/DropdownMenu';
 import { CharacterLorebooksField, type CharacterLorebooksFieldHandle } from '../../components/CharacterLorebooksField';
+import { Avatar } from '../../components/Avatar';
+import { AvatarEditor } from '../../components/AvatarEditor';
+import { characterAvatarUrl, groupAvatarUrl } from '../../lib/avatar';
 
 // Utility to get preview text for character cards
 function getCharacterPreview(character: Character): { text: string; label: string } | null {
@@ -91,7 +94,8 @@ function SortableCharacterCard({
   disableDrag = false,
   selectMode = false,
   isSelected = false,
-  onToggleSelect
+  onToggleSelect,
+  onEditPicture
 }: {
   character: Character;
   expandedId: number | null;
@@ -128,6 +132,7 @@ function SortableCharacterCard({
   selectMode?: boolean;
   isSelected?: boolean;
   onToggleSelect?: (id: number) => void;
+  onEditPicture: (character: Character) => void;
 }) {
   const [showMoveSubmenu, setShowMoveSubmenu] = useState(false);
   const loreFieldRef = useRef<CharacterLorebooksFieldHandle>(null);
@@ -216,7 +221,13 @@ function SortableCharacterCard({
                 ⋮⋮
               </div>
             )}
-            <div className="flex-1">
+            <Avatar
+              name={character.name}
+              src={characterAvatarUrl(character)}
+              size="3rem"
+              className="character-card-avatar"
+            />
+            <div className="flex-1 min-w-0">
               <h3 className="text-lg font-semibold text-primary">{character.name}</h3>
               {character.profileName && (
                 <p className="text-sm text-secondary italic" style={{ marginTop: '-1rem', marginBottom: '-0.25rem' }}>{character.profileName}</p>
@@ -316,6 +327,11 @@ function SortableCharacterCard({
                   }}
                 />
                 <DropdownMenuItem
+                  icon="🖼️"
+                  label={character.avatarUpdatedAt ? 'Change Picture' : 'Add Picture'}
+                  onClick={() => { onEditPicture(character); closeMenu(); }}
+                />
+                <DropdownMenuItem
                   icon="📂"
                   label="Move to group…"
                   onClick={() => setShowMoveSubmenu(true)}
@@ -368,6 +384,18 @@ function SortableCharacterCard({
               mutate();
             }}>
               <div className="grid grid-cols-1 gap-2">
+                <div className="form-group">
+                  <span className="form-label">Picture</span>
+                  <div className="flex items-center gap-3">
+                    <Avatar name={editName || character.name} src={characterAvatarUrl(character)} size="3.5rem" />
+                    <button type="button" className="btn btn-secondary btn-small" onClick={() => onEditPicture(character)}>
+                      {character.avatarUpdatedAt ? 'Change picture' : 'Add picture'}
+                    </button>
+                  </div>
+                  <small className="text-xs text-muted mt-1">
+                    Saved as soon as you choose it. Without a picture, the character&apos;s group picture is used, then initials.
+                  </small>
+                </div>
                 <div className="form-group">
                   <label className="form-label">Name</label>
                   <input 
@@ -565,6 +593,10 @@ export default function CharactersPage() {
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [showBulkDeleteModal, setShowBulkDeleteModal] = useState(false);
   const [bulkDeleting, setBulkDeleting] = useState(false);
+  const [pictureTarget, setPictureTarget] = useState<
+    { kind: 'character'; character: Character } | { kind: 'group'; group: CharacterGroup } | null
+  >(null);
+  const editCharacterPicture = (character: Character) => setPictureTarget({ kind: 'character', character });
   // Integrated generation mode state
   const [isGeneratingMode, setIsGeneratingMode] = useState(false);
   // generationPhase: 'input' => only show minimal fields + description + sliders; 'generated' => show full character fields
@@ -1630,6 +1662,7 @@ export default function CharactersPage() {
                           selectMode={selectMode}
                           isSelected={selectedIds.has(character.id)}
                           onToggleSelect={toggleSelected}
+                          onEditPicture={editCharacterPicture}
                         />
                       ))}
                     </div>
@@ -1665,14 +1698,18 @@ export default function CharactersPage() {
               <div className="flex items-center justify-between mb-4">
                 <div className="flex items-center gap-3">
                   <div className="flex items-center gap-2">
-                    <div 
-                      style={{ 
-                        width: '12px', 
-                        height: '12px', 
-                        backgroundColor: group.color, 
-                        borderRadius: '2px' 
-                      }}
-                    ></div>
+                    {groupAvatarUrl(group) ? (
+                      <Avatar name={group.name} src={groupAvatarUrl(group)} size="2.25rem" />
+                    ) : (
+                      <div 
+                        style={{ 
+                          width: '12px', 
+                          height: '12px', 
+                          backgroundColor: group.color, 
+                          borderRadius: '2px' 
+                        }}
+                      ></div>
+                    )}
                     <h3 className="text-xl font-semibold text-primary mb-0">{group.name}</h3>
                     <span className="text-sm text-muted">({groupCharacters.length} characters)</span>
                   </div>
@@ -1743,6 +1780,14 @@ export default function CharactersPage() {
                           setEditingGroupId(group.id);
                           setEditGroupName(group.name);
                           setEditGroupColor(group.color);
+                          setOpenMenuId(null);
+                        }}
+                      />
+                      <DropdownMenuItem
+                        icon="🖼️"
+                        label={group.avatarUpdatedAt ? 'Change Picture' : 'Add Picture'}
+                        onClick={() => {
+                          setPictureTarget({ kind: 'group', group });
                           setOpenMenuId(null);
                         }}
                       />
@@ -1822,6 +1867,7 @@ export default function CharactersPage() {
                             selectMode={selectMode}
                             isSelected={selectedIds.has(character.id)}
                             onToggleSelect={toggleSelected}
+                            onEditPicture={editCharacterPicture}
                           />
                         ))}
                       </div>
@@ -1993,6 +2039,7 @@ export default function CharactersPage() {
                           selectMode={selectMode}
                           isSelected={selectedIds.has(character.id)}
                           onToggleSelect={toggleSelected}
+                          onEditPicture={editCharacterPicture}
                         />
                       ))}
                     </div>
@@ -2063,6 +2110,31 @@ export default function CharactersPage() {
             </div>
           </div>
         </Modal>
+      )}
+
+      {pictureTarget?.kind === 'character' && (
+        <AvatarEditor
+          title={`Picture for ${pictureTarget.character.name}`}
+          name={pictureTarget.character.name}
+          currentSrc={characterAvatarUrl(pictureTarget.character, null)}
+          fallbackSrc={groupAvatarUrl(pictureTarget.character.group)}
+          fallbackNote={`Showing the ${pictureTarget.character.group?.name ?? 'group'} group's picture until this character has its own.`}
+          endpoint={`/api/characters/${pictureTarget.character.id}/avatar`}
+          onClose={() => setPictureTarget(null)}
+          onSaved={() => { mutate(); }}
+        />
+      )}
+
+      {pictureTarget?.kind === 'group' && (
+        <AvatarEditor
+          title={`Picture for ${pictureTarget.group.name}`}
+          name={pictureTarget.group.name}
+          currentSrc={groupAvatarUrl(pictureTarget.group)}
+          description="Characters in this group that don't have their own picture show this one."
+          endpoint={`/api/character-groups/${pictureTarget.group.id}/avatar`}
+          onClose={() => setPictureTarget(null)}
+          onSaved={() => { mutateGroups(); mutate(); }}
+        />
       )}
 
     </>

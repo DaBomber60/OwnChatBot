@@ -3,6 +3,9 @@ import { schemas, validateBody } from '../../../lib/validate';
 import { badRequest, notFound, serverError } from '../../../lib/apiErrors';
 import { withApiHandler } from '../../../lib/withApiHandler';
 
+// The group's picture is the fallback when the character has none.
+const CHARACTER_WITH_GROUP_AVATAR = { include: { group: { select: { id: true, avatarUpdatedAt: true } } } } as const;
+
 export default withApiHandler({ parseId: true }, {
   GET: async (req, res, { id }) => {
     // Optional pagination: latest messages bottom-up
@@ -17,7 +20,7 @@ export default withApiHandler({ parseId: true }, {
         where: { id },
         include: {
           persona: true,
-          character: true,
+          character: CHARACTER_WITH_GROUP_AVATAR,
           messages: {
             orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
             include: { versions: { orderBy: { version: 'asc' } } }
@@ -33,7 +36,7 @@ export default withApiHandler({ parseId: true }, {
     // Paginated path: fetch session meta first
     const sessionMeta = await prisma.chatSession.findUnique({
       where: { id },
-      include: { persona: true, character: true }
+      include: { persona: true, character: CHARACTER_WITH_GROUP_AVATAR }
     });
     if (!sessionMeta) {
       return notFound(res, 'Session not found', 'SESSION_NOT_FOUND');

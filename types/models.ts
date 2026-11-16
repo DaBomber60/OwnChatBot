@@ -21,6 +21,7 @@ export interface CharacterGroup {
   color: string;
   isCollapsed: boolean;
   sortOrder: number;
+  avatarUpdatedAt?: string | null;
   characters?: Character[];
   createdAt?: string;
   updatedAt?: string;
@@ -37,6 +38,7 @@ export interface Character {
   exampleDialogue: string;
   groupId?: number | null;
   sortOrder?: number;
+  avatarUpdatedAt?: string | null;
   group?: CharacterGroup | null;
   createdAt?: string;
   updatedAt?: string;

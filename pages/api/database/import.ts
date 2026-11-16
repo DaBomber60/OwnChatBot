@@ -12,6 +12,7 @@ import { GLOBAL_LOREBOOK_ID } from '../../../lib/globalLorebook';
 import { exportedSessionLorebookLookup, normalizeLorebookIds } from '../../../lib/lorebook/sessionLorebooks';
 import { remapLoreMetadata } from '../../../lib/messageMetadata';
 import { serializeKeywords } from '../../../lib/lorebook/keywords';
+import { importAvatarIfMissing, type AvatarOwnerKind } from '../../../lib/avatarStore';
 
 /** Stored keys are kept as-is (JSON or legacy text); a raw list from other tools is serialized. */
 function importedKeys(value: unknown): string {
@@ -45,6 +46,8 @@ interface ImportData {
     loreEntries: any[];
     characterLorebooks: any[];
     sessionLorebooks?: any[];
+    characterAvatars?: any[];
+    characterGroupAvatars?: any[];
   };
   metadata?: any;
 }
@@ -192,7 +195,8 @@ export default withApiHandler({}, {
         lorebooks: 0,
         loreEntries: 0,
         characterLorebooks: 0,
-        sessionLorebooks: 0
+        sessionLorebooks: 0,
+        pictures: 0
       },
       skipped: {
         personas: 0,
@@ -206,7 +210,8 @@ export default withApiHandler({}, {
         lorebooks: 0,
         loreEntries: 0,
         characterLorebooks: 0,
-        sessionLorebooks: 0
+        sessionLorebooks: 0,
+        pictures: 0
       },
       renamedCharacters: [] as string[],
       errors: [] as string[]
@@ -215,6 +220,7 @@ export default withApiHandler({}, {
     // Import data in dependency order to maintain referential integrity
     
     // 1. Import CharacterGroups first (no dependencies)
+    const groupIdMap = new Map<number, number>();
     if (importData.data.characterGroups?.length) {
       for (const group of importData.data.characterGroups) {
         try {
@@ -223,7 +229,7 @@ export default withApiHandler({}, {
           });
           
           if (!existing) {
-            await prisma.characterGroup.create({
+            const created = await prisma.characterGroup.create({
               data: {
                 name: group.name,
                 color: group.color,
@@ -233,8 +239,10 @@ export default withApiHandler({}, {
                 updatedAt: new Date(group.updatedAt)
               }
             });
+            groupIdMap.set(group.id, created.id);
             results.imported.characterGroups++;
           } else {
+            groupIdMap.set(group.id, existing.id);
             results.skipped.characterGroups++;
           }
         } catch (error) {
@@ -336,6 +344,27 @@ export default withApiHandler({}, {
           results.errors.push(`Character '${character.name}': ${error instanceof Error ? error.message : 'Unknown error'}`);
         }
       }
+    }
+
+    // 3b. Import character and group pictures onto whichever local record each was matched to.
+    const importPicture = async (kind: AvatarOwnerKind, record: any, ownerId: number | undefined, label: string) => {
+      if (ownerId === undefined) return;
+      try {
+        const outcome = await importAvatarIfMissing(kind, ownerId, record);
+        if (outcome === 'imported') results.imported.pictures++;
+        else if (outcome === 'skipped') results.skipped.pictures++;
+        else results.errors.push(`Picture for ${label}: not a valid PNG, JPEG or WebP image`);
+      } catch (error) {
+        results.errors.push(`Picture for ${label}: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      }
+    };
+    for (const record of importData.data.characterGroupAvatars ?? []) {
+      const group = importData.data.characterGroups?.find(g => g.id === record?.ownerId);
+      await importPicture('group', record, groupIdMap.get(record?.ownerId), `group '${group?.name ?? record?.ownerId}'`);
+    }
+    for (const record of importData.data.characterAvatars ?? []) {
+      const character = importData.data.characters?.find(c => c.id === record?.ownerId);
+      await importPicture('character', record, characterIdMap.get(record?.ownerId), `character '${character?.name ?? record?.ownerId}'`);
     }
 
     // 4. Import UserPrompts (no dependencies)

@@ -21,16 +21,37 @@ model Persona {
 }
 
 model CharacterGroup {
-  id          Int         @id @default(autoincrement())
-  name        String      @unique
-  color       String      @default("#6366f1")
-  isCollapsed Boolean     @default(false)
-  sortOrder   Int         @default(0)
-  createdAt   DateTime    @default(now())
-  updatedAt   DateTime    @updatedAt
-  characters  Character[]
+  id              Int                   @id @default(autoincrement())
+  name            String                @unique
+  color           String                @default("#6366f1")
+  isCollapsed     Boolean               @default(false)
+  sortOrder       Int                   @default(0)
+  avatarUpdatedAt DateTime?
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+  characters      Character[]
+  avatar          CharacterGroupAvatar?
 
   @@map("character_groups")
+}
+
+// Picture bytes live in their own tables so character/group list queries never load them.
+model CharacterGroupAvatar {
+  groupId  Int            @id
+  mimeType String
+  data     Bytes
+  group    CharacterGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+
+  @@map("character_group_avatars")
+}
+
+model CharacterAvatar {
+  characterId Int       @id
+  mimeType    String
+  data        Bytes
+  character   Character @relation(fields: [characterId], references: [id], onDelete: Cascade)
+
+  @@map("character_avatars")
 }
 
 model Character {
@@ -44,11 +65,13 @@ model Character {
   exampleDialogue String
   groupId         Int?
   sortOrder       Int                 @default(0)
+  avatarUpdatedAt DateTime?
   createdAt       DateTime            @default(now())
   updatedAt       DateTime            @updatedAt
   group           CharacterGroup?     @relation(fields: [groupId], references: [id])
   sessions        ChatSession[]
   lorebooks       CharacterLorebook[]
+  avatar          CharacterAvatar?
 
   @@unique([name, profileName])
   @@index([groupId])

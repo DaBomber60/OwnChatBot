@@ -1,8 +1,10 @@
 import React from 'react';
 import { useRouter } from 'next/router';
+import { Avatar } from '../Avatar';
+import { characterAvatarUrl, type CharacterAvatarSource } from '../../lib/avatar';
 
 interface ChatHeaderProps {
-  session: { persona: { name: string }; character: { name: string } };
+  session: { persona: { name: string }; character: CharacterAvatarSource & { name: string } };
   isBurgerMenuOpen: boolean;
   setIsBurgerMenuOpen: (v: boolean | ((prev: boolean) => boolean)) => void;
   devMode: boolean;
@@ -46,7 +48,13 @@ export function ChatHeader({
           </h1>
         </div>
 
-        <div className="burger-menu-spacer" aria-hidden="true"></div>
+        <Avatar
+          name={session.character.name}
+          src={characterAvatarUrl(session.character)}
+          size="32px"
+          className="chat-header-avatar"
+          label={session.character.name}
+        />
       </div>
 
       {isBurgerMenuOpen && (

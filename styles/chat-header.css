@@ -28,20 +28,10 @@
   flex-shrink: 0;
 }
 
-/* Invisible spacer to balance the burger button and center the title */
-.burger-menu-spacer {
-  /* Match the exact burger-menu-btn dimensions */
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
+/* Character picture opposite the burger button; same width keeps the title centred */
+.chat-header-avatar {
   width: 32px;
   height: 32px;
-  padding: 0;
-  border: 1px solid transparent;
-  border-radius: var(--radius-lg);
-  flex-shrink: 0;
-  /* Make it completely invisible */
-  visibility: hidden;
 }
 
 .burger-menu-btn:hover {

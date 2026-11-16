@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import useSWR from 'swr';
 import { useRouter } from 'next/router';
 import Head from 'next/head';
@@ -10,81 +10,10 @@ import { DropdownMenu, DropdownMenuItem, DropdownMenuDivider, ConfirmDeleteItem 
 import { Modal } from '../../components/Modal';
 import { useToast } from '../../components/ToastProvider';
 import { LorebookPicker } from '../../components/LorebookPicker';
+import { CharacterPicker } from '../../components/CharacterPicker';
+import { Avatar } from '../../components/Avatar';
+import { characterAvatarUrl, groupAvatarUrl } from '../../lib/avatar';
 import { GLOBAL_LOREBOOK_ID } from '../../lib/lorebook/constants';
-
-// Pure function — defined outside the component so its reference is stable.
-function organizeCharactersForDisplay(
-  chars: Character[] | undefined,
-  groups: CharacterGroup[] | undefined
-): Array<{
-  isGroup: boolean;
-  isHeader: boolean;
-  group?: CharacterGroup;
-  character?: Character;
-  headerText?: string;
-}> {
-  if (!chars || !groups) return [];
-
-  const organizedCharacters: Array<{
-    isGroup: boolean;
-    isHeader: boolean;
-    group?: CharacterGroup;
-    character?: Character;
-    headerText?: string;
-  }> = [];
-
-  // Create a map of grouped characters
-  const grouped: { [key: number]: Character[] } = {};
-  const ungrouped: Character[] = [];
-
-  // Initialize group arrays
-  groups.forEach(group => {
-    grouped[group.id] = [];
-  });
-
-  // Sort characters into groups
-  chars.forEach(char => {
-    if (char.groupId && grouped[char.groupId]) {
-      const groupArray = grouped[char.groupId];
-      if (groupArray) {
-        groupArray.push(char);
-      }
-    } else {
-      ungrouped.push(char);
-    }
-  });
-
-  // Sort groups alphabetically by name
-  const sortedGroups = [...groups].sort((a, b) => a.name.localeCompare(b.name));
-
-  // Check if there are any groups with characters
-  const hasGroupedCharacters = sortedGroups.some(group => (grouped[group.id] || []).length > 0);
-
-  // Add grouped characters
-  sortedGroups.forEach(group => {
-    const groupCharacters = grouped[group.id] || [];
-    if (groupCharacters.length > 0) {
-      organizedCharacters.push({ isGroup: true, isHeader: true, group, headerText: group.name });
-      groupCharacters.sort((a, b) => (a.profileName || a.name).localeCompare(b.profileName || b.name));
-      groupCharacters.forEach(char => {
-        organizedCharacters.push({ isGroup: false, isHeader: false, character: char });
-      });
-    }
-  });
-
-  // Add "UNGROUPED:" header and ungrouped characters
-  if (ungrouped.length > 0) {
-    if (hasGroupedCharacters) {
-      organizedCharacters.push({ isGroup: false, isHeader: true, headerText: "UNGROUPED:" });
-    }
-    ungrouped.sort((a, b) => (a.profileName || a.name).localeCompare(b.profileName || b.name));
-    ungrouped.forEach(char => {
-      organizedCharacters.push({ isGroup: false, isHeader: false, character: char });
-    });
-  }
-
-  return organizedCharacters;
-}
 
 export default function ChatIndexPage() {
   const router = useRouter();
@@ -282,11 +211,6 @@ export default function ChatIndexPage() {
 
   useClickOutside(openMenuId !== null, () => setOpenMenuId(null));
 
-  const organizedChars = useMemo(
-    () => organizeCharactersForDisplay(chars, groups),
-    [chars, groups]
-  );
-
   if (!personas || !chars || !groups) {
     return (
       <div className="text-center">
@@ -339,39 +263,14 @@ export default function ChatIndexPage() {
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
             <div className="form-group">
-              <label className="form-label">Select Character</label>
-              <select
-                className="form-select"
+              <label className="form-label" htmlFor="new-chat-character">Select Character</label>
+              <CharacterPicker
+                id="new-chat-character"
+                characters={chars}
+                groups={groups}
                 value={selectedCharacter}
-                onChange={e => setSelectedCharacter(Number(e.target.value))}
-              >
-                <option value={0}>Choose a character...</option>
-                {organizedChars.map((item, index) => {
-                  if (item.isHeader) {
-                    return (
-                      <option 
-                        key={`header-${index}`} 
-                        value={0} 
-                        disabled 
-                        style={{ 
-                          color: 'var(--text-primary-dark)', 
-                          fontWeight: 'bold',
-                          backgroundColor: 'var(--bg-tertiary)'
-                        }}
-                      >
-                        {item.headerText}
-                      </option>
-                    );
-                  } else if (item.character) {
-                    return (
-                      <option key={item.character.id} value={item.character.id}>
-                        {item.character.profileName || item.character.name}
-                      </option>
-                    );
-                  }
-                  return null;
-                })}
-              </select>
+                onChange={setSelectedCharacter}
+              />
             </div>
             
             <div className="form-group">
@@ -543,14 +442,18 @@ export default function ChatIndexPage() {
                   {groupItem.isGroup && groupItem.group && (
                     <div className="mb-4">
                       <div className="flex items-center gap-3 mb-3">
-                        <div 
-                          style={{ 
-                            width: '12px', 
-                            height: '12px', 
-                            backgroundColor: groupItem.group.color, 
-                            borderRadius: '2px' 
-                          }}
-                        ></div>
+                        {groupAvatarUrl(groupItem.group) ? (
+                          <Avatar name={groupItem.group.name} src={groupAvatarUrl(groupItem.group)} size="1.75rem" />
+                        ) : (
+                          <div 
+                            style={{ 
+                              width: '12px', 
+                              height: '12px', 
+                              backgroundColor: groupItem.group.color, 
+                              borderRadius: '2px' 
+                            }}
+                          ></div>
+                        )}
                         <h3 className="text-lg font-semibold text-primary">{groupItem.group.name}</h3>
                         <span className="text-sm text-muted">
                           ({groupItem.characterSessions.length} character{groupItem.characterSessions.length !== 1 ? 's' : ''})
@@ -569,8 +472,9 @@ export default function ChatIndexPage() {
                             onClick={() => toggleCharacterExpansion(characterGroup.character.id)}
                           >
                             <div className="flex items-center gap-3">
+                              <Avatar name={characterGroup.character.name} src={characterAvatarUrl(characterGroup.character)} size="2.25rem" />
                               <h4 className="text-lg font-semibold text-primary">
-                                {groupItem.isGroup ? characterGroup.character.name : characterGroup.character.name}
+                                {characterGroup.character.name}
                               </h4>
                               {characterGroup.character.profileName && (
                                 <span className="text-sm text-secondary italic">({characterGroup.character.profileName})</span>

@@ -3,6 +3,7 @@ import JSZip from 'jszip';
 import { limiters, clientIp } from '../../../lib/rateLimit';
 import { tooManyRequests, serverError } from '../../../lib/apiErrors';
 import { withApiHandler } from '../../../lib/withApiHandler';
+import { exportAvatars } from '../../../lib/avatarStore';
 
 export default withApiHandler({}, {
   GET: async (req, res) => {
@@ -28,7 +29,8 @@ export default withApiHandler({}, {
       lorebooks,
       loreEntries,
       characterLorebooks,
-      sessionLorebooks
+      sessionLorebooks,
+      { characterAvatars, characterGroupAvatars }
     ] = await Promise.all([
       prisma.persona.findMany({
         orderBy: { id: 'asc' }
@@ -69,7 +71,8 @@ export default withApiHandler({}, {
       }),
       prisma.chatSessionLorebook.findMany({
         orderBy: { id: 'asc' }
-      })
+      }),
+      exportAvatars()
     ]);
 
     // Derive flat arrays from nested session data (avoids redundant DB queries)
@@ -95,7 +98,9 @@ export default withApiHandler({}, {
         lorebooks,
         loreEntries,
         characterLorebooks,
-        sessionLorebooks
+        sessionLorebooks,
+        characterAvatars,
+        characterGroupAvatars
       },
       metadata: {
         totalRecords: {
@@ -110,7 +115,9 @@ export default withApiHandler({}, {
           lorebooks: lorebooks.length,
           loreEntries: loreEntries.length,
           characterLorebooks: characterLorebooks.length,
-          sessionLorebooks: sessionLorebooks.length
+          sessionLorebooks: sessionLorebooks.length,
+          characterAvatars: characterAvatars.length,
+          characterGroupAvatars: characterGroupAvatars.length
         }
       }
     };

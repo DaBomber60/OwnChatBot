@@ -1,0 +1,320 @@
+/* Character & group display pictures */
+
+.avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  overflow: hidden;
+  border-radius: var(--radius-full);
+  background-color: var(--bg-tertiary);
+  color: #fff;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.15);
+  user-select: none;
+}
+
+.avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+/* Clickable avatar that opens the picture editor */
+.avatar-button {
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 0;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-full);
+  background: none;
+  cursor: pointer;
+}
+
+.avatar-button::after {
+  content: '📷';
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-full);
+  background: rgba(0, 0, 0, 0.55);
+  font-size: 1rem;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.avatar-button:hover::after,
+.avatar-button:focus-visible::after {
+  opacity: 1;
+}
+
+.avatar-button:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+.avatar-button:disabled {
+  cursor: default;
+}
+
+.avatar-button:disabled::after {
+  display: none;
+}
+
+/* Picture editor modal */
+.avatar-editor-modal .modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-3);
+}
+
+.avatar-editor-remove {
+  margin-right: auto;
+  padding: var(--space-3) var(--space-4);
+}
+
+.avatar-editor-file {
+  display: none;
+}
+
+.avatar-editor {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-3);
+  text-align: center;
+}
+
+.avatar-drop {
+  padding: var(--space-6) var(--space-4);
+  border: 2px dashed var(--border-primary);
+  border-radius: var(--radius-xl);
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.avatar-drop-active {
+  border-color: var(--primary);
+  background-color: rgba(99, 102, 241, 0.08);
+}
+
+.avatar-editor-status,
+.avatar-editor-hint {
+  margin: 0;
+}
+
+.avatar-editor-description {
+  margin: 0 0 var(--space-4);
+  text-align: center;
+}
+
+/* Characters page card picture, aligned with the name rather than the whole preview */
+.character-card-avatar {
+  align-self: flex-start;
+  margin-top: 0.15rem;
+}
+
+.avatar-crop {
+  position: relative;
+  overflow: hidden;
+  border-radius: var(--radius-lg);
+  background: var(--bg-tertiary);
+  cursor: grab;
+  touch-action: none;
+  outline: none;
+}
+
+.avatar-crop:active {
+  cursor: grabbing;
+}
+
+.avatar-crop:focus-visible {
+  box-shadow: 0 0 0 2px var(--primary);
+}
+
+.avatar-crop-image {
+  position: absolute;
+  top: 0;
+  left: 0;
+  max-width: none;
+  pointer-events: none;
+  user-select: none;
+}
+
+/* Dims everything outside the circle the picture is shown in */
+.avatar-crop-mask {
+  position: absolute;
+  inset: 0;
+  border-radius: var(--radius-full);
+  box-shadow: 0 0 0 999px rgba(0, 0, 0, 0.55);
+  outline: 2px solid rgba(255, 255, 255, 0.7);
+  outline-offset: -2px;
+  pointer-events: none;
+}
+
+.avatar-zoom {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  max-width: 240px;
+}
+
+.avatar-zoom .form-range {
+  flex: 1;
+}
+
+@media (max-width: 480px) {
+  .avatar-editor-modal .modal-footer {
+    flex-direction: column-reverse;
+    align-items: stretch;
+  }
+
+  .avatar-editor-remove {
+    margin-right: 0;
+  }
+}
+
+/* Searchable character select with pictures */
+.character-picker {
+  position: relative;
+}
+
+.character-picker-trigger {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: 3rem;
+  padding-top: var(--space-2);
+  padding-bottom: var(--space-2);
+  text-align: left;
+  cursor: pointer;
+}
+
+.character-picker-trigger[aria-expanded='true'] {
+  border-color: var(--border-accent);
+  box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.1);
+}
+
+.character-picker-placeholder {
+  flex: 1;
+  color: var(--text-muted);
+}
+
+.character-picker-caret {
+  margin-left: auto;
+  color: var(--text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.character-picker-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.25;
+}
+
+.character-picker-label,
+.character-picker-sub {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.character-picker-sub {
+  font-size: var(--font-size-xs);
+  color: var(--text-muted);
+}
+
+.character-picker-panel {
+  position: absolute;
+  z-index: 50;
+  top: calc(100% + var(--space-1));
+  left: 0;
+  right: 0;
+  display: flex;
+  flex-direction: column;
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border-accent);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-xl);
+  overflow: hidden;
+}
+
+.character-picker-search {
+  border: none;
+  border-bottom: 1px solid var(--border-primary);
+  border-radius: 0;
+}
+
+.character-picker-search:focus {
+  box-shadow: none;
+}
+
+.character-picker-list {
+  max-height: min(22rem, 50vh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-bottom: var(--space-1);
+}
+
+.character-picker-group {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background-color: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.character-picker-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.character-picker-option {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  cursor: pointer;
+  color: var(--text-primary);
+  /* Keeps keyboard-highlighted rows clear of the sticky group header */
+  scroll-margin-top: 2.25rem;
+}
+
+.character-picker-option.is-active {
+  background-color: var(--bg-hover);
+}
+
+.character-picker-option.is-selected .character-picker-label {
+  font-weight: 600;
+}
+
+.character-picker-check {
+  margin-left: auto;
+  color: var(--primary);
+  font-weight: 700;
+}
+
+.character-picker-empty {
+  padding: var(--space-4) var(--space-3);
+  color: var(--text-muted);
+  font-size: var(--font-size-sm);
+  text-align: center;
+}
