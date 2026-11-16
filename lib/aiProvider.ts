@@ -31,8 +31,8 @@ export interface AIConfig {
   summaryPrompt: string;      // Default long prompt
   apiFailureTimeout: number;  // Seconds of inactivity before giving up. Default 20, clamped [5, 240]
   // Lorebook settings
-  loreLimit: number;          // Default 4000 chars, clamped [0, 50000]
-  loreKeepActiveTurns: number; // Default 3 turns, clamped [0, 20]
+  loreLimit: number;          // Default 20000 chars, clamped [0, 50000]
+  loreKeepActiveTurns: number; // Default 5 replies, clamped [0, 20]
   // DeepSeek thinking/reasoning mode
   deepseekThinking: 'disabled' | 'enabled';  // Default 'disabled'
   deepseekReasoningEffort: 'high' | 'max';   // Default 'high' (only used when thinking is enabled)
@@ -314,7 +314,7 @@ export function clampLoreLimit(n: number): number {
   return Math.max(LORE_LIMIT_MIN, Math.min(LORE_LIMIT_MAX, n));
 }
 
-/** Read the lore character limit from DB. Default: 4000 chars. Clamped [0, 50000]. */
+/** Read the lore character limit from DB. Default: 20000 chars. Clamped [0, 50000]. */
 export async function getLoreLimit(): Promise<number> {
   try {
     const row = await prisma.setting.findUnique({ where: { key: 'loreLimit' } });
@@ -332,7 +332,7 @@ export function clampLoreKeepActiveTurns(n: number): number {
   return Math.max(LORE_KEEP_ACTIVE_MIN, Math.min(LORE_KEEP_ACTIVE_MAX, n));
 }
 
-/** Read how many turns to keep a triggered lore entry active. Default: 3 turns. Clamped [0, 20]. */
+/** Read how many replies to keep a triggered lore entry active. Default: 5. Clamped [0, 20]. */
 export async function getLoreKeepActiveTurns(): Promise<number> {
   try {
     const row = await prisma.setting.findUnique({ where: { key: 'loreKeepActiveTurns' } });

@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import useSWR from 'swr';
 import Head from 'next/head';
+import Link from 'next/link';
 import { useRouter } from 'next/router';
 import { strictFetcher, sendJson } from '../../lib/fetcher';
 import { GLOBAL_LOREBOOK_ID } from '../../lib/lorebook/constants';
@@ -9,7 +10,6 @@ import { PageHeader } from '../../components/PageHeader';
 import { useToast } from '../../components/ToastProvider';
 import { useClickOutside } from '../../hooks/useClickOutside';
 import { DropdownMenu, DropdownMenuItem, DropdownMenuDivider, ConfirmDeleteItem } from '../../components/DropdownMenu';
-import { LoreSettingsCard } from '../../components/lorebooks/LoreSettingsCard';
 
 const SEARCH_THRESHOLD = 6;
 
@@ -149,6 +149,7 @@ export default function LorebooksPage() {
               <ul>
                 <li><strong>📌 Always-included</strong> entries go into the system prompt of every chat using the lorebook. Keep them short.</li>
                 <li><strong>🔑 Keyword</strong> entries are added only when your message mentions one of their keywords, then stay for a few replies.</li>
+                <li>Each keyword entry has a priority. <strong>Critical</strong> entries are always added; the rest fill the lore budget from Important down to Minor.</li>
                 <li>Attach lorebooks to a chat when you start it or from the chat&apos;s ☰ menu. Set a character&apos;s defaults in the character editor.</li>
                 <li>The <strong>🌐 Global Lorebook</strong> holds keyword entries available to every chat that has it switched on.</li>
               </ul>
@@ -232,7 +233,10 @@ export default function LorebooksPage() {
         </div>
       )}
 
-      <LoreSettingsCard />
+      <p className="text-center text-sm text-muted">
+        The lore budget and how long entries stay active are in{' '}
+        <Link href="/settings#lore-settings" className="text-accent">Settings</Link>.
+      </p>
     </>
   );
 }

@@ -55,7 +55,10 @@ describe('/api/lorebooks/:id', () => {
     await lorebookHandler(mockReq({ method: 'GET', query: { id: '0' } }), res);
     expect(res._status).toBe(200);
     expect(res._body.isGlobal).toBe(true);
-    expect(res._body.entries[0].keys).toEqual(['legacy', 'words']);
+    expect(res._body.entries[0].keys).toEqual([
+      { text: 'legacy', wholeWord: false },
+      { text: 'words', wholeWord: false },
+    ]);
   });
 
   it('rejects malformed IDs and refuses to delete the global lorebook', async () => {
@@ -71,17 +74,64 @@ describe('/api/lorebooks/:id', () => {
 });
 
 describe('lore entry routes', () => {
-  it('stores keywords as a JSON list and returns them as a list', async () => {
+  it('stores keywords with their match mode and returns them as a list', async () => {
     db.lorebook.findUnique.mockResolvedValue({ id: 3 });
     db.loreEntry.create.mockImplementation(({ data }: any) => Promise.resolve(entryRow(data)));
     const res = mockRes();
     await entriesHandler(mockReq({
       method: 'POST', query: { id: '3' },
-      body: { title: 'Citadel', content: 'A silver fortress', keys: ['Silver Citadel', 'silver citadel', 'fortress'] },
+      body: {
+        title: 'Citadel', content: 'A silver fortress',
+        keys: [{ text: 'Silver Citadel', wholeWord: true }, 'silver citadel', 'fortress'],
+      },
     }), res);
     expect(res._status).toBe(201);
-    expect(db.loreEntry.create.mock.calls[0][0].data.keys).toBe('["Silver Citadel","fortress"]');
-    expect(res._body.keys).toEqual(['Silver Citadel', 'fortress']);
+    expect(JSON.parse(db.loreEntry.create.mock.calls[0][0].data.keys)).toEqual([
+      { text: 'Silver Citadel', wholeWord: true },
+      { text: 'fortress', wholeWord: false },
+    ]);
+    expect(res._body.keys).toEqual([
+      { text: 'Silver Citadel', wholeWord: true },
+      { text: 'fortress', wholeWord: false },
+    ]);
+  });
+
+  it('rejects keyword objects without a match mode', async () => {
+    const res = mockRes();
+    await entriesHandler(mockReq({
+      method: 'POST', query: { id: '3' },
+      body: { title: 'Citadel', content: 'A silver fortress', keys: [{ text: 'citadel' }] },
+    }), res);
+    expect(res._status).toBe(422);
+    expect(db.loreEntry.create).not.toHaveBeenCalled();
+  });
+
+  it('stores priority levels as numbers and returns them as levels', async () => {
+    db.lorebook.findUnique.mockResolvedValue({ id: 3 });
+    db.loreEntry.create.mockImplementation(({ data }: any) => Promise.resolve(entryRow(data)));
+    const res = mockRes();
+    await entriesHandler(mockReq({
+      method: 'POST', query: { id: '3' },
+      body: { title: 'Citadel', content: 'A silver fortress', priority: 'critical' },
+    }), res);
+    expect(db.loreEntry.create.mock.calls[0][0].data.priority).toBe(400);
+    expect(res._body.priority).toBe('critical');
+
+    db.loreEntry.findUnique.mockResolvedValue(entryRow());
+    db.loreEntry.update.mockImplementation(({ data }: any) => Promise.resolve(entryRow(data)));
+    const patched = mockRes();
+    await entryHandler(mockReq({ method: 'PATCH', query: { id: '3', entryId: '7' }, body: { priority: 250 } }), patched);
+    expect(db.loreEntry.update).toHaveBeenCalledWith({ where: { id: 7 }, data: { priority: 200 } });
+    expect(patched._body.priority).toBe('helpful');
+  });
+
+  it('defaults new entries to "information"', async () => {
+    db.lorebook.findUnique.mockResolvedValue({ id: 3 });
+    db.loreEntry.create.mockImplementation(({ data }: any) => Promise.resolve(entryRow(data)));
+    const res = mockRes();
+    await entriesHandler(mockReq({ method: 'POST', query: { id: '3' }, body: { title: 'T', content: 'C' } }), res);
+    expect(db.loreEntry.create.mock.calls[0][0].data.priority).toBe(100);
+    expect(res._body.priority).toBe('information');
   });
 
   it('can clear all keywords', async () => {

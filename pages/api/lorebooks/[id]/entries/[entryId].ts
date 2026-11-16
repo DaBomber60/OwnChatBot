@@ -3,17 +3,18 @@ import { serverError, notFound, badRequest } from '../../../../../lib/apiErrors'
 import { schemas, validateBody, parseId } from '../../../../../lib/validate';
 import { withApiHandler } from '../../../../../lib/withApiHandler';
 import { GLOBAL_LOREBOOK_ID } from '../../../../../lib/globalLorebook';
-import { serializeKeywords } from '../../../../../lib/lorebook/keywords';
+import { storedPriority, type LorePriority } from '../../../../../lib/lorebook/constants';
+import { serializeKeywords, type LoreKeyword } from '../../../../../lib/lorebook/keywords';
 import { parseLorebookId, toLoreEntry } from '../../../../../lib/lorebook/lorebookData';
 import type { NextApiRequest, NextApiResponse } from 'next';
 
 interface UpdateLoreEntryBody {
   title?: string;
   content?: string;
-  keys?: string[];
+  keys?: Array<string | LoreKeyword>;
   constant?: boolean;
   enabled?: boolean;
-  priority?: number;
+  priority?: LorePriority | number;
 }
 
 /** The entry, but only when it belongs to the lorebook in the URL. Writes the error response otherwise. */
@@ -69,7 +70,7 @@ export default withApiHandler({}, {
           ...(keys !== undefined ? { keys: serializeKeywords(keys) } : {}),
           ...(constant !== undefined ? { constant } : {}),
           ...(enabled !== undefined ? { enabled } : {}),
-          ...(priority !== undefined ? { priority } : {}),
+          ...(priority !== undefined ? { priority: storedPriority(priority) } : {}),
         },
       });
 

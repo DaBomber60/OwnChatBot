@@ -56,7 +56,7 @@ export async function getGlobalLorebook() {
     include: {
       entries: {
         where: { enabled: true },
-        orderBy: { priority: 'desc' }
+        orderBy: { title: 'asc' }
       }
     }
   });

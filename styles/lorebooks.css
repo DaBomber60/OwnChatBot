@@ -31,6 +31,19 @@
   color: var(--text-secondary);
 }
 
+/* Part-word keywords (match inside longer words) */
+.lore-chip--partial {
+  border-style: dashed;
+}
+
+.lore-chip-check {
+  width: 12px;
+  height: 12px;
+  margin: 0;
+  accent-color: var(--primary);
+  cursor: pointer;
+}
+
 .lore-chip-remove {
   background: none;
   border: none;
@@ -76,6 +89,12 @@
 
 .lore-badge--disabled {
   color: var(--text-muted);
+}
+
+.lore-badge--critical {
+  border-color: rgba(239, 68, 68, 0.5);
+  background: rgba(239, 68, 68, 0.12);
+  color: #f87171;
 }
 
 /* --- Lorebook list --- */
@@ -232,7 +251,7 @@
   box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.1);
 }
 
-.keyword-input input {
+.keyword-input .keyword-input-field {
   flex: 1;
   min-width: 140px;
   padding: 2px 0;

@@ -2,8 +2,9 @@
  * Lorebook read models for the management UI and pickers.
  */
 import prisma from '../prisma';
-import { GLOBAL_LOREBOOK_ID } from './constants';
+import { GLOBAL_LOREBOOK_ID, priorityLevel } from './constants';
 import { parseKeywordList } from './keywords';
+import { byPriorityThenTitle, byTitle } from './trigger';
 import type { LoreEntry, LorebookDetail, LorebookSummary } from '../../types/models';
 
 type LoreEntryRow = {
@@ -36,7 +37,7 @@ export function toLoreEntry(row: LoreEntryRow): LoreEntry {
     keys: parseKeywordList(row.keys),
     constant: row.constant,
     enabled: row.enabled,
-    priority: row.priority,
+    priority: priorityLevel(row.priority),
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };
@@ -63,12 +64,18 @@ export async function listLorebookSummaries(): Promise<LorebookSummary[]> {
     .sort((a, b) => Number(b.id === GLOBAL_LOREBOOK_ID) - Number(a.id === GLOBAL_LOREBOOK_ID));
 }
 
-/** One lorebook with its entries (highest priority first) and where it's used, or null. */
+/** "Always" entries first (alphabetical), then keyword entries in the order they'd be picked. */
+function entryDisplayOrder(a: LoreEntryRow, b: LoreEntryRow): number {
+  if (a.constant !== b.constant) return a.constant ? -1 : 1;
+  return a.constant ? byTitle(a, b) : byPriorityThenTitle(a, b);
+}
+
+/** One lorebook with its entries and where it's used, or null. */
 export async function getLorebookDetail(id: number): Promise<LorebookDetail | null> {
   const lorebook = await prisma.lorebook.findUnique({
     where: { id },
     include: {
-      entries: { orderBy: [{ priority: 'desc' }, { title: 'asc' }, { id: 'asc' }] },
+      entries: true,
       characters: {
         select: { character: { select: { id: true, name: true, profileName: true } } },
         orderBy: { id: 'asc' },
@@ -83,7 +90,7 @@ export async function getLorebookDetail(id: number): Promise<LorebookDetail | nu
     name: lorebook.name,
     description: lorebook.description,
     isGlobal: lorebook.id === GLOBAL_LOREBOOK_ID,
-    entries: lorebook.entries.map(toLoreEntry),
+    entries: [...lorebook.entries].sort(entryDisplayOrder).map(toLoreEntry),
     characters: lorebook.characters.map(link => link.character),
     chatCount: lorebook._count.sessions,
     createdAt: lorebook.createdAt.toISOString(),

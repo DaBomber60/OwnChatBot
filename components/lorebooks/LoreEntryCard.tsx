@@ -1,4 +1,5 @@
 import { DropdownMenu, DropdownMenuItem, DropdownMenuDivider, ConfirmDeleteItem } from '../DropdownMenu';
+import { LORE_PRIORITY_LABELS } from '../../lib/lorebook/constants';
 import type { LoreEntry } from '../../types/models';
 
 interface LoreEntryCardProps {
@@ -32,13 +33,28 @@ export function LoreEntryCard({
               ? <span className="lore-badge lore-badge--constant">📌 Always</span>
               : <span className="lore-badge lore-badge--triggered">🔑 Keywords</span>}
             {!entry.enabled && <span className="lore-badge lore-badge--disabled">⏸ Disabled</span>}
-            <span className="lore-badge" title="Priority: higher numbers are added first">Priority {entry.priority}</span>
+            {!entry.constant && (
+              <span
+                className={`lore-badge${entry.priority === 'critical' ? ' lore-badge--critical' : ''}`}
+                title={entry.priority === 'critical' ? 'Always added when triggered, even past the lore budget' : 'Priority'}
+              >
+                {LORE_PRIORITY_LABELS[entry.priority]}
+              </span>
+            )}
           </div>
 
           {!entry.constant && (
             entry.keys.length > 0 ? (
               <div className="lore-chip-list">
-                {entry.keys.map(key => <span key={key.toLowerCase()} className="lore-chip">{key}</span>)}
+                {entry.keys.map(key => (
+                  <span
+                    key={key.text.toLowerCase()}
+                    className={`lore-chip${key.wholeWord ? '' : ' lore-chip--partial'}`}
+                    title={key.wholeWord ? 'Whole word only' : 'Also matches inside longer words'}
+                  >
+                    {key.text}
+                  </span>
+                ))}
               </div>
             ) : (
               <span className="lore-field-warning">No keywords, so this entry is never added.</span>

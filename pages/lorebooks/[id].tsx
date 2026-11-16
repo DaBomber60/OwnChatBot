@@ -22,7 +22,7 @@ const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? o
 function entryMatchesFilter(entry: LoreEntry, query: string) {
   return entry.title.toLowerCase().includes(query)
     || entry.content.toLowerCase().includes(query)
-    || entry.keys.some(k => k.toLowerCase().includes(query));
+    || entry.keys.some(k => k.text.toLowerCase().includes(query));
 }
 
 export default function LorebookDetailPage() {
@@ -211,7 +211,7 @@ export default function LorebookDetailPage() {
               {isGlobal ? (
                 <p className="text-sm text-muted mb-0">
                   New chats start with it switched {loreSettings.globalLoreDefault ? 'on' : 'off'}.
-                  Change that in <Link href="/lorebooks#lore-settings" className="text-accent">Lore Settings</Link>, or per chat from its ☰ menu.
+                  Change that in <Link href="/settings#lore-settings" className="text-accent">Settings</Link>, or per chat from its ☰ menu.
                 </p>
               ) : lorebook.characters.length > 0 ? (
                 <div className="flex items-center gap-2" style={{ flexWrap: 'wrap' }}>

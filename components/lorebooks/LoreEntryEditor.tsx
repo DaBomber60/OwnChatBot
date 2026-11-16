@@ -1,10 +1,12 @@
 import { useState } from 'react';
-import { KeywordInput } from './KeywordInput';
+import { KeywordInput, NEW_KEYWORD_WHOLE_WORD } from './KeywordInput';
 import { useToast } from '../ToastProvider';
 import { sendJson, FetchError } from '../../lib/fetcher';
 import { normalizeKeywords } from '../../lib/lorebook/keywords';
-import { DEFAULT_LORE_PRIORITY, LORE_PRIORITY_MAX, LORE_PRIORITY_MIN } from '../../lib/lorebook/constants';
-import type { LoreEntry } from '../../types/models';
+import {
+  DEFAULT_LORE_PRIORITY, LORE_PRIORITIES, LORE_PRIORITY_LABELS, type LorePriority,
+} from '../../lib/lorebook/constants';
+import type { LoreEntry, LoreKeyword } from '../../types/models';
 
 const MIN_CONTENT_FOR_SUGGESTIONS = 10;
 const LONG_CONSTANT_ENTRY = 2000;
@@ -27,19 +29,16 @@ export function LoreEntryEditor({ lorebookId, isGlobal, entry, loreLimit, onSave
   const { showToast } = useToast();
   const [title, setTitle] = useState(entry?.title ?? '');
   const [content, setContent] = useState(entry?.content ?? '');
-  const [keys, setKeys] = useState<string[]>(entry?.keys ?? []);
+  const [keys, setKeys] = useState<LoreKeyword[]>(entry?.keys ?? []);
   const [constant, setConstant] = useState(!isGlobal && !!entry?.constant);
   const [enabled, setEnabled] = useState(entry?.enabled ?? true);
-  const [priority, setPriority] = useState(String(entry?.priority ?? DEFAULT_LORE_PRIORITY));
+  const [priority, setPriority] = useState<LorePriority>(entry?.priority ?? DEFAULT_LORE_PRIORITY);
   const [saving, setSaving] = useState(false);
   const [suggesting, setSuggesting] = useState(false);
   const [suggestionNote, setSuggestionNote] = useState<string | null>(null);
 
-  const priorityValue = Number(priority);
-  const priorityValid = priority.trim() !== '' && Number.isInteger(priorityValue)
-    && priorityValue >= LORE_PRIORITY_MIN && priorityValue <= LORE_PRIORITY_MAX;
   const trimmedContent = content.trim();
-  const canSave = !!title.trim() && !!trimmedContent && priorityValid && !saving;
+  const canSave = !!title.trim() && !!trimmedContent && !saving;
   const canSuggest = trimmedContent.length >= MIN_CONTENT_FOR_SUGGESTIONS && !suggesting && !saving;
 
   const suggestKeywords = async () => {
@@ -50,7 +49,7 @@ export function LoreEntryEditor({ lorebookId, isGlobal, entry, loreLimit, onSave
         content: trimmedContent,
         ...(title.trim() ? { entryTitle: title.trim() } : {}),
       });
-      const merged = normalizeKeywords([...keys, ...result.keywords]);
+      const merged = normalizeKeywords([...keys, ...normalizeKeywords(result.keywords, NEW_KEYWORD_WHOLE_WORD)]);
       const addedCount = merged.length - keys.length;
       setKeys(merged);
       setSuggestionNote(addedCount > 0
@@ -77,7 +76,8 @@ export function LoreEntryEditor({ lorebookId, isGlobal, entry, loreLimit, onSave
         keys: normalizeKeywords(keys),
         constant,
         enabled,
-        priority: priorityValue,
+        // "Always" entries go in the system prompt regardless, so their stored priority is left alone.
+        ...(constant ? {} : { priority }),
       };
       const saved = entry
         ? await sendJson<LoreEntry>(`/api/lorebooks/${lorebookId}/entries/${entry.id}`, 'PATCH', body)
@@ -150,7 +150,9 @@ export function LoreEntryEditor({ lorebookId, isGlobal, entry, loreLimit, onSave
           <KeywordInput id="lore-entry-keywords" value={keys} onChange={setKeys} disabled={saving} />
           {suggestionNote && <small className="lore-field-hint">{suggestionNote}</small>}
           <small className="lore-field-hint">
-            Matched against your latest message, ignoring case. A keyword with spaces matches as a whole phrase.
+            Matched against your latest message, ignoring case. A keyword with spaces matches as a phrase.
+            Ticked keywords only match whole words (&ldquo;cat&rdquo; won&apos;t fire on &ldquo;concatenate&rdquo;); untick one to
+            also match inside longer words (&ldquo;dragon&rdquo; then fires on &ldquo;dragons&rdquo;).
           </small>
           {keys.length === 0 && (
             <small className="lore-field-warning">Without keywords this entry will never be added.</small>
@@ -173,10 +175,10 @@ export function LoreEntryEditor({ lorebookId, isGlobal, entry, loreLimit, onSave
           placeholder="What the AI should know when this entry is included..."
           required
         />
-        {!constant && trimmedContent.length > loreLimit && (
+        {!constant && priority !== 'critical' && trimmedContent.length > loreLimit && (
           <small className="lore-field-warning">
             Longer than your lore budget ({formatNumber(loreLimit)} characters), so it will never be added.
-            Shorten it or raise the budget in Lore Settings on the Lorebooks page.
+            Shorten it, make it Critical, or raise the lore budget in Settings.
           </small>
         )}
         {constant && trimmedContent.length > LONG_CONSTANT_ENTRY && (
@@ -187,29 +189,26 @@ export function LoreEntryEditor({ lorebookId, isGlobal, entry, loreLimit, onSave
       </div>
 
       <div className="lore-form-row">
-        <div className="form-group">
-          <label className="form-label" htmlFor="lore-entry-priority">Priority</label>
-          <input
-            id="lore-entry-priority"
-            className="form-input"
-            type="number"
-            inputMode="numeric"
-            min={LORE_PRIORITY_MIN}
-            max={LORE_PRIORITY_MAX}
-            step={1}
-            value={priority}
-            onChange={e => setPriority(e.target.value)}
-          />
-          {priorityValid ? (
+        {!constant && (
+          <div className="form-group">
+            <label className="form-label" htmlFor="lore-entry-priority">Priority</label>
+            <select
+              id="lore-entry-priority"
+              className="form-select"
+              value={priority}
+              onChange={e => setPriority(e.target.value as LorePriority)}
+            >
+              {LORE_PRIORITIES.map(level => (
+                <option key={level} value={level}>{LORE_PRIORITY_LABELS[level]}</option>
+              ))}
+            </select>
             <small className="lore-field-hint">
-              {constant
-                ? 'Higher numbers appear first in the system prompt.'
-                : 'When several entries trigger at once, higher numbers are added first if the budget is tight.'}
+              {priority === 'critical'
+                ? 'Always added when its keywords come up, even past the lore budget.'
+                : 'When several entries trigger, higher priorities are added first (A–Z within a priority) until the lore budget runs out.'}
             </small>
-          ) : (
-            <small className="lore-field-warning">Use a whole number from {LORE_PRIORITY_MIN} to {LORE_PRIORITY_MAX}.</small>
-          )}
-        </div>
+          </div>
+        )}
         <div className="form-group">
           <span className="form-label">Status</span>
           <label className="form-label flex items-center gap-3 mb-0">

@@ -128,6 +128,13 @@ describe('Lorebook schemas', () => {
       expect(result.success).toBe(false);
     });
 
+    it('accepts priority level names and rejects unknown ones', () => {
+      const parse = (priority: unknown) => schemas.createLoreEntry.safeParse({ title: 'Title', content: 'Content', priority });
+      expect(parse('critical').success).toBe(true);
+      expect(parse('minor').success).toBe(true);
+      expect(parse('urgent').success).toBe(false);
+    });
+
     it('rejects empty keys in array', () => {
       const result = schemas.createLoreEntry.safeParse({
         title: 'Title',

@@ -3,22 +3,24 @@ import { serverError, notFound, badRequest } from '../../../../lib/apiErrors';
 import { schemas, validateBody } from '../../../../lib/validate';
 import { withApiHandler } from '../../../../lib/withApiHandler';
 import { GLOBAL_LOREBOOK_ID } from '../../../../lib/globalLorebook';
-import { DEFAULT_LORE_PRIORITY } from '../../../../lib/lorebook/constants';
-import { serializeKeywords } from '../../../../lib/lorebook/keywords';
+import { DEFAULT_LORE_PRIORITY, storedPriority, type LorePriority } from '../../../../lib/lorebook/constants';
+import { serializeKeywords, type LoreKeyword } from '../../../../lib/lorebook/keywords';
 import { parseLorebookId, toLoreEntry } from '../../../../lib/lorebook/lorebookData';
 
 interface CreateLoreEntryBody {
   title: string;
   content: string;
-  keys?: string[];
+  keys?: Array<string | LoreKeyword>;
   constant?: boolean;
   enabled?: boolean;
-  priority?: number;
+  priority?: LorePriority | number;
 }
 
 /**
  * POST /api/lorebooks/:id/entries
  * Body: { title, content, keys?, constant?, enabled?, priority? }
+ * keys: [{ text, wholeWord }] (plain strings are accepted as part-word matches)
+ * priority: 'critical' | 'important' | 'helpful' | 'information' | 'minor' (default 'information')
  */
 export default withApiHandler({}, {
   POST: async (req, res) => {
@@ -50,7 +52,7 @@ export default withApiHandler({}, {
           keys: serializeKeywords(keys ?? []),
           constant: constant ?? false,
           enabled: enabled ?? true,
-          priority: priority ?? DEFAULT_LORE_PRIORITY,
+          priority: storedPriority(priority ?? DEFAULT_LORE_PRIORITY),
         },
       });
 

@@ -1,5 +1,9 @@
 /** Centralized model types shared across pages and components. */
 
+import type { LorePriority } from '../lib/lorebook/constants';
+
+export type { LorePriority };
+
 export type AIProvider = 'deepseek' | 'openai' | 'openrouter' | 'custom';
 
 export interface Persona {
@@ -114,16 +118,23 @@ export interface LorebookSummary {
   chatCount: number;
 }
 
+export interface LoreKeyword {
+  text: string;
+  /** Only match as a separate word ("cat" won't fire on "concatenate"). */
+  wholeWord: boolean;
+}
+
 export interface LoreEntry {
   id: number;
   lorebookId: number;
   title: string;
   content: string;
-  keys: string[];
+  keys: LoreKeyword[];
   /** Always included in the system prompt instead of waiting for keywords. */
   constant: boolean;
   enabled: boolean;
-  priority: number;
+  /** Critical entries are always added; the rest fill the remaining budget. Unused by constant entries. */
+  priority: LorePriority;
   createdAt?: string;
   updatedAt?: string;
 }

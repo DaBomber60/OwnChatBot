@@ -1,8 +1,18 @@
 import { z } from 'zod';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { validationError, badRequest } from './apiErrors';
+import { LORE_PRIORITIES } from './lorebook/constants';
 
 export type ParsedBody<T> = T & { _raw?: any };
+
+// A lore keyword: { text, wholeWord }, or a plain string (part-word match, the original API shape).
+const loreKeyword = z.union([
+  z.string().trim().min(1).max(100),
+  z.object({ text: z.string().trim().min(1).max(100), wholeWord: z.boolean() }),
+]);
+
+// A priority level name, or a number from the original 0-1000 API (rounded down to a level).
+const lorePriority = z.union([z.enum(LORE_PRIORITIES), z.number().int().min(0).max(1000)]);
 
 export async function parseJson(req: NextApiRequest): Promise<any> {
   // Body should already be parsed by Next.js when content-type application/json
@@ -245,18 +255,18 @@ export const schemas = {
   createLoreEntry: z.object({
     title: z.string().trim().min(1).max(200),
     content: z.string().trim().min(1).max(50000),
-    keys: z.array(z.string().trim().min(1).max(100)).max(100).optional(),
+    keys: z.array(loreKeyword).max(100).optional(),
     constant: z.boolean().optional(),
     enabled: z.boolean().optional(),
-    priority: z.number().int().min(0).max(1000).optional(),
+    priority: lorePriority.optional(),
   }),
   updateLoreEntry: z.object({
     title: z.string().trim().min(1).max(200).optional(),
     content: z.string().trim().min(1).max(50000).optional(),
-    keys: z.array(z.string().trim().min(1).max(100)).max(100).optional(),
+    keys: z.array(loreKeyword).max(100).optional(),
     constant: z.boolean().optional(),
     enabled: z.boolean().optional(),
-    priority: z.number().int().min(0).max(1000).optional(),
+    priority: lorePriority.optional(),
   }),
   linkLorebook: z.object({
     characterId: z.number().int().positive(),

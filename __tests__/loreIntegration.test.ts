@@ -1,7 +1,6 @@
 jest.mock('../lib/prisma', () => ({ __esModule: true, default: {} }));
 
 import {
-  parseKeywords,
   entryMatches,
   recentlyMatchedLoreIds,
   selectActiveEntries,
@@ -16,6 +15,7 @@ import {
   appendTriggeredLoreToLastUserMessage,
 } from '../lib/lorebook/injection';
 import { latestUserMessageText } from '../lib/lorebook/integration';
+import { LORE_PRIORITY_VALUES } from '../lib/lorebook/constants';
 import { buildConversationPrompt } from '../lib/aiRequest';
 import { serializeLoreMetadata } from '../lib/messageMetadata';
 import type { AIConfig } from '../lib/aiProvider';
@@ -39,33 +39,6 @@ const assistant = (matched: number[] = [], triggered: number[] = matched) => ({
 const user = { role: 'user', metadata: null };
 
 describe('Lorebook trigger logic', () => {
-  describe('parseKeywords', () => {
-    it('parses space-separated keywords and normalizes them', () => {
-      const keywords = parseKeywords('dragon SWORD   Magic');
-      expect(keywords.size).toBe(3);
-      expect(keywords.has('dragon')).toBe(true);
-      expect(keywords.has('sword')).toBe(true);
-      expect(keywords.has('magic')).toBe(true);
-    });
-
-    it('handles extra whitespace and empty strings', () => {
-      const keywords = parseKeywords('  test   value  ');
-      expect(keywords.size).toBe(2);
-      expect(keywords.has('test')).toBe(true);
-      expect(keywords.has('value')).toBe(true);
-    });
-
-    it('returns empty set for empty input', () => {
-      const keywords = parseKeywords('');
-      expect(keywords.size).toBe(0);
-    });
-
-    it('returns empty set for whitespace-only input', () => {
-      const keywords = parseKeywords('   \t\n  ');
-      expect(keywords.size).toBe(0);
-    });
-  });
-
   describe('entryMatches', () => {
     it('matches keywords as case-insensitive substrings', () => {
       const entry = { keys: 'dragon sword' };
@@ -116,9 +89,10 @@ describe('Lorebook trigger logic', () => {
   });
 
   describe('selectActiveEntries', () => {
+    const P = LORE_PRIORITY_VALUES;
     const entries = [
-      row({ id: 1, keys: 'dragon', priority: 50 }),
-      row({ id: 2, keys: 'castle', priority: 200 }),
+      row({ id: 1, keys: 'dragon', priority: P.minor }),
+      row({ id: 2, keys: 'castle', priority: P.helpful }),
       row({ id: 3, keys: 'dragon', constant: true }),
       row({ id: 4, keys: 'forest' }),
     ];
@@ -136,9 +110,9 @@ describe('Lorebook trigger logic', () => {
 
     it('fills the lore budget by priority, skipping entries that do not fit', () => {
       const budgeted = [
-        row({ id: 10, keys: 'x', priority: 300, content: 'a'.repeat(60) }),
-        row({ id: 11, keys: 'x', priority: 200, content: 'b'.repeat(60) }),
-        row({ id: 12, keys: 'x', priority: 100, content: 'c'.repeat(30) }),
+        row({ id: 10, keys: 'x', priority: P.important, content: 'a'.repeat(60) }),
+        row({ id: 11, keys: 'x', priority: P.helpful, content: 'b'.repeat(60) }),
+        row({ id: 12, keys: 'x', priority: P.information, content: 'c'.repeat(30) }),
       ];
       const { entries: active, matchedIds } = selectActiveEntries(budgeted, 'x', new Set(), 100);
       expect(active.map(e => e.id)).toEqual([10, 12]);
@@ -146,16 +120,43 @@ describe('Lorebook trigger logic', () => {
       expect(matchedIds).toEqual([10, 12]);
     });
 
-    it('injects nothing when the lore limit is 0', () => {
-      expect(selectActiveEntries(entries, 'dragon castle', new Set(), 0).entries).toEqual([]);
+    it('always includes critical entries, even past the budget, and they use up the budget first', () => {
+      const budgeted = [
+        row({ id: 20, keys: 'x', title: 'Zeta', priority: P.critical, content: 'a'.repeat(80) }),
+        row({ id: 21, keys: 'x', title: 'Alpha', priority: P.critical, content: 'b'.repeat(80) }),
+        row({ id: 22, keys: 'x', title: 'Beta', priority: P.important, content: 'c'.repeat(10) }),
+      ];
+      expect(selectActiveEntries(budgeted, 'x', new Set(), 100).entries.map(e => e.id)).toEqual([21, 20]);
+      expect(selectActiveEntries(budgeted, 'x', new Set(), 0).entries.map(e => e.id)).toEqual([21, 20]);
+      expect(selectActiveEntries(budgeted, 'x', new Set(), 170).entries.map(e => e.id)).toEqual([21, 20, 22]);
+    });
+
+    it('breaks ties within a priority alphabetically by title', () => {
+      const tied = [
+        row({ id: 30, keys: 'x', title: 'mountain pass', priority: P.helpful, content: 'a'.repeat(40) }),
+        row({ id: 31, keys: 'x', title: 'Harbor', priority: P.helpful, content: 'b'.repeat(40) }),
+        row({ id: 32, keys: 'x', title: 'Ancient Ruins', priority: P.minor, content: 'c'.repeat(40) }),
+      ];
+      expect(selectActiveEntries(tied, 'x', new Set(), 1000).entries.map(e => e.id)).toEqual([31, 30, 32]);
+      // With room for two, the alphabetical winners of the higher priority get in.
+      expect(selectActiveEntries(tied, 'x', new Set(), 80).entries.map(e => e.id)).toEqual([31, 30]);
+    });
+
+    it('treats older numeric priorities by the level they fall in', () => {
+      const legacy = [
+        row({ id: 40, keys: 'x', title: 'B', priority: 1000, content: 'a'.repeat(50) }),
+        row({ id: 41, keys: 'x', title: 'A', priority: 250, content: 'b'.repeat(50) }),
+      ];
+      // 1000 counts as critical, so it's kept even though the budget only has room for one.
+      expect(selectActiveEntries(legacy, 'x', new Set(), 50).entries.map(e => e.id)).toEqual([40]);
     });
   });
 
   describe('selectConstantEntries', () => {
-    it('returns constant entries by priority and ignores constants in the global lorebook', () => {
+    it('returns constant entries alphabetically and ignores constants in the global lorebook', () => {
       const constants = selectConstantEntries([
-        row({ id: 1, constant: true, priority: 10 }),
-        row({ id: 2, constant: true, priority: 90 }),
+        row({ id: 1, constant: true, title: 'Weather', priority: LORE_PRIORITY_VALUES.critical }),
+        row({ id: 2, constant: true, title: 'calendar', priority: LORE_PRIORITY_VALUES.minor }),
         row({ id: 3, constant: true, lorebookId: 0 }),
         row({ id: 4, constant: false }),
       ]);
@@ -228,7 +229,7 @@ describe('buildConversationPrompt with lore', () => {
   const cfg: AIConfig = {
     apiKey: 'k', provider: 'openai', url: 'http://localhost', model: 'm',
     temperature: 1, maxTokens: 1000, truncationLimit: 400000, summaryPrompt: '', apiFailureTimeout: 20,
-    loreLimit: 4000, loreKeepActiveTurns: 3,
+    loreLimit: 20000, loreKeepActiveTurns: 5,
     deepseekThinking: 'disabled', deepseekReasoningEffort: 'high', deepseekThinkingGuidance: '',
   };
   const persona = { name: 'Ann', profile: 'A traveller' };

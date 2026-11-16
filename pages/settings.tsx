@@ -9,6 +9,11 @@ import { logout } from '../lib/auth';
 import Head from 'next/head';
 import type { AIProvider } from '../types/models';
 import { DEFAULT_THINKING_GUIDANCE, DEFAULT_API_FAILURE_TIMEOUT, clampApiFailureTimeout, isModelListProvider } from '../lib/aiProvider';
+import {
+  DEFAULT_LORE_LIMIT, LORE_LIMIT_MIN, LORE_LIMIT_MAX,
+  DEFAULT_LORE_KEEP_ACTIVE_TURNS, LORE_KEEP_ACTIVE_MIN, LORE_KEEP_ACTIVE_MAX,
+} from '../lib/lorebook/constants';
+import { readLoreSettings } from '../lib/lorebook/settings';
 
 /** Sentinel <option> value that switches the model field back to free text. */
 const CUSTOM_MODEL_OPTION = '__custom__';
@@ -48,6 +53,10 @@ interface SettingsState {
   deepseekThinking: 'disabled' | 'enabled';
   deepseekReasoningEffort: 'high' | 'max';
   deepseekThinkingGuidance: string;
+  // Lorebooks
+  loreLimit: number;
+  loreKeepActiveTurns: number;
+  globalLoreEnabled: boolean;
 }
 
 const DEFAULT_SUMMARY_PROMPT = 'Create a brief, focused summary (~100 words) of the roleplay between {{char}} and {{user}}. Include:\\n\\n- Key events and decisions\\n- Important emotional moments\\n- Location/time changes\\n\\nRules: Only summarize provided transcript. No speculation. Single paragraph format.';
@@ -81,11 +90,15 @@ const initialSettingsState: SettingsState = {
   deepseekThinking: 'disabled',
   deepseekReasoningEffort: 'high',
   deepseekThinkingGuidance: DEFAULT_THINKING_GUIDANCE,
+  loreLimit: DEFAULT_LORE_LIMIT,
+  loreKeepActiveTurns: DEFAULT_LORE_KEEP_ACTIVE_TURNS,
+  globalLoreEnabled: true,
 };
 
 // Maps the raw settings rows onto a complete SettingsState. Key insertion order matches
 // initialSettingsState so settingsFingerprint() stays comparable.
 function settingsFromDb(db: Record<string, string>): SettingsState {
+  const lore = readLoreSettings(db);
   const loaded: Record<string, string> = {
     deepseek: db.apiKey_deepseek || '',
     openai: db.apiKey_openai || '',
@@ -130,6 +143,9 @@ function settingsFromDb(db: Record<string, string>): SettingsState {
     deepseekThinking: db.deepseekThinking === 'enabled' ? 'enabled' : 'disabled',
     deepseekReasoningEffort: db.deepseekReasoningEffort === 'max' ? 'max' : 'high',
     deepseekThinkingGuidance: db.deepseekThinkingGuidance ?? DEFAULT_THINKING_GUIDANCE,
+    loreLimit: lore.loreLimit,
+    loreKeepActiveTurns: lore.keepActiveTurns,
+    globalLoreEnabled: lore.globalLoreDefault,
   };
 }
 
@@ -295,6 +311,16 @@ export default function SettingsPage() {
   );
   const purgeAction = PURGE_ACTIONS.find(a => a.target === purgeTarget) ?? null;
 
+  // The sessions list reports the full count in a header when paginated.
+  const { data: conversationCount, mutate: mutateConversationCount } = useSWR<number | null>(
+    '/api/sessions?limit=1',
+    async (url: string) => {
+      const res = await fetch(url);
+      const total = res.headers.get('X-Total-Count');
+      return res.ok && total ? parseInt(total, 10) : null;
+    }
+  );
+
   const { showToast } = useToast();
   const router = useRouter();
 
@@ -330,6 +356,7 @@ export default function SettingsPage() {
       const d = json.deleted as PurgeCounts;
       showToast(`Deleted ${d.sessions} chat(s), ${d.messages} message(s), ${d.characters} character(s), ${d.personas} persona(s)`);
       mutatePurgeCounts();
+      mutateConversationCount();
       closePurgeModal();
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'Failed to delete data', 'error');
@@ -489,6 +516,9 @@ export default function SettingsPage() {
           deepseekThinking: state.deepseekThinking,
           deepseekReasoningEffort: state.deepseekReasoningEffort,
           deepseekThinkingGuidance: state.deepseekThinkingGuidance,
+          loreLimit: String(state.loreLimit),
+          loreKeepActiveTurns: String(state.loreKeepActiveTurns),
+          globalLoreEnabled: String(state.globalLoreEnabled),
         })
       });
       if (res.ok) {
@@ -699,6 +729,7 @@ export default function SettingsPage() {
       if (response.ok && result.success) {
         setImportStatus('success');
         setImportProgress(''); // Clear progress on success
+        mutateConversationCount();
         const { totalImported, totalSkipped, totalErrors } = result.summary;
         const { imported, skipped } = result.results;
         
@@ -1293,6 +1324,79 @@ export default function SettingsPage() {
             </p>
           </div>
         </div>
+
+        {/* Lorebooks */}
+        <div id="lore-settings" className="card settings-card">
+          <div className="card-header">
+            <h3 className="card-title">📖 Lorebooks</h3>
+            <p className="card-description">How much lore is added to each reply</p>
+          </div>
+
+          <div className="form-group">
+            <label className="form-label">
+              Lore budget per reply: {state.loreLimit === 0 ? 'Critical entries only' : `${state.loreLimit.toLocaleString()} characters`}
+            </label>
+            <input
+              type="range"
+              min={LORE_LIMIT_MIN}
+              max={LORE_LIMIT_MAX}
+              step="1000"
+              value={state.loreLimit}
+              onChange={e => dispatch({ type: 'SET_FIELD', field: 'loreLimit', value: parseInt(e.target.value) })}
+              className="form-range w-full"
+            />
+            <div className="settings-range-scale">
+              <span>0</span>
+              <span>{DEFAULT_LORE_LIMIT.toLocaleString()} (default)</span>
+              <span>{LORE_LIMIT_MAX.toLocaleString()}</span>
+            </div>
+            <p className="settings-hint">
+              Most keyword-triggered lore added to one reply. Critical entries are always added, even past the budget;
+              the rest go in priority order and are skipped once they don&apos;t fit. Always-included entries don&apos;t
+              count toward it.
+            </p>
+          </div>
+
+          <div className="form-group">
+            <label className="form-label">
+              Keep triggered entries for: {state.loreKeepActiveTurns} {state.loreKeepActiveTurns === 1 ? 'reply' : 'replies'}
+            </label>
+            <input
+              type="range"
+              min={LORE_KEEP_ACTIVE_MIN}
+              max={LORE_KEEP_ACTIVE_MAX}
+              step="1"
+              value={state.loreKeepActiveTurns}
+              onChange={e => dispatch({ type: 'SET_FIELD', field: 'loreKeepActiveTurns', value: parseInt(e.target.value) })}
+              className="form-range w-full"
+            />
+            <div className="settings-range-scale">
+              <span>{LORE_KEEP_ACTIVE_MIN}</span>
+              <span>{DEFAULT_LORE_KEEP_ACTIVE_TURNS} (default)</span>
+              <span>{LORE_KEEP_ACTIVE_MAX}</span>
+            </div>
+            <p className="settings-hint">
+              After a keyword comes up, its entry stays for this many more replies. Mentioning it again restarts the count.
+            </p>
+          </div>
+
+          <div className="form-group">
+            <label className="form-label flex items-center gap-3">
+              <input
+                type="checkbox"
+                className="form-checkbox"
+                checked={state.globalLoreEnabled}
+                onChange={e => dispatch({ type: 'SET_FIELD', field: 'globalLoreEnabled', value: e.target.checked })}
+              />
+              Turn on the Global Lorebook for new chats
+            </label>
+            <p className="settings-hint">Each chat can still switch it on or off from its menu.</p>
+          </div>
+
+          <button type="button" className="btn btn-secondary" onClick={() => router.push('/lorebooks')}>
+            Manage Lorebooks →
+          </button>
+        </div>
 
         {/* Advanced */}
         <div className="card settings-card">
@@ -1396,6 +1500,13 @@ export default function SettingsPage() {
             <h2 className="card-title">🗃️ Database Management</h2>
             <p className="card-description">Import and export your entire database</p>
           </div>
+
+          {typeof conversationCount === 'number' && (
+            <p className="settings-stat">
+              <span className="status-dot status-online"></span>
+              {conversationCount.toLocaleString()} total conversation{conversationCount === 1 ? '' : 's'}
+            </p>
+          )}
 
           <div className="settings-grid">
             {/* Export Section */}

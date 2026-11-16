@@ -208,7 +208,7 @@ describe('clampLoreLimit', () => {
 
   it('falls back to the default for NaN', () => {
     expect(clampLoreLimit(NaN)).toBe(DEFAULT_LORE_LIMIT);
-    expect(DEFAULT_LORE_LIMIT).toBe(4000);
+    expect(DEFAULT_LORE_LIMIT).toBe(20000);
   });
 });
 
@@ -228,6 +228,6 @@ describe('clampLoreKeepActiveTurns', () => {
 
   it('falls back to the default for NaN', () => {
     expect(clampLoreKeepActiveTurns(NaN)).toBe(DEFAULT_LORE_KEEP_ACTIVE_TURNS);
-    expect(DEFAULT_LORE_KEEP_ACTIVE_TURNS).toBe(3);
+    expect(DEFAULT_LORE_KEEP_ACTIVE_TURNS).toBe(5);
   });
 });
