@@ -45,7 +45,7 @@ export default withApiHandler({}, {
         },
       });
       return res.status(200).json(await getLorebookDetail(id));
-    } catch (error: unknown) {
+    } catch {
       return serverError(res, 'Failed to update lorebook', 'LOREBOOK_UPDATE_FAILED');
     }
   },
@@ -63,7 +63,7 @@ export default withApiHandler({}, {
       const deleted = await prisma.lorebook.deleteMany({ where: { id } });
       if (deleted.count === 0) return notFound(res, 'Lorebook not found', 'LOREBOOK_NOT_FOUND');
       return res.status(204).end();
-    } catch (error: unknown) {
+    } catch {
       return serverError(res, 'Failed to delete lorebook', 'LOREBOOK_DELETE_FAILED');
     }
   },

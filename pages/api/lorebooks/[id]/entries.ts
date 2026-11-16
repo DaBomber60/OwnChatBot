@@ -57,7 +57,7 @@ export default withApiHandler({}, {
       });
 
       return res.status(201).json(toLoreEntry(entry));
-    } catch (error: unknown) {
+    } catch {
       return serverError(res, 'Failed to create lore entry', 'LORE_ENTRY_CREATE_FAILED');
     }
   },

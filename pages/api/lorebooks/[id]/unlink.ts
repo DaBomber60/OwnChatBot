@@ -33,7 +33,7 @@ export default withApiHandler({}, {
       });
 
       return res.status(204).send(null);
-    } catch (error: unknown) {
+    } catch {
       return serverError(res, 'Failed to unlink lorebook from character', 'LINK_DELETE_FAILED');
     }
   },

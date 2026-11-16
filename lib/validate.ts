@@ -108,7 +108,9 @@ export const schemas = {
     exampleDialogue: z.string().max(CHARACTER_LIMITS.exampleDialogue).optional(),
     // Accept null for "no group" and normalize to undefined
     groupId: z.number().int().positive().nullable().optional()
-      .transform((v: number | null | undefined) => (v == null ? undefined : v))
+      .transform((v: number | null | undefined) => (v == null ? undefined : v)),
+    // Clones copy the source character's picture
+    avatarFromCharacterId: z.number().int().positive().optional()
   }),
   generateCharacter: z.object({
     name: z.string().trim().min(1).max(200),

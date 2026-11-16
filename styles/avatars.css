@@ -120,6 +120,15 @@
   margin-top: 0.15rem;
 }
 
+/* "Copy the picture" choice when cloning a character */
+.clone-picture-option {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  cursor: pointer;
+  color: var(--text-primary);
+}
+
 .avatar-crop {
   position: relative;
   overflow: hidden;

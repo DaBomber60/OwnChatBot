@@ -1,5 +1,4 @@
 import { schemas } from '../lib/validate';
-import { z } from 'zod';
 import { GLOBAL_LOREBOOK_ID } from '../lib/globalLorebook';
 
 describe('Lorebook schemas', () => {

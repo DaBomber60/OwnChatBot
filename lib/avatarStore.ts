@@ -95,6 +95,17 @@ export async function saveAvatar(kind: AvatarOwnerKind, id: number, avatar: Stor
   return avatarUpdatedAt;
 }
 
+/** Character create data giving the new character a copy of another character's picture (nothing if it has none). */
+export async function copiedAvatarCreateData(sourceCharacterId: number | undefined) {
+  if (!sourceCharacterId) return {};
+  const source = await readAvatar('character', sourceCharacterId);
+  if (!source) return {};
+  return {
+    avatarUpdatedAt: new Date(),
+    avatar: { create: { mimeType: source.mimeType, data: source.data } },
+  };
+}
+
 export async function removeAvatar(kind: AvatarOwnerKind, id: number): Promise<void> {
   if (kind === 'character') {
     await prisma.$transaction([

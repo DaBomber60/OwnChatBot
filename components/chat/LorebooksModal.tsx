@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import useSWR from 'swr';
 import { Modal } from '../Modal';
 import { LorebookPicker } from '../LorebookPicker';
@@ -12,17 +12,22 @@ interface LorebooksModalProps {
   onClose: () => void;
 }
 
+interface Draft {
+  lorebookIds: number[];
+  globalLoreEnabled: boolean;
+}
+
 /** Add or remove the lorebooks attached to one chat, including its global lorebook toggle. */
 export function LorebooksModal({ sessionId, onClose }: LorebooksModalProps) {
   const { showToast } = useToast();
   const { data: lorebooks } = useSWR<LorebookSummary[]>('/api/lorebooks?view=summary', fetcher);
   const { data: current, mutate } = useSWR<SessionLorebooksResponse>(`/api/sessions/${sessionId}/lorebooks`, fetcher);
-  const [draft, setDraft] = useState<{ lorebookIds: number[]; globalLoreEnabled: boolean } | null>(null);
+  // Unsaved changes; until the first one the chat's current lorebooks are shown.
+  const [edits, setEdits] = useState<Draft | null>(null);
   const [saving, setSaving] = useState(false);
 
-  useEffect(() => {
-    if (current && !draft) setDraft({ lorebookIds: current.lorebookIds, globalLoreEnabled: current.globalLoreEnabled });
-  }, [current, draft]);
+  const draft: Draft | null = edits ?? (current ? { lorebookIds: current.lorebookIds, globalLoreEnabled: current.globalLoreEnabled } : null);
+  const updateDraft = (patch: Partial<Draft>) => { if (draft) setEdits({ ...draft, ...patch }); };
 
   const dirty = !!current && !!draft && (
     draft.globalLoreEnabled !== current.globalLoreEnabled
@@ -75,10 +80,10 @@ export function LorebooksModal({ sessionId, onClose }: LorebooksModalProps) {
         <LorebookPicker
           lorebooks={lorebooks}
           selectedIds={draft.lorebookIds}
-          onChange={lorebookIds => setDraft(d => (d ? { ...d, lorebookIds } : d))}
+          onChange={lorebookIds => updateDraft({ lorebookIds })}
           defaultIds={current?.characterDefaultIds}
           globalLoreEnabled={draft.globalLoreEnabled}
-          onGlobalLoreChange={globalLoreEnabled => setDraft(d => (d ? { ...d, globalLoreEnabled } : d))}
+          onGlobalLoreChange={globalLoreEnabled => updateDraft({ globalLoreEnabled })}
           disabled={saving}
         />
       ) : (

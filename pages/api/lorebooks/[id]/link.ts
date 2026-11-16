@@ -48,7 +48,7 @@ export default withApiHandler({}, {
       });
 
       return res.status(201).json(link);
-    } catch (error: unknown) {
+    } catch {
       return serverError(res, 'Failed to link lorebook to character', 'LINK_CREATE_FAILED');
     }
   },

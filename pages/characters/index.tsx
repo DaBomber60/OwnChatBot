@@ -576,6 +576,9 @@ export default function CharactersPage() {
   const [firstMessage, setFirstMessage] = useState('');
   const [exampleDialogue, setExampleDialogue] = useState('');
   const [selectedGroupId, setSelectedGroupId] = useState<number | null>(null);
+  // Character being cloned into the create form, so its picture can be copied on save
+  const [cloneSource, setCloneSource] = useState<Character | null>(null);
+  const [copyClonePicture, setCopyClonePicture] = useState(true);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editName, setEditName] = useState('');
   const [editProfileName, setEditProfileName] = useState('');
@@ -886,6 +889,8 @@ export default function CharactersPage() {
     setFirstMessage(character.firstMessage || '');
     setExampleDialogue(character.exampleDialogue || '');
     setSelectedGroupId(character.groupId ?? null);
+    setCloneSource(character);
+    setCopyClonePicture(true);
     
     // Open the create form and close the menu
     setIsAdding(true);
@@ -1207,6 +1212,7 @@ export default function CharactersPage() {
       showToast('Enter a character name first.', 'warning');
       return;
     }
+    const clonePicture = copyClonePicture && cloneSource?.avatarUpdatedAt ? cloneSource : null;
     const res = await fetch('/api/characters', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1218,7 +1224,8 @@ export default function CharactersPage() {
         personality, 
         firstMessage, 
         exampleDialogue, 
-        groupId: selectedGroupId 
+        groupId: selectedGroupId,
+        ...(clonePicture ? { avatarFromCharacterId: clonePicture.id } : {})
       })
     });
     if (!res.ok) {
@@ -1229,6 +1236,7 @@ export default function CharactersPage() {
     }
     setIsAdding(false);
     setName(''); setProfileName(''); setBio(''); setScenario(''); setPersonality(''); setFirstMessage(''); setExampleDialogue(''); setSelectedGroupId(null);
+    setCloneSource(null);
     mutate();
   };
 
@@ -1292,6 +1300,21 @@ export default function CharactersPage() {
               </div>
             )}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {cloneSource?.avatarUpdatedAt && (
+                <div className="form-group">
+                  <span className="form-label">Picture</span>
+                  <label className="clone-picture-option">
+                    <input
+                      type="checkbox"
+                      className="form-checkbox"
+                      checked={copyClonePicture}
+                      onChange={e => setCopyClonePicture(e.target.checked)}
+                    />
+                    <Avatar name={cloneSource.name} src={characterAvatarUrl(cloneSource, null)} size="2.5rem" />
+                    <span className="text-sm">Copy the picture from {cloneSource.profileName || cloneSource.name}</span>
+                  </label>
+                </div>
+              )}
               <div className="form-group">
                 <label className="form-label">Character Name</label>
                 <input 
@@ -1514,6 +1537,7 @@ export default function CharactersPage() {
                 onClick={() => {
                   setIsAdding(false);
                   setName(''); setProfileName(''); setBio(''); setScenario(''); setPersonality(''); setFirstMessage(''); setExampleDialogue(''); setSelectedGroupId(null); resetGenerationMode();
+                  setCloneSource(null);
                 }}
               >
                 Cancel

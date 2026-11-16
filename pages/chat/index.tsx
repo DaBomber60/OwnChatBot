@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import useSWR from 'swr';
 import { useRouter } from 'next/router';
 import Head from 'next/head';
@@ -46,19 +46,18 @@ export default function ChatIndexPage() {
     selectedCharacter ? `/api/characters/${selectedCharacter}/lorebooks` : null,
     fetcher
   );
-  const [loreSelection, setLoreSelection] = useState<{ characterId: number; ids: number[] } | null>(null);
+  // The user's lorebook changes for the selected character; until then its defaults apply.
+  const [loreEdits, setLoreEdits] = useState<number[] | null>(null);
   const [globalLoreChoice, setGlobalLoreChoice] = useState<boolean | null>(null);
   const globalLoreEnabled = globalLoreChoice ?? settingsData?.globalLoreEnabled !== 'false';
 
-  useEffect(() => {
-    if (!selectedCharacter || !characterLore) return;
-    setLoreSelection(prev => (prev?.characterId === selectedCharacter
-      ? prev
-      : { characterId: selectedCharacter, ids: characterLore.lorebookIds }));
-  }, [selectedCharacter, characterLore]);
-
-  const loreReady = !!selectedCharacter && loreSelection?.characterId === selectedCharacter;
+  const loreIds = selectedCharacter ? loreEdits ?? characterLore?.lorebookIds : undefined;
   const hasAnyLore = !!lorebooks && lorebooks.some(lb => lb.id !== GLOBAL_LOREBOOK_ID || lb.entryCount > 0);
+
+  const selectCharacter = (characterId: number) => {
+    setSelectedCharacter(characterId);
+    setLoreEdits(null);
+  };
 
   const toggleCharacterExpansion = (characterId: number) => {
     setExpandedCharacters(prev => {
@@ -82,7 +81,7 @@ export default function ChatIndexPage() {
         characterId: selectedCharacter,
         globalLoreEnabled,
         // Only send an explicit list once the character's defaults have loaded; otherwise the server applies them.
-        ...(loreReady ? { lorebookIds: loreSelection!.ids } : {}),
+        ...(loreIds ? { lorebookIds: loreIds } : {}),
       })
     });
     const data = await res.json();
@@ -269,7 +268,7 @@ export default function ChatIndexPage() {
                 characters={chars}
                 groups={groups}
                 value={selectedCharacter}
-                onChange={setSelectedCharacter}
+                onChange={selectCharacter}
               />
             </div>
             
@@ -295,11 +294,11 @@ export default function ChatIndexPage() {
         {chars.length > 0 && personas.length > 0 && selectedCharacter > 0 && hasAnyLore && (
           <div className="form-group">
             <label className="form-label">📖 Lorebooks</label>
-            {loreReady ? (
+            {loreIds ? (
               <LorebookPicker
                 lorebooks={lorebooks}
-                selectedIds={loreSelection!.ids}
-                onChange={ids => setLoreSelection({ characterId: selectedCharacter, ids })}
+                selectedIds={loreIds}
+                onChange={setLoreEdits}
                 defaultIds={characterLore?.lorebookIds}
                 globalLoreEnabled={globalLoreEnabled}
                 onGlobalLoreChange={setGlobalLoreChoice}

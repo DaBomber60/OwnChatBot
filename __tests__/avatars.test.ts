@@ -11,7 +11,7 @@ jest.mock('../lib/prisma', () => ({
   __esModule: true,
   default: {
     $transaction: jest.fn((ops: Promise<unknown>[]) => Promise.all(ops)),
-    character: { findUnique: jest.fn(), update: jest.fn() },
+    character: { findUnique: jest.fn(), findFirst: jest.fn(), create: jest.fn(), update: jest.fn() },
     characterGroup: { findUnique: jest.fn(), update: jest.fn() },
     characterAvatar: { findUnique: jest.fn(), upsert: jest.fn(), deleteMany: jest.fn() },
     characterGroupAvatar: { findUnique: jest.fn(), upsert: jest.fn(), deleteMany: jest.fn() },
@@ -23,6 +23,7 @@ import { AVATAR_MAX_BYTES, decodeAvatarDataUrl, importAvatarIfMissing } from '..
 import { characterAvatarUrl, initials } from '../lib/avatar';
 import characterAvatarHandler from '../pages/api/characters/[id]/avatar';
 import groupAvatarHandler from '../pages/api/character-groups/[id]/avatar';
+import charactersHandler from '../pages/api/characters/index';
 
 const db = prisma as any;
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
@@ -99,6 +100,39 @@ describe('/api/character-groups/:id/avatar', () => {
     expect(res._status).toBe(204);
     expect(db.characterGroupAvatar.deleteMany).toHaveBeenCalledWith({ where: { groupId: 2 } });
     expect(db.characterGroup.update).toHaveBeenCalledWith({ where: { id: 2 }, data: { avatarUpdatedAt: null } });
+  });
+});
+
+describe('POST /api/characters (cloning)', () => {
+  const clone = (avatarFromCharacterId: number) => mockReq({
+    method: 'POST',
+    body: { name: 'Aria', profileName: 'Aria - [Clone]', scenario: 's', personality: 'p', avatarFromCharacterId },
+  });
+
+  beforeEach(() => {
+    db.character.findFirst.mockResolvedValue(null);
+    db.character.create.mockImplementation(({ data }: { data: Record<string, unknown> }) => Promise.resolve({ id: 11, ...data }));
+  });
+
+  it("creates the clone with a copy of the source character's picture", async () => {
+    db.characterAvatar.findUnique.mockResolvedValue({ mimeType: 'image/webp', data: new Uint8Array(WEBP) });
+    const res = mockRes();
+    await charactersHandler(clone(4), res);
+    expect(res._status).toBe(201);
+    expect(db.characterAvatar.findUnique).toHaveBeenCalledWith(expect.objectContaining({ where: { characterId: 4 } }));
+    const { data } = db.character.create.mock.calls[0][0];
+    expect(data.avatarUpdatedAt).toBeInstanceOf(Date);
+    expect(data.avatar).toEqual({ create: { mimeType: 'image/webp', data: new Uint8Array(WEBP) } });
+  });
+
+  it('creates the clone without a picture when the source has none', async () => {
+    db.characterAvatar.findUnique.mockResolvedValue(null);
+    const res = mockRes();
+    await charactersHandler(clone(4), res);
+    expect(res._status).toBe(201);
+    const { data } = db.character.create.mock.calls[0][0];
+    expect(data).not.toHaveProperty('avatar');
+    expect(data).not.toHaveProperty('avatarUpdatedAt');
   });
 });
 

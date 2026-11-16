@@ -59,7 +59,7 @@ interface CharacterPickerProps {
 export function CharacterPicker({ characters, groups, value, onChange, id }: CharacterPickerProps) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
-  const [activeId, setActiveId] = useState<number | null>(null);
+  const [highlightedId, setHighlightedId] = useState<number | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const listboxId = useId();
@@ -68,6 +68,8 @@ export function CharacterPicker({ characters, groups, value, onChange, id }: Cha
   const selected = characters.find(c => c.id === value) ?? null;
   const sections = useMemo(() => buildCharacterSections(characters, groups, query), [characters, groups, query]);
   const options = useMemo(() => sections.flatMap(s => s.characters), [sections]);
+  // Falls back to the first match when filtering hides the highlighted option.
+  const activeId = highlightedId != null && options.some(o => o.id === highlightedId) ? highlightedId : options[0]?.id ?? null;
 
   const close = (focusTrigger = false) => {
     setOpen(false);
@@ -78,19 +80,14 @@ export function CharacterPicker({ characters, groups, value, onChange, id }: Cha
   useClickOutside(open, () => close(), { containerRef, eventType: 'mousedown', escapeToClose: false });
 
   const openPicker = () => {
-    setActiveId(value || null);
+    setHighlightedId(value || null);
     setOpen(true);
   };
 
-  // Keep the highlighted option on screen, and on the list when filtering removes it.
+  // Keep the highlighted option on screen.
   useEffect(() => {
-    if (!open) return;
-    if (activeId == null || !options.some(o => o.id === activeId)) {
-      setActiveId(options[0]?.id ?? null);
-      return;
-    }
-    document.getElementById(`${listboxId}-option-${activeId}`)?.scrollIntoView({ block: 'nearest' });
-  }, [open, activeId, options, listboxId]);
+    if (open && activeId != null) document.getElementById(`${listboxId}-option-${activeId}`)?.scrollIntoView({ block: 'nearest' });
+  }, [open, activeId, listboxId]);
 
   const choose = (characterId: number) => {
     onChange(characterId);
@@ -103,7 +100,7 @@ export function CharacterPicker({ characters, groups, value, onChange, id }: Cha
       e.preventDefault();
       if (options.length === 0) return;
       const next = e.key === 'ArrowDown' ? Math.min(options.length - 1, index + 1) : Math.max(0, index - 1);
-      setActiveId(options[next]!.id);
+      setHighlightedId(options[next]!.id);
     } else if (e.key === 'Enter') {
       e.preventDefault();
       if (activeId != null && index >= 0) choose(activeId);
@@ -188,7 +185,7 @@ export function CharacterPicker({ characters, groups, value, onChange, id }: Cha
                       character.id === value ? 'is-selected' : '',
                     ].filter(Boolean).join(' ')}
                     onMouseDown={e => e.preventDefault()}
-                    onMouseMove={() => { if (activeId !== character.id) setActiveId(character.id); }}
+                    onMouseMove={() => { if (activeId !== character.id) setHighlightedId(character.id); }}
                     onClick={() => choose(character.id)}
                   >
                     <Avatar name={character.name} src={characterAvatarUrl(character)} size="2rem" />

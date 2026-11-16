@@ -2,6 +2,7 @@ import prisma from '../../../lib/prisma';
 import { conflict, serverError } from '../../../lib/apiErrors';
 import { schemas, validateBody } from '../../../lib/validate';
 import { withApiHandler } from '../../../lib/withApiHandler';
+import { copiedAvatarCreateData } from '../../../lib/avatarStore';
 
 export default withApiHandler({}, {
   GET: async (_req, res) => {
@@ -15,7 +16,7 @@ export default withApiHandler({}, {
     console.log('[/api/characters] Incoming body:', req.body);
     const body = validateBody(schemas.createCharacter, req, res);
     if (!body) return;
-    const { name, profileName, bio, scenario, personality, firstMessage, exampleDialogue, groupId } = body as any;
+    const { name, profileName, bio, scenario, personality, firstMessage, exampleDialogue, groupId, avatarFromCharacterId } = body as any;
     // Normalize blank profileName to null
     const normalizedProfileName = (profileName && profileName.trim().length > 0) ? profileName.trim() : null;
     try {
@@ -41,7 +42,8 @@ export default withApiHandler({}, {
           exampleDialogue: exampleDialogue || '',
           ...(normalizedProfileName !== null && { profileName: normalizedProfileName }),
           ...(bio && { bio }),
-          ...(groupId && { groupId })
+          ...(groupId && { groupId }),
+          ...(await copiedAvatarCreateData(avatarFromCharacterId))
         }
       });
       return res.status(201).json(character);

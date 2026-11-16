@@ -42,7 +42,7 @@ export default withApiHandler({}, {
         sessionId,
         globalLoreEnabled: enabled,
       });
-    } catch (error: unknown) {
+    } catch {
       return serverError(res, 'Failed to update global lore setting', 'SETTINGS_UPDATE_FAILED');
     }
   },
@@ -60,7 +60,7 @@ export default withApiHandler({}, {
         sessionId,
         globalLoreEnabled: enabled,
       });
-    } catch (error: unknown) {
+    } catch {
       return serverError(res, 'Failed to fetch global lore setting', 'SETTINGS_FETCH_FAILED');
     }
   },

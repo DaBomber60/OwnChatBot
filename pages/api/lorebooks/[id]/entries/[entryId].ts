@@ -75,7 +75,7 @@ export default withApiHandler({}, {
       });
 
       return res.status(200).json(toLoreEntry(updated));
-    } catch (error: unknown) {
+    } catch {
       return serverError(res, 'Failed to update lore entry', 'LORE_ENTRY_UPDATE_FAILED');
     }
   },
@@ -87,7 +87,7 @@ export default withApiHandler({}, {
 
       await prisma.loreEntry.delete({ where: { id: existing.id } });
       return res.status(204).end();
-    } catch (error: unknown) {
+    } catch {
       return serverError(res, 'Failed to delete lore entry', 'LORE_ENTRY_DELETE_FAILED');
     }
   },
