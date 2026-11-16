@@ -34,7 +34,7 @@ model CharacterGroup {
 }
 
 model Character {
-  id              Int             @id @default(autoincrement())
+  id              Int                 @id @default(autoincrement())
   name            String
   profileName     String?
   bio             String?
@@ -43,11 +43,12 @@ model Character {
   firstMessage    String
   exampleDialogue String
   groupId         Int?
-  sortOrder       Int             @default(0)
-  createdAt       DateTime        @default(now())
-  updatedAt       DateTime        @updatedAt
-  group           CharacterGroup? @relation(fields: [groupId], references: [id])
+  sortOrder       Int                 @default(0)
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+  group           CharacterGroup?     @relation(fields: [groupId], references: [id])
   sessions        ChatSession[]
+  lorebooks       CharacterLorebook[]
 
   @@unique([name, profileName])
   @@index([groupId])
@@ -123,4 +124,44 @@ model Setting {
   updatedAt DateTime @updatedAt
 
   @@map("settings")
+}
+
+model Lorebook {
+  id          Int                 @id @default(autoincrement())
+  name        String              @unique
+  description String?
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+  entries     LoreEntry[]
+  characters  CharacterLorebook[]
+
+  @@map("lorebooks")
+}
+
+model LoreEntry {
+  id         Int      @id @default(autoincrement())
+  lorebookId Int
+  title      String
+  content    String
+  keys       String // Space-separated keywords, stored as text
+  constant   Boolean  @default(false)
+  enabled    Boolean  @default(true)
+  priority   Int      @default(100)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  lorebook   Lorebook @relation(fields: [lorebookId], references: [id], onDelete: Cascade)
+
+  @@index([lorebookId])
+  @@map("lore_entries")
+}
+
+model CharacterLorebook {
+  id          Int       @id @default(autoincrement())
+  characterId Int
+  lorebookId  Int
+  character   Character @relation(fields: [characterId], references: [id], onDelete: Cascade)
+  lorebook    Lorebook  @relation(fields: [lorebookId], references: [id], onDelete: Cascade)
+
+  @@unique([characterId, lorebookId])
+  @@map("character_lorebooks")
 }
