@@ -18,6 +18,8 @@ import { DeleteConfirmModal } from '../../components/chat/DeleteConfirmModal';
 import { ErrorModal } from '../../components/ErrorModal';
 import { TruncationModal, type TruncationInfo } from '../../components/chat/TruncationModal';
 import { ContextWarningModal } from '../../components/chat/ContextWarningModal';
+import { LoreTriggeredBadge } from '../../components/chat/LoreTriggeredBadge';
+import { LorebooksModal } from '../../components/chat/LorebooksModal';
 import { useToast } from '../../components/ToastProvider';
 import { downloadSessionLog } from '../../lib/chat/debugDownload';
 import { VariantTempPopover } from '../../components/chat/VariantTempPopover';
@@ -115,6 +117,7 @@ export default function ChatSessionPage() {
   const [truncationInfo, setTruncationInfo] = useState<TruncationInfo | null>(null);
   const [showTruncationModal, setShowTruncationModal] = useState(false);
   const [contextWarningPercent, setContextWarningPercent] = useState<number | null>(null);
+  const [showLorebooksModal, setShowLorebooksModal] = useState(false);
   // reusing error modal for truncation warnings
   const [isBurgerMenuOpen, setIsBurgerMenuOpen] = useState(false);
   const headerRef = useRef<HTMLElement>(null);
@@ -276,14 +279,15 @@ export default function ChatSessionPage() {
                 olderProcessed[lastAssistantIndex] = {
                   role: 'assistant',
                   content: prevAssist.content + '\n\n' + m.content,
-                  messageId: prevAssist.messageId
+                  messageId: prevAssist.messageId,
+                  metadata: prevAssist.metadata
                 };
                 continue;
               }
             }
           }
         }
-        olderProcessed.push({ role: m.role as 'user' | 'assistant', content: m.content, messageId: m.id });
+        olderProcessed.push({ role: m.role as 'user' | 'assistant', content: m.content, messageId: m.id, metadata: m.metadata });
       }
       // Prepend and preserve scroll position (with de-duplication by messageId)
       const existingIds = new Set<number>();
@@ -1007,7 +1011,8 @@ export default function ChatSessionPage() {
     const allMessages = session.messages.map(m => ({ 
       role: m.role as 'user' | 'assistant', 
       content: m.content, 
-      messageId: m.id 
+      messageId: m.id,
+      metadata: m.metadata
     }));
     
     // Filter out continue system messages and combine responses visually
@@ -1035,7 +1040,8 @@ export default function ChatSessionPage() {
               processedMessages[lastAssistantIndex] = {
                 role: 'assistant',
                 content: prevAssistant.content + '\n\n' + msg.content,
-                messageId: prevAssistant.messageId
+                messageId: prevAssistant.messageId,
+                metadata: prevAssistant.metadata
               };
               continue;
             }
@@ -2221,6 +2227,7 @@ export default function ChatSessionPage() {
         headerRef={headerRef}
         onOpenNotes={() => { setShowNotesModal(true); setOriginalNotesContent(notesContent); }}
         onOpenSummary={() => setShowSummaryModal(true)}
+        onOpenLorebooks={() => setShowLorebooksModal(true)}
         onDownloadLog={handleDownloadLog}
         onDownloadRequest={handleDownloadRequest}
         onDownloadResponse={handleDownloadResponse}
@@ -2371,6 +2378,9 @@ export default function ChatSessionPage() {
                         />
                       );
                     })()}
+                    {!isUser && (
+                      <LoreTriggeredBadge metadata={m.metadata} />
+                    )}
                     <div className="chat-message-actions">
                       {isUser && !isEditing && (
                         <button className="delete-btn" onClick={() => deleteMessage(i)} title="Delete message">🗑️</button>
@@ -2432,6 +2442,10 @@ export default function ChatSessionPage() {
           generatingSummary={generatingSummary} updatingSummary={updatingSummary} savingSummary={savingSummary}
           session={session} onClose={() => setShowSummaryModal(false)}
         />
+      )}
+
+      {showLorebooksModal && (
+        <LorebooksModal sessionId={session.id} onClose={() => setShowLorebooksModal(false)} />
       )}
 
       {showNotesModal && (

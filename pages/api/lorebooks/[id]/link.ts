@@ -1,7 +1,8 @@
 import prisma from '../../../../lib/prisma';
-import { serverError, notFound } from '../../../../lib/apiErrors';
+import { serverError, notFound, badRequest } from '../../../../lib/apiErrors';
 import { schemas, validateBody } from '../../../../lib/validate';
 import { withApiHandler } from '../../../../lib/withApiHandler';
+import { GLOBAL_LOREBOOK_ID } from '../../../../lib/globalLorebook';
 
 /**
  * POST /api/lorebooks/:id/link
@@ -14,6 +15,9 @@ export default withApiHandler({}, {
     const lorebookId = parseInt(req.query.id as string, 10);
     if (isNaN(lorebookId)) {
       return res.status(400).json({ error: 'Invalid lorebook ID', code: 'INVALID_ID' });
+    }
+    if (lorebookId === GLOBAL_LOREBOOK_ID) {
+      return badRequest(res, 'The global lorebook already applies to every chat and cannot be linked to a character', 'GLOBAL_LOREBOOK_NOT_LINKABLE');
     }
 
     const body = validateBody(schemas.linkLorebook, req, res);

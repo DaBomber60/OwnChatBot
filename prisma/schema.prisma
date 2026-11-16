@@ -56,21 +56,23 @@ model Character {
 }
 
 model ChatSession {
-  id              Int           @id @default(autoincrement())
-  personaId       Int
-  characterId     Int
-  createdAt       DateTime      @default(now())
-  updatedAt       DateTime      @updatedAt
-  lastApiRequest  String?
-  lastApiResponse String?
-  summary         String?
-  description     String?
-  lastSummary     Int?
-  notes           String?
-  contextWarnedAt DateTime?
-  messages        ChatMessage[]
-  character       Character     @relation(fields: [characterId], references: [id], onDelete: Cascade)
-  persona         Persona       @relation(fields: [personaId], references: [id], onDelete: Cascade)
+  id                Int                   @id @default(autoincrement())
+  personaId         Int
+  characterId       Int
+  createdAt         DateTime              @default(now())
+  updatedAt         DateTime              @updatedAt
+  lastApiRequest    String?
+  lastApiResponse   String?
+  summary           String?
+  description       String?
+  lastSummary       Int?
+  notes             String?
+  contextWarnedAt   DateTime?
+  globalLoreEnabled Boolean               @default(true)
+  messages          ChatMessage[]
+  lorebooks         ChatSessionLorebook[]
+  character         Character             @relation(fields: [characterId], references: [id], onDelete: Cascade)
+  persona           Persona               @relation(fields: [personaId], references: [id], onDelete: Cascade)
 
   @@unique([personaId, characterId, createdAt])
   @@index([personaId])
@@ -84,6 +86,7 @@ model ChatMessage {
   sessionId Int
   role      String
   content   String
+  metadata  String? // JSON-encoded metadata (e.g., triggeredLoreIds, flags)
   createdAt DateTime         @default(now())
   session   ChatSession      @relation(fields: [sessionId], references: [id], onDelete: Cascade)
   versions  MessageVersion[]
@@ -127,13 +130,14 @@ model Setting {
 }
 
 model Lorebook {
-  id          Int                 @id @default(autoincrement())
-  name        String              @unique
+  id          Int                   @id @default(autoincrement())
+  name        String                @unique
   description String?
-  createdAt   DateTime            @default(now())
-  updatedAt   DateTime            @updatedAt
+  createdAt   DateTime              @default(now())
+  updatedAt   DateTime              @updatedAt
   entries     LoreEntry[]
   characters  CharacterLorebook[]
+  sessions    ChatSessionLorebook[]
 
   @@map("lorebooks")
 }
@@ -143,7 +147,7 @@ model LoreEntry {
   lorebookId Int
   title      String
   content    String
-  keys       String // Space-separated keywords, stored as text
+  keys       String // JSON array of keywords (older rows: space-separated words). See lib/lorebook/keywords.ts
   constant   Boolean  @default(false)
   enabled    Boolean  @default(true)
   priority   Int      @default(100)
@@ -164,4 +168,18 @@ model CharacterLorebook {
 
   @@unique([characterId, lorebookId])
   @@map("character_lorebooks")
+}
+
+// Lorebooks attached to a specific chat. Character links are only defaults copied in at chat creation.
+model ChatSessionLorebook {
+  id         Int         @id @default(autoincrement())
+  sessionId  Int
+  lorebookId Int
+  createdAt  DateTime    @default(now())
+  session    ChatSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  lorebook   Lorebook    @relation(fields: [lorebookId], references: [id], onDelete: Cascade)
+
+  @@unique([sessionId, lorebookId])
+  @@index([lorebookId])
+  @@map("chat_session_lorebooks")
 }

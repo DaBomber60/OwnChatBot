@@ -9,6 +9,10 @@
 // NOTE: The existing schema is flexible (z.record) so no migration needed.
 import prisma from './prisma';
 import { replacePlaceholders } from './systemPrompt';
+import {
+  DEFAULT_LORE_LIMIT, LORE_LIMIT_MIN, LORE_LIMIT_MAX,
+  DEFAULT_LORE_KEEP_ACTIVE_TURNS, LORE_KEEP_ACTIVE_MIN, LORE_KEEP_ACTIVE_MAX,
+} from './lorebook/constants';
 
 import type { AIProvider } from '../types/models';
 export type { AIProvider };
@@ -296,12 +300,13 @@ export async function getSummaryPrompt(): Promise<string> {
 }
 
 // ---------------------------------------------------------------------------
-// Lorebook settings
+// Lorebook settings (constants live in lorebook/constants so client pages can use them)
 // ---------------------------------------------------------------------------
 
-export const DEFAULT_LORE_LIMIT = 4000;
-export const LORE_LIMIT_MIN = 0;
-export const LORE_LIMIT_MAX = 50000;
+export {
+  DEFAULT_LORE_LIMIT, LORE_LIMIT_MIN, LORE_LIMIT_MAX,
+  DEFAULT_LORE_KEEP_ACTIVE_TURNS, LORE_KEEP_ACTIVE_MIN, LORE_KEEP_ACTIVE_MAX,
+};
 
 /** Clamp a lore limit value. */
 export function clampLoreLimit(n: number): number {
@@ -320,10 +325,6 @@ export async function getLoreLimit(): Promise<number> {
   } catch { /* DB error — use default */ }
   return DEFAULT_LORE_LIMIT;
 }
-
-export const DEFAULT_LORE_KEEP_ACTIVE_TURNS = 3;
-export const LORE_KEEP_ACTIVE_MIN = 0;
-export const LORE_KEEP_ACTIVE_MAX = 20;
 
 /** Clamp a keep-active turns value. */
 export function clampLoreKeepActiveTurns(n: number): number {

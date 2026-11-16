@@ -3,14 +3,15 @@ import { notFound, serverError } from '../../../../lib/apiErrors';
 import { withApiHandler } from '../../../../lib/withApiHandler';
 
 // POST /api/sessions/:id/clone
-// Clones a session, duplicating: session row (summary, description, notes, lastSummary),
-// messages (with versions), preserving original createdAt ordering.
+// Clones a session, duplicating: session row (summary, description, notes, lastSummary, lore settings),
+// lorebook links, messages (with versions and metadata), preserving original createdAt ordering.
 export default withApiHandler({ parseId: true }, {
   POST: async (req, res, { id }) => {
     try {
       const original = await prisma.chatSession.findUnique({
         where: { id },
         include: {
+          lorebooks: { select: { lorebookId: true } },
           messages: {
             orderBy: { createdAt: 'asc' },
             include: { versions: { orderBy: { version: 'asc' } } }
@@ -32,6 +33,10 @@ export default withApiHandler({ parseId: true }, {
               description: original.description ?? null,
               notes: (original as any).notes ?? null,
               lastSummary: original.lastSummary ?? null,
+              globalLoreEnabled: original.globalLoreEnabled,
+              ...(original.lorebooks.length > 0
+                ? { lorebooks: { create: original.lorebooks.map(l => ({ lorebookId: l.lorebookId })) } }
+                : {}),
             }
         });
 
@@ -43,6 +48,7 @@ export default withApiHandler({ parseId: true }, {
               sessionId: clonedSession.id,
               role: msg.role,
               content: msg.content,
+              metadata: msg.metadata,
               createdAt: msg.createdAt
             }
           });

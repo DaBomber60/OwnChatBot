@@ -43,7 +43,10 @@ export const schemas = {
   createSession: z.object({
     personaId: z.number().int().positive(),
     characterId: z.number().int().positive(),
-    skipFirstMessage: z.boolean().optional()
+    skipFirstMessage: z.boolean().optional(),
+    // Omit to use the character's default lorebooks; send to choose them explicitly.
+    lorebookIds: z.array(z.number().int().positive()).max(500).optional(),
+    globalLoreEnabled: z.boolean().optional()
   }),
   createMessage: z.object({
   sessionId: z.union([z.number(), z.string().regex(/^\d+$/)]).transform((v: any) => Number(v)).refine((v: number) => v > 0, 'sessionId must be positive'),
@@ -242,7 +245,7 @@ export const schemas = {
   createLoreEntry: z.object({
     title: z.string().trim().min(1).max(200),
     content: z.string().trim().min(1).max(50000),
-    keys: z.array(z.string().trim().min(1)).optional(),
+    keys: z.array(z.string().trim().min(1).max(100)).max(100).optional(),
     constant: z.boolean().optional(),
     enabled: z.boolean().optional(),
     priority: z.number().int().min(0).max(1000).optional(),
@@ -250,7 +253,7 @@ export const schemas = {
   updateLoreEntry: z.object({
     title: z.string().trim().min(1).max(200).optional(),
     content: z.string().trim().min(1).max(50000).optional(),
-    keys: z.array(z.string().trim().min(1)).optional(),
+    keys: z.array(z.string().trim().min(1).max(100)).max(100).optional(),
     constant: z.boolean().optional(),
     enabled: z.boolean().optional(),
     priority: z.number().int().min(0).max(1000).optional(),
@@ -260,6 +263,18 @@ export const schemas = {
   }),
   unlinkLorebook: z.object({
     characterId: z.number().int().positive(),
+  }),
+
+  // Replace the lorebooks attached to a chat
+  updateSessionLorebooks: z.object({
+    lorebookIds: z.array(z.number().int().positive()).max(500),
+    globalLoreEnabled: z.boolean().optional(),
+  }),
+
+  // Replace a character's default lorebooks (copied into new chats)
+  updateCharacterLorebooks: z.object({
+    lorebookIds: z.array(z.number().int().positive()).max(500),
+    applyToExistingChats: z.boolean().optional().default(false),
   }),
 
   // Lorebook keyword generation

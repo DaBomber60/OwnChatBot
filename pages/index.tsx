@@ -231,6 +231,19 @@ export default function Home() {
 
               <div 
                 className="card text-center cursor-pointer"
+                onClick={() => router.push('/lorebooks')}
+              >
+                <h4 className="text-lg font-semibold mb-4">📖 Lorebooks</h4>
+                <p className="text-secondary text-sm mb-6">
+                  Build world info that joins your chats when it&apos;s relevant
+                </p>
+                <div className="text-primary font-medium">
+                  Manage Lorebooks
+                </div>
+              </div>
+
+              <div 
+                className="card text-center cursor-pointer"
                 onClick={() => router.push('/import')}
               >
                 <h4 className="text-lg font-semibold mb-4">📥 Import</h4>

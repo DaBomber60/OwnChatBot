@@ -1,4 +1,5 @@
 import prisma from './prisma';
+import { resolveInitialSessionLore, sessionLoreCreateData } from './lorebook/sessionLorebooks';
 
 export interface ImportMessage {
   role: 'user' | 'assistant';
@@ -19,12 +20,14 @@ export interface CreateImportedChatOptions {
 export async function createImportedChat(opts: CreateImportedChatOptions) {
   const { personaId, characterId, messages, summary } = opts;
 
-  // Create session
+  // Create session with the character's default lorebooks
+  const lore = await resolveInitialSessionLore(characterId);
   const session = await prisma.chatSession.create({
     data: {
       personaId,
       characterId,
       ...(summary ? { summary } : {}),
+      ...sessionLoreCreateData(lore),
     },
   });
 

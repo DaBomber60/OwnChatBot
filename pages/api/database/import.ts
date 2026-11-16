@@ -8,6 +8,16 @@ import JSZip from 'jszip';
 import { limiters, clientIp } from '../../../lib/rateLimit';
 import { badRequest, serverError, tooManyRequests } from '../../../lib/apiErrors';
 import { withApiHandler } from '../../../lib/withApiHandler';
+import { GLOBAL_LOREBOOK_ID } from '../../../lib/globalLorebook';
+import { exportedSessionLorebookLookup, normalizeLorebookIds } from '../../../lib/lorebook/sessionLorebooks';
+import { remapLoreMetadata } from '../../../lib/messageMetadata';
+import { serializeKeywords } from '../../../lib/lorebook/keywords';
+
+/** Stored keys are kept as-is (JSON or legacy text); a raw list from other tools is serialized. */
+function importedKeys(value: unknown): string {
+  if (Array.isArray(value)) return serializeKeywords(value);
+  return typeof value === 'string' ? value : '';
+}
 
 // Disable Next.js body parser for file uploads and increase size limits
 export const config = {
@@ -34,6 +44,7 @@ interface ImportData {
     lorebooks: any[];
     loreEntries: any[];
     characterLorebooks: any[];
+    sessionLorebooks?: any[];
   };
   metadata?: any;
 }
@@ -180,7 +191,8 @@ export default withApiHandler({}, {
         settings: 0,
         lorebooks: 0,
         loreEntries: 0,
-        characterLorebooks: 0
+        characterLorebooks: 0,
+        sessionLorebooks: 0
       },
       skipped: {
         personas: 0,
@@ -193,7 +205,8 @@ export default withApiHandler({}, {
         settings: 0,
         lorebooks: 0,
         loreEntries: 0,
-        characterLorebooks: 0
+        characterLorebooks: 0,
+        sessionLorebooks: 0
       },
       renamedCharacters: [] as string[],
       errors: [] as string[]
@@ -398,17 +411,17 @@ export default withApiHandler({}, {
       }
     }
 
-    // 6. Import Lorebooks (no dependencies on user data; Global Lorebook (ID 0) is skipped)
+    // 6. Import Lorebooks, matched by their unique name. The global lorebook (ID 0) always maps onto itself.
     const lorebookIdMap = new Map<number, number>();
     if (importData.data.lorebooks?.length) {
       for (const lorebook of importData.data.lorebooks) {
-        // Skip the global lorebook (ID 0); it's managed separately
-        if (lorebook.id === 0) {
+        if (lorebook.id === GLOBAL_LOREBOOK_ID) {
+          lorebookIdMap.set(GLOBAL_LOREBOOK_ID, GLOBAL_LOREBOOK_ID);
           continue;
         }
         try {
           const existing = await prisma.lorebook.findUnique({
-            where: { id: lorebook.id }
+            where: { name: lorebook.name }
           });
 
           if (!existing) {
@@ -456,7 +469,7 @@ export default withApiHandler({}, {
                 lorebookId,
                 title: entry.title,
                 content: entry.content,
-                keys: entry.keys ?? entry.keywords ?? '',
+                keys: importedKeys(entry.keys ?? entry.keywords),
                 priority: entry.priority,
                 constant: entry.constant ?? entry.isConstant ?? false,
                 enabled: entry.enabled !== false,
@@ -528,6 +541,8 @@ export default withApiHandler({}, {
         else versionsByMessage.set(version.messageId, [version]);
       }
 
+      const sessionLorebookSourceIds = exportedSessionLorebookLookup(importData.data);
+
       for (const session of importData.data.chatSessions) {
         const messages = messagesBySession.get(session.id) ?? [];
         const versionCount = messages.reduce((total, m) => total + (versionsByMessage.get(m.id)?.length ?? 0), 0);
@@ -553,6 +568,10 @@ export default withApiHandler({}, {
             continue;
           }
 
+          const sessionLorebookIds = normalizeLorebookIds(
+            sessionLorebookSourceIds(session).map(oldId => lorebookIdMap.get(oldId))
+          );
+
           // One nested write so the session and its full history land together or not at all.
           await prisma.chatSession.create({
             data: {
@@ -564,12 +583,17 @@ export default withApiHandler({}, {
               lastSummary: session.lastSummary,
               notes: session.notes,
               contextWarnedAt: session.contextWarnedAt ? new Date(session.contextWarnedAt) : null,
+              globalLoreEnabled: session.globalLoreEnabled !== false,
               createdAt,
               updatedAt: new Date(session.updatedAt),
+              ...(sessionLorebookIds.length > 0
+                ? { lorebooks: { create: sessionLorebookIds.map(lorebookId => ({ lorebookId })) } }
+                : {}),
               messages: {
                 create: messages.map(message => ({
                   role: message.role,
                   content: message.content,
+                  metadata: remapLoreMetadata(message.metadata, loreEntryIdMap),
                   createdAt: new Date(message.createdAt),
                   versions: {
                     create: (versionsByMessage.get(message.id) ?? []).map(version => ({
@@ -587,6 +611,7 @@ export default withApiHandler({}, {
           results.imported.chatSessions++;
           results.imported.chatMessages += messages.length;
           results.imported.messageVersions += versionCount;
+          results.imported.sessionLorebooks += sessionLorebookIds.length;
         } catch (error) {
           results.errors.push(`ChatSession ${session.id}: ${error instanceof Error ? error.message : 'Unknown error'}`);
         }

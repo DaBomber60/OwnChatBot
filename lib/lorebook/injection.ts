@@ -3,13 +3,6 @@
  */
 import type { TriggeredEntry } from './trigger';
 
-export interface InjectionContext {
-  /** Lore entries with constant=true (always in system prompt) */
-  constantEntries: TriggeredEntry[];
-  /** Lore entries triggered by keywords in current turn */
-  triggeredEntries: TriggeredEntry[];
-}
-
 /**
  * Build the lore section for the system prompt from constant entries.
  * Format: <lore_constant><entry_title>entry content</entry_title>...</lore_constant>
@@ -29,35 +22,26 @@ export function buildConstantLoreSection(entries: TriggeredEntry[]): string {
 }
 
 /**
- * Build the lore section to append to a user message.
- * Format: [!lore:entry1,entry2] followed by hidden content
- * 
- * Returns both the user-visible marker and the hidden lore content.
- * For the UI badge, the marker contains entry IDs.
+ * Build the lore block appended to the latest user message.
+ * Entry IDs are returned for tracking; they are not sent to the model.
  */
 export function buildTriggeredLoreInjection(entries: TriggeredEntry[]): {
-  /** Visible marker to append to the user message (e.g. "[!lore:1,2,3]") */
-  marker: string;
-  /** Hidden lore content to append after marker */
+  /** Lore block to append after the user message */
   content: string;
   /** Triggered entry IDs for tracking across turns */
   entryIds: number[];
 } {
   if (entries.length === 0) {
-    return { marker: '', content: '', entryIds: [] };
+    return { content: '', entryIds: [] };
   }
-
-  const entryIds = entries.map(e => e.id);
-  const marker = `\n\n[📖 Lore: ${entryIds.join(', ')}]`;
 
   const loreContent = entries
     .map(e => `[Entry: ${e.title}]\n${e.content}`)
     .join('\n\n');
 
   return {
-    marker,
     content: `\n\n<triggered_lore>\n${loreContent}\n</triggered_lore>`,
-    entryIds,
+    entryIds: entries.map(e => e.id),
   };
 }
 
@@ -89,7 +73,6 @@ export function injectConstantLoreIntoSystemPrompt(
 
 /**
  * Inject triggered lore into a user message.
- * Appends lore marker and content to the message.
  */
 export function injectTriggeredLoreIntoUserMessage(
   userMessage: string,
@@ -101,7 +84,25 @@ export function injectTriggeredLoreIntoUserMessage(
   const injection = buildTriggeredLoreInjection(triggeredEntries);
 
   return {
-    injectedMessage: userMessage + injection.marker + injection.content,
+    injectedMessage: userMessage + injection.content,
     triggeredIds: injection.entryIds,
   };
+}
+
+/**
+ * Append triggered lore to the last user message of a prompt (returns a new array).
+ * Prompt history stays as stored; only the newest user turn carries the lore block.
+ */
+export function appendTriggeredLoreToLastUserMessage<T extends { role: string; content: string }>(
+  messages: T[],
+  triggeredEntries: TriggeredEntry[]
+): T[] {
+  if (triggeredEntries.length === 0) return messages;
+  let lastUserIdx = -1;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i]?.role === 'user') { lastUserIdx = i; break; }
+  }
+  if (lastUserIdx === -1) return messages;
+  const { injectedMessage } = injectTriggeredLoreIntoUserMessage(messages[lastUserIdx]!.content, triggeredEntries);
+  return messages.map((m, i) => (i === lastUserIdx ? { ...m, content: injectedMessage } : m));
 }

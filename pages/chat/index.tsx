@@ -1,14 +1,16 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import useSWR from 'swr';
 import { useRouter } from 'next/router';
 import Head from 'next/head';
 import { fetcher } from '../../lib/fetcher';
-import type { Persona, Character, CharacterGroup, Session, Message } from '../../types/models';
+import type { Persona, Character, CharacterGroup, Session, Message, LorebookSummary, CharacterLorebooksResponse } from '../../types/models';
 import { useClickOutside } from '../../hooks/useClickOutside';
 import { PageHeader } from '../../components/PageHeader';
 import { DropdownMenu, DropdownMenuItem, DropdownMenuDivider, ConfirmDeleteItem } from '../../components/DropdownMenu';
 import { Modal } from '../../components/Modal';
 import { useToast } from '../../components/ToastProvider';
+import { LorebookPicker } from '../../components/LorebookPicker';
+import { GLOBAL_LOREBOOK_ID } from '../../lib/lorebook/constants';
 
 // Pure function — defined outside the component so its reference is stable.
 function organizeCharactersForDisplay(
@@ -109,6 +111,26 @@ export default function ChatIndexPage() {
   const [selectedPersona, setSelectedPersona] = useState<number>(0);
   const [selectedCharacter, setSelectedCharacter] = useState<number>(0);
 
+  // Lorebooks for the new chat: seeded from the character's defaults, then freely edited.
+  const { data: lorebooks } = useSWR<LorebookSummary[]>('/api/lorebooks?view=summary', fetcher);
+  const { data: characterLore } = useSWR<CharacterLorebooksResponse>(
+    selectedCharacter ? `/api/characters/${selectedCharacter}/lorebooks` : null,
+    fetcher
+  );
+  const [loreSelection, setLoreSelection] = useState<{ characterId: number; ids: number[] } | null>(null);
+  const [globalLoreChoice, setGlobalLoreChoice] = useState<boolean | null>(null);
+  const globalLoreEnabled = globalLoreChoice ?? settingsData?.globalLoreEnabled !== 'false';
+
+  useEffect(() => {
+    if (!selectedCharacter || !characterLore) return;
+    setLoreSelection(prev => (prev?.characterId === selectedCharacter
+      ? prev
+      : { characterId: selectedCharacter, ids: characterLore.lorebookIds }));
+  }, [selectedCharacter, characterLore]);
+
+  const loreReady = !!selectedCharacter && loreSelection?.characterId === selectedCharacter;
+  const hasAnyLore = !!lorebooks && lorebooks.some(lb => lb.id !== GLOBAL_LOREBOOK_ID || lb.entryCount > 0);
+
   const toggleCharacterExpansion = (characterId: number) => {
     setExpandedCharacters(prev => {
       const newSet = new Set(prev);
@@ -126,7 +148,13 @@ export default function ChatIndexPage() {
     const res = await fetch('/api/sessions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ personaId: selectedPersona, characterId: selectedCharacter })
+      body: JSON.stringify({
+        personaId: selectedPersona,
+        characterId: selectedCharacter,
+        globalLoreEnabled,
+        // Only send an explicit list once the character's defaults have loaded; otherwise the server applies them.
+        ...(loreReady ? { lorebookIds: loreSelection!.ids } : {}),
+      })
     });
     const data = await res.json();
     router.push(`/chat/${data.id}`);
@@ -362,6 +390,27 @@ export default function ChatIndexPage() {
                   ))}
               </select>
             </div>
+          </div>
+        )}
+
+        {chars.length > 0 && personas.length > 0 && selectedCharacter > 0 && hasAnyLore && (
+          <div className="form-group">
+            <label className="form-label">📖 Lorebooks</label>
+            {loreReady ? (
+              <LorebookPicker
+                lorebooks={lorebooks}
+                selectedIds={loreSelection!.ids}
+                onChange={ids => setLoreSelection({ characterId: selectedCharacter, ids })}
+                defaultIds={characterLore?.lorebookIds}
+                globalLoreEnabled={globalLoreEnabled}
+                onGlobalLoreChange={setGlobalLoreChoice}
+              />
+            ) : (
+              <div className="text-sm text-muted">Loading lorebooks...</div>
+            )}
+            <small className="text-xs text-muted mt-1">
+              The character&apos;s default lorebooks are pre-selected. You can change them later from the chat&apos;s menu.
+            </small>
           </div>
         )}
         

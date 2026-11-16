@@ -1,67 +1,67 @@
 /**
- * Integration point: lorebook with conversation prompt building.
- * Handles triggering, tracking, and injection of lore into prompts.
+ * Integration point: resolves a chat's lore for one turn (DB access lives here; selection is pure in trigger.ts).
  */
-import { collectActiveEntries, collectConstantEntries, type TriggerContext } from './trigger';
-import { injectConstantLoreIntoSystemPrompt, injectTriggeredLoreIntoUserMessage } from './injection';
-import type { PromptMessage } from '../aiRequest';
+import prisma from '../prisma';
+import { selectActiveEntries, selectConstantEntries, recentlyMatchedLoreIds, type LoreEntryRow, type TriggeredEntry } from './trigger';
+import { triggerLorebookIds, type SessionLoreConfig } from './sessionLorebooks';
 
-export interface LoreIntegrationContext {
-  sessionId: number;
-  characterId: number;
-  personaName: string;
+export interface LoreForTurn {
+  /** Permanent entries for the system prompt (never from the global lorebook). */
+  constantEntries: TriggeredEntry[];
+  /** Keyword-triggered and kept-active entries for the latest user message. */
+  triggeredEntries: TriggeredEntry[];
+  /** Triggered entries whose keywords matched this turn. */
+  matchedIds: number[];
+}
+
+export const EMPTY_LORE: LoreForTurn = { constantEntries: [], triggeredEntries: [], matchedIds: [] };
+
+export interface LoreTurnContext {
+  config: SessionLoreConfig;
+  /** DB history, oldest first; assistant metadata drives keep-active. */
+  history: ReadonlyArray<{ role: string; metadata?: string | null }>;
+  /** Text matched against entry keywords (the latest real user message). */
+  currentMessageText: string;
   keepActiveTurns: number;
-  /** Messages before new user message is added (for keep-active tracking) */
-  history: Array<{ role: string; content: string; triggeredLoreIds?: number[] }>;
-  /** The new user message to inject lore into */
-  userMessage: string;
+  loreLimit: number;
 }
 
-export interface LoreInjectionResult {
-  /** System prompt with constant lore injected */
-  systemPromptWithLore: string;
-  /** User message with triggered lore appended */
-  userMessageWithLore: string;
-  /** IDs of entries that were triggered this turn (for tracking) */
-  triggeredEntryIds: number[];
+export async function loadLoreEntries(lorebookIds: number[]): Promise<LoreEntryRow[]> {
+  if (lorebookIds.length === 0) return [];
+  return prisma.loreEntry.findMany({
+    where: { lorebookId: { in: lorebookIds }, enabled: true },
+    select: { id: true, lorebookId: true, title: true, content: true, keys: true, constant: true, priority: true },
+  });
 }
 
-/**
- * Main integration function: collect applicable lore, trigger entries,
- * and return modified prompt components ready to be assembled.
- */
-export async function integrateLorebookIntoPrompt(
-  ctx: LoreIntegrationContext,
-  systemPromptBeforeLore: string
-): Promise<LoreInjectionResult> {
-  // Collect constant entries (always in system prompt)
-  const constantEntries = await collectConstantEntries(ctx.characterId);
+/** Resolve all lore for one turn of a chat with a single entry query. */
+export async function resolveLoreForTurn(ctx: LoreTurnContext): Promise<LoreForTurn> {
+  const entries = await loadLoreEntries(triggerLorebookIds(ctx.config));
+  if (entries.length === 0) return EMPTY_LORE;
 
-  // Collect triggered entries (based on keyword matches and keep-active)
-  const triggerContext: TriggerContext = {
-    sessionId: ctx.sessionId,
-    characterId: ctx.characterId,
-    currentMessageText: ctx.userMessage,
-    history: ctx.history,
-    keepActiveTurns: ctx.keepActiveTurns,
-  };
-  const triggeredEntries = await collectActiveEntries(triggerContext);
-
-  // Inject constant lore into system prompt
-  const systemPromptWithLore = injectConstantLoreIntoSystemPrompt(
-    systemPromptBeforeLore,
-    constantEntries
+  const { entries: triggeredEntries, matchedIds } = selectActiveEntries(
+    entries,
+    ctx.currentMessageText,
+    recentlyMatchedLoreIds(ctx.history, ctx.keepActiveTurns),
+    ctx.loreLimit,
   );
+  return { constantEntries: selectConstantEntries(entries), triggeredEntries, matchedIds };
+}
 
-  // Inject triggered lore into user message
-  const { injectedMessage, triggeredIds } = injectTriggeredLoreIntoUserMessage(
-    ctx.userMessage,
-    triggeredEntries
-  );
+/** The latest user message in a history, which is what keywords are matched against. */
+export function latestUserMessageText(history: ReadonlyArray<{ role: string; content: string }>): string {
+  for (let i = history.length - 1; i >= 0; i--) {
+    if (history[i]?.role === 'user') return history[i]!.content;
+  }
+  return '';
+}
 
-  return {
-    systemPromptWithLore,
-    userMessageWithLore: injectedMessage,
-    triggeredEntryIds: triggeredIds,
-  };
+/** Like resolveLoreForTurn, but never throws: chat generation continues without lore on failure. */
+export async function resolveLoreForTurnSafe(ctx: LoreTurnContext, label: string): Promise<LoreForTurn> {
+  try {
+    return await resolveLoreForTurn(ctx);
+  } catch (err) {
+    console.warn(`${label} Failed to resolve lore, continuing without it:`, err);
+    return EMPTY_LORE;
+  }
 }

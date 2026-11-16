@@ -65,6 +65,7 @@ export interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
   messageId?: number;
+  metadata?: string | null;
 }
 
 export interface Message {
@@ -72,6 +73,7 @@ export interface Message {
   sessionId?: number;
   role: string;
   content: string;
+  metadata?: string | null;
   versions?: MessageVersion[];
   createdAt?: string;
 }
@@ -98,4 +100,57 @@ export interface Setting {
   value: string;
   createdAt?: string;
   updatedAt?: string;
+}
+
+/** Lightweight lorebook row from GET /api/lorebooks?view=summary. */
+export interface LorebookSummary {
+  id: number;
+  name: string;
+  description: string | null;
+  entryCount: number;
+  /** Characters that add this lorebook to their new chats by default. */
+  characterCount: number;
+  /** Chats this lorebook is attached to. */
+  chatCount: number;
+}
+
+export interface LoreEntry {
+  id: number;
+  lorebookId: number;
+  title: string;
+  content: string;
+  keys: string[];
+  /** Always included in the system prompt instead of waiting for keywords. */
+  constant: boolean;
+  enabled: boolean;
+  priority: number;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+/** GET /api/lorebooks/:id */
+export interface LorebookDetail {
+  id: number;
+  name: string;
+  description: string | null;
+  isGlobal: boolean;
+  entries: LoreEntry[];
+  /** Characters whose new chats get this lorebook by default. */
+  characters: Array<{ id: number; name: string; profileName: string | null }>;
+  chatCount: number;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+/** GET /api/sessions/:id/lorebooks */
+export interface SessionLorebooksResponse {
+  lorebookIds: number[];
+  globalLoreEnabled: boolean;
+  characterDefaultIds: number[];
+}
+
+/** GET /api/characters/:id/lorebooks */
+export interface CharacterLorebooksResponse {
+  lorebookIds: number[];
+  existingChatCount: number;
 }

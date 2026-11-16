@@ -10,6 +10,7 @@ interface ChatHeaderProps {
   headerRef: React.Ref<HTMLElement>;
   onOpenNotes: () => void;
   onOpenSummary: () => void;
+  onOpenLorebooks: () => void;
   onDownloadLog: () => void;
   onDownloadRequest: () => void;
   onDownloadResponse: () => void;
@@ -20,7 +21,7 @@ interface ChatHeaderProps {
 
 export function ChatHeader({
   session, isBurgerMenuOpen, setIsBurgerMenuOpen, devMode,
-  headerRef, onOpenNotes, onOpenSummary,
+  headerRef, onOpenNotes, onOpenSummary, onOpenLorebooks,
   onDownloadLog, onDownloadRequest, onDownloadResponse,
   truncationActive, onOpenTruncationInfo,
 }: ChatHeaderProps) {
@@ -70,6 +71,9 @@ export function ChatHeader({
               </button>
               <button className="btn btn-secondary btn-menu-item" onClick={() => { onOpenSummary(); setIsBurgerMenuOpen(false); }}>
                 📄 Summary
+              </button>
+              <button className="btn btn-secondary btn-menu-item" onClick={() => { onOpenLorebooks(); setIsBurgerMenuOpen(false); }}>
+                📖 Lorebooks
               </button>
             </div>
           </div>

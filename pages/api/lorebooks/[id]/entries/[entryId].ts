@@ -1,71 +1,91 @@
 import prisma from '../../../../../lib/prisma';
-import { serverError, notFound } from '../../../../../lib/apiErrors';
-import { schemas, validateBody } from '../../../../../lib/validate';
+import { serverError, notFound, badRequest } from '../../../../../lib/apiErrors';
+import { schemas, validateBody, parseId } from '../../../../../lib/validate';
 import { withApiHandler } from '../../../../../lib/withApiHandler';
+import { GLOBAL_LOREBOOK_ID } from '../../../../../lib/globalLorebook';
+import { serializeKeywords } from '../../../../../lib/lorebook/keywords';
+import { parseLorebookId, toLoreEntry } from '../../../../../lib/lorebook/lorebookData';
+import type { NextApiRequest, NextApiResponse } from 'next';
 
+interface UpdateLoreEntryBody {
+  title?: string;
+  content?: string;
+  keys?: string[];
+  constant?: boolean;
+  enabled?: boolean;
+  priority?: number;
+}
+
+/** The entry, but only when it belongs to the lorebook in the URL. Writes the error response otherwise. */
+async function findEntryInLorebook(req: NextApiRequest, res: NextApiResponse) {
+  const lorebookId = parseLorebookId(req.query.id);
+  const entryId = parseId(req.query.entryId);
+  if (lorebookId === null || entryId === null) {
+    badRequest(res, 'Invalid lorebook or entry ID', 'INVALID_ID');
+    return null;
+  }
+  const entry = await prisma.loreEntry.findUnique({ where: { id: entryId } });
+  if (!entry || entry.lorebookId !== lorebookId) {
+    notFound(res, 'Lore entry not found', 'LORE_ENTRY_NOT_FOUND');
+    return null;
+  }
+  return entry;
+}
+
+/**
+ * GET    /api/lorebooks/:id/entries/:entryId
+ * PATCH  /api/lorebooks/:id/entries/:entryId  Body: any of { title, content, keys, constant, enabled, priority }
+ * DELETE /api/lorebooks/:id/entries/:entryId
+ */
 export default withApiHandler({}, {
   GET: async (req, res) => {
-    const entryId = parseInt(req.query.entryId as string, 10);
-    if (isNaN(entryId)) {
-      return res.status(400).json({ error: 'Invalid entry ID', code: 'INVALID_ID' });
-    }
-
-    const entry = await prisma.loreEntry.findUnique({ where: { id: entryId } });
-    if (!entry) {
-      return notFound(res, 'Lore entry not found', 'LORE_ENTRY_NOT_FOUND');
-    }
-
-    return res.status(200).json(entry);
+    const entry = await findEntryInLorebook(req, res);
+    if (!entry) return;
+    return res.status(200).json(toLoreEntry(entry));
   },
 
   PATCH: async (req, res) => {
-    const entryId = parseInt(req.query.entryId as string, 10);
-    if (isNaN(entryId)) {
-      return res.status(400).json({ error: 'Invalid entry ID', code: 'INVALID_ID' });
-    }
-
-    const body = validateBody(schemas.updateLoreEntry, req, res);
+    const body = validateBody<UpdateLoreEntryBody>(schemas.updateLoreEntry, req, res);
     if (!body) return;
-    const { title, content, keys, constant, enabled, priority } = body as any;
 
     try {
-      const existing = await prisma.loreEntry.findUnique({ where: { id: entryId } });
-      if (!existing) {
-        return notFound(res, 'Lore entry not found', 'LORE_ENTRY_NOT_FOUND');
+      const existing = await findEntryInLorebook(req, res);
+      if (!existing) return;
+
+      if (existing.lorebookId === GLOBAL_LOREBOOK_ID && body.constant === true) {
+        return badRequest(
+          res,
+          'Global lorebook entries cannot be permanent (constant). They must be trigger-based only.',
+          'GLOBAL_LOREBOOK_TRIGGER_ONLY'
+        );
       }
 
+      const { title, content, keys, constant, enabled, priority } = body;
       const updated = await prisma.loreEntry.update({
-        where: { id: entryId },
+        where: { id: existing.id },
         data: {
-          ...(title && { title }),
-          ...(content && { content }),
-          ...(keys && { keys: keys.join(' ') }),
-          ...(constant !== undefined && { constant }),
-          ...(enabled !== undefined && { enabled }),
-          ...(priority !== undefined && { priority }),
+          ...(title !== undefined ? { title } : {}),
+          ...(content !== undefined ? { content } : {}),
+          ...(keys !== undefined ? { keys: serializeKeywords(keys) } : {}),
+          ...(constant !== undefined ? { constant } : {}),
+          ...(enabled !== undefined ? { enabled } : {}),
+          ...(priority !== undefined ? { priority } : {}),
         },
       });
 
-      return res.status(200).json(updated);
+      return res.status(200).json(toLoreEntry(updated));
     } catch (error: unknown) {
       return serverError(res, 'Failed to update lore entry', 'LORE_ENTRY_UPDATE_FAILED');
     }
   },
 
   DELETE: async (req, res) => {
-    const entryId = parseInt(req.query.entryId as string, 10);
-    if (isNaN(entryId)) {
-      return res.status(400).json({ error: 'Invalid entry ID', code: 'INVALID_ID' });
-    }
-
     try {
-      const existing = await prisma.loreEntry.findUnique({ where: { id: entryId } });
-      if (!existing) {
-        return notFound(res, 'Lore entry not found', 'LORE_ENTRY_NOT_FOUND');
-      }
+      const existing = await findEntryInLorebook(req, res);
+      if (!existing) return;
 
-      await prisma.loreEntry.delete({ where: { id: entryId } });
-      return res.status(204).send(null);
+      await prisma.loreEntry.delete({ where: { id: existing.id } });
+      return res.status(204).end();
     } catch (error: unknown) {
       return serverError(res, 'Failed to delete lore entry', 'LORE_ENTRY_DELETE_FAILED');
     }

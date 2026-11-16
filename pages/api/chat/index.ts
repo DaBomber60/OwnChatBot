@@ -8,7 +8,9 @@ import {
   persistRequestWithMeta, loadUserPromptBody, parseUpstreamBody, forwardUpstreamError,
   upstreamReasonedWithoutReplying,
 } from '../../../lib/aiRequest';
-import { integrateLorebookIntoPrompt } from '../../../lib/lorebook/integration';
+import { resolveLoreForTurnSafe, latestUserMessageText } from '../../../lib/lorebook/integration';
+import { resolveInitialSessionLore, sessionLoreCreateData, normalizeLorebookIds } from '../../../lib/lorebook/sessionLorebooks';
+import { serializeLoreMetadata } from '../../../lib/messageMetadata';
 import { relayUpstreamSSE } from '../../../lib/sseRelay';
 import { limiters, clientIp } from '../../../lib/rateLimit';
 import { enforceBodySize } from '../../../lib/bodyLimit';
@@ -75,7 +77,8 @@ export default withApiHandler({}, {
   let sessionIdToUse = sessionId;
   if (!sessionIdToUse) {
     if (!personaId || !characterId) return badRequest(res, 'Missing personaId or characterId', 'MISSING_IDS');
-    const newSession = await prisma.chatSession.create({ data: { personaId, characterId } });
+    const lore = await resolveInitialSessionLore(characterId);
+    const newSession = await prisma.chatSession.create({ data: { personaId, characterId, ...sessionLoreCreateData(lore) } });
     sessionIdToUse = newSession.id;
   }
 
@@ -92,7 +95,7 @@ export default withApiHandler({}, {
   // load session details
   const session = await prisma.chatSession.findUnique({
     where: { id: sessionIdToUse },
-    include: { persona: true, character: true }
+    include: { persona: true, character: true, lorebooks: { select: { lorebookId: true } } }
   });
   if (!session) return notFound(res, 'Session not found', 'SESSION_NOT_FOUND');
   const { persona, character } = session;
@@ -109,6 +112,19 @@ export default withApiHandler({}, {
   const history = historyRaw.filter((m: { role: string; content: string; }) => !(m.role === 'user' && isContinuationPlaceholder(m.content)));
   console.log(`[History] Loaded full DB history: ${history.length} messages for session ${sessionIdToUse}`);
 
+  // Continuations re-use the latest real user message, so they see the same lore as the reply they extend.
+  const lore = await resolveLoreForTurnSafe({
+    config: {
+      lorebookIds: normalizeLorebookIds(session.lorebooks.map(l => l.lorebookId)),
+      globalLoreEnabled: session.globalLoreEnabled,
+    },
+    history,
+    currentMessageText: latestUserMessageText(history),
+    keepActiveTurns: aiCfg.loreKeepActiveTurns,
+    loreLimit: aiCfg.loreLimit,
+  }, '[Lorebook]');
+  const triggeredLoreIds = lore.triggeredEntries.map(e => e.id);
+
   // System prompt + persona-prefixed history, truncated, with thinking guidance applied.
   // The continuation directive is appended AFTER truncation so it can never be dropped.
   const prompt = buildConversationPrompt({
@@ -118,33 +134,10 @@ export default withApiHandler({}, {
     history,
     summary: session.summary,
     userPromptBody,
+    lore,
   });
   if (prompt.wasTruncated) {
     console.log(`[Truncation] Removed ${prompt.removedCount} messages (${prompt.baseMessages.length} -> ${prompt.messages.length})`);
-  }
-
-  // Integrate lorebook: inject constant entries into system prompt and trigger on current message
-  let triggeredLoreIds: number[] = [];
-  if (userMessage && !isContinuationPlaceholder(userMessage)) {
-    try {
-      const loreResult = await integrateLorebookIntoPrompt({
-        sessionId: sessionIdToUse,
-        characterId,
-        personaName: persona.name,
-        keepActiveTurns: aiCfg.loreKeepActiveTurns,
-        history: history as any,
-        userMessage,
-      }, prompt.messages[0]?.content || '');
-
-      // Update system prompt with lore injected
-      if (prompt.messages[0]) {
-        prompt.messages[0].content = loreResult.systemPromptWithLore;
-      }
-      triggeredLoreIds = loreResult.triggeredEntryIds;
-    } catch (err) {
-      console.warn('[Lorebook] Failed to integrate lore:', err);
-      // Continue without lore on error (graceful degradation)
-    }
   }
 
   // Now, if this is a continuation request, append the ephemeral continuation directive as the LAST message.
@@ -206,8 +199,9 @@ export default withApiHandler({}, {
       await prisma.chatMessage.create({
         data: {
           sessionId: sessionIdToUse,
-            role: 'assistant',
-          content
+          role: 'assistant',
+          content,
+          metadata: serializeLoreMetadata(triggeredLoreIds, lore.matchedIds)
         }
       });
     }

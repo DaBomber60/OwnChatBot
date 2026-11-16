@@ -1,9 +1,10 @@
 import prisma from '../../../../lib/prisma';
 import { notFound } from '../../../../lib/apiErrors';
-import { getTruncationLimit, getAIConfig } from '../../../../lib/aiProvider';
+import { getTruncationLimit, getAIConfig, DEFAULT_LORE_KEEP_ACTIVE_TURNS, DEFAULT_LORE_LIMIT } from '../../../../lib/aiProvider';
 import { buildSystemPrompt } from '../../../../lib/systemPrompt';
-import { injectConstantLoreIntoSystemPrompt, buildTriggeredLoreInjection } from '../../../../lib/lorebook/injection';
-import { collectConstantEntries, collectActiveEntries, type TriggerContext } from '../../../../lib/lorebook/trigger';
+import { injectConstantLoreIntoSystemPrompt, appendTriggeredLoreToLastUserMessage } from '../../../../lib/lorebook/injection';
+import { resolveLoreForTurnSafe, latestUserMessageText } from '../../../../lib/lorebook/integration';
+import { normalizeLorebookIds } from '../../../../lib/lorebook/sessionLorebooks';
 import { loadUserPromptBody } from '../../../../lib/aiRequest';
 import { withApiHandler } from '../../../../lib/withApiHandler';
 
@@ -15,6 +16,7 @@ export default withApiHandler({ parseId: true }, {
       include: { 
         persona: true, 
         character: true,
+        lorebooks: { select: { lorebookId: true } },
         messages: {
           orderBy: { createdAt: 'asc' }
         }
@@ -37,13 +39,17 @@ export default withApiHandler({ parseId: true }, {
     // Load and append user prompt if configured
     const userPromptBody = await loadUserPromptBody().catch(() => '');
 
-    // Inject constant lore into system prompt
-    try {
-      const constantEntries = await collectConstantEntries(character.id);
-      systemContent = injectConstantLoreIntoSystemPrompt(systemContent, constantEntries);
-    } catch (err) {
-      console.warn('[check-limit] Failed to load constant lore:', err);
-    }
+    const lore = await resolveLoreForTurnSafe({
+      config: {
+        lorebookIds: normalizeLorebookIds(session.lorebooks.map(l => l.lorebookId)),
+        globalLoreEnabled: session.globalLoreEnabled,
+      },
+      history: messages,
+      currentMessageText: latestUserMessageText(messages),
+      keepActiveTurns: 'error' in aiCfg ? DEFAULT_LORE_KEEP_ACTIVE_TURNS : aiCfg.loreKeepActiveTurns,
+      loreLimit: 'error' in aiCfg ? DEFAULT_LORE_LIMIT : aiCfg.loreLimit,
+    }, '[check-limit]');
+    systemContent = injectConstantLoreIntoSystemPrompt(systemContent, lore.constantEntries);
 
     // Format history with persona name prefix for user messages
     const formattedHistory = messages.map((m) => {
@@ -56,38 +62,10 @@ export default withApiHandler({ parseId: true }, {
       return { role: m.role, content: m.content };
     });
 
-    // Estimate lore injection for the most recent user message
-    let loreInjectionContent = '';
-    if (formattedHistory.length > 0) {
-      const lastUserMsg = [...formattedHistory].reverse().find(m => m.role === 'user');
-      if (lastUserMsg) {
-        try {
-          const triggerContext: TriggerContext = {
-            sessionId: session.id,
-            characterId: character.id,
-            currentMessageText: lastUserMsg.content,
-            history: formattedHistory,
-            keepActiveTurns: 'error' in aiCfg ? 2 : aiCfg.loreKeepActiveTurns,
-          };
-          const triggeredEntries = await collectActiveEntries(triggerContext);
-          const { content } = buildTriggeredLoreInjection(triggeredEntries);
-          loreInjectionContent = content;
-        } catch (err) {
-          console.warn('[check-limit] Failed to load triggered lore:', err);
-        }
-      }
-    }
-
     // Calculate total character count as it would be sent to API
     const allMessages = [
       { role: 'system', content: systemContent },
-      ...formattedHistory.map((m, idx) => {
-        // Add lore injection estimate to the last user message
-        if (idx === formattedHistory.length - 1 && m.role === 'user') {
-          return { role: m.role, content: m.content + loreInjectionContent };
-        }
-        return m;
-      })
+      ...appendTriggeredLoreToLastUserMessage(formattedHistory, lore.triggeredEntries),
     ];
 
     const totalCharacters = allMessages.reduce((sum, msg) => sum + msg.content.length, 0);

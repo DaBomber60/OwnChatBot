@@ -498,6 +498,32 @@
   margin-left: var(--space-2);
 }
 
+/* Lore triggered badge styling */
+.lore-triggered-badge {
+  background: rgba(139, 92, 246, 0.15);
+  border: 1px solid rgba(139, 92, 246, 0.3);
+  color: var(--primary);
+  font-size: var(--font-size-sm);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-md);
+  transition: all 0.2s ease;
+  backdrop-filter: blur(10px);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.lore-triggered-badge:hover {
+  background: rgba(139, 92, 246, 0.25);
+  border-color: rgba(139, 92, 246, 0.5);
+  transform: scale(1.05);
+}
+
+.lore-triggered-badge:active {
+  transform: scale(0.98);
+}
+
 /* Responsive adjustments for variant controls */
 @media (max-width: 768px) {
   .variant-separator {

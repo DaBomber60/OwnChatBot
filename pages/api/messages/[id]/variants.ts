@@ -11,6 +11,8 @@ import {
 } from '../../../../lib/aiRequest';
 import { relayUpstreamSSE } from '../../../../lib/sseRelay';
 import { startUpstreamRequest, type UpstreamRequestHandle } from '../../../../lib/upstreamAI';
+import { resolveLoreForTurnSafe, latestUserMessageText } from '../../../../lib/lorebook/integration';
+import { normalizeLorebookIds } from '../../../../lib/lorebook/sessionLorebooks';
 import { withApiHandler } from '../../../../lib/withApiHandler';
 import { persistJsonResponse, persistSseResponse } from '../../../../lib/apiLog';
 
@@ -85,7 +87,8 @@ export default withApiHandler({ parseId: true }, {
           session: {
             include: {
               persona: true,
-              character: true
+              character: true,
+              lorebooks: { select: { lorebookId: true } }
             }
           }
         }
@@ -159,6 +162,18 @@ export default withApiHandler({ parseId: true }, {
       const userPromptBody = await loadUserPromptBody();
       const { persona, character } = message.session;
 
+      // Same lore context the original reply had: matched against the user message it answers.
+      const lore = await resolveLoreForTurnSafe({
+        config: {
+          lorebookIds: normalizeLorebookIds(message.session.lorebooks.map(l => l.lorebookId)),
+          globalLoreEnabled: message.session.globalLoreEnabled,
+        },
+        history: previousMessages,
+        currentMessageText: latestUserMessageText(previousMessages),
+        keepActiveTurns: aiCfg.loreKeepActiveTurns,
+        loreLimit: aiCfg.loreLimit,
+      }, '[Variant]');
+
       const prompt = buildConversationPrompt({
         cfg: aiCfg,
         persona,
@@ -166,6 +181,7 @@ export default withApiHandler({ parseId: true }, {
         history: previousMessages,
         summary: message.session.summary,
         userPromptBody,
+        lore,
       });
 
       const requestBody = buildUpstreamBody(aiCfg, {

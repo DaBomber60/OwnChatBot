@@ -1,6 +1,6 @@
 import { withApiHandler } from '../../../lib/withApiHandler';
 import { setGlobalLoreEnabledForSession, isGlobalLoreEnabledForSession } from '../../../lib/globalLorebook';
-import { badRequest, serverError } from '../../../lib/apiErrors';
+import { badRequest, notFound, serverError } from '../../../lib/apiErrors';
 import { z } from 'zod';
 
 const schema = z.object({
@@ -36,7 +36,8 @@ export default withApiHandler({}, {
     const { sessionId, enabled } = result.data;
 
     try {
-      await setGlobalLoreEnabledForSession(sessionId, enabled);
+      const updated = await setGlobalLoreEnabledForSession(sessionId, enabled);
+      if (!updated) return notFound(res, 'Session not found', 'SESSION_NOT_FOUND');
       return res.status(200).json({
         sessionId,
         globalLoreEnabled: enabled,
@@ -54,6 +55,7 @@ export default withApiHandler({}, {
 
     try {
       const enabled = await isGlobalLoreEnabledForSession(sessionId);
+      if (enabled === null) return notFound(res, 'Session not found', 'SESSION_NOT_FOUND');
       return res.status(200).json({
         sessionId,
         globalLoreEnabled: enabled,

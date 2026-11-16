@@ -1,54 +1,60 @@
 import prisma from '../../../../lib/prisma';
-import { serverError, notFound, badRequest, forbidden } from '../../../../lib/apiErrors';
+import { serverError, notFound, badRequest } from '../../../../lib/apiErrors';
 import { schemas, validateBody } from '../../../../lib/validate';
 import { withApiHandler } from '../../../../lib/withApiHandler';
 import { GLOBAL_LOREBOOK_ID } from '../../../../lib/globalLorebook';
+import { DEFAULT_LORE_PRIORITY } from '../../../../lib/lorebook/constants';
+import { serializeKeywords } from '../../../../lib/lorebook/keywords';
+import { parseLorebookId, toLoreEntry } from '../../../../lib/lorebook/lorebookData';
 
+interface CreateLoreEntryBody {
+  title: string;
+  content: string;
+  keys?: string[];
+  constant?: boolean;
+  enabled?: boolean;
+  priority?: number;
+}
+
+/**
+ * POST /api/lorebooks/:id/entries
+ * Body: { title, content, keys?, constant?, enabled?, priority? }
+ */
 export default withApiHandler({}, {
   POST: async (req, res) => {
-    const lorebookId = parseInt(req.query.id as string, 10);
-    if (isNaN(lorebookId)) {
-      return res.status(400).json({ error: 'Invalid lorebook ID', code: 'INVALID_ID' });
+    const lorebookId = parseLorebookId(req.query.id);
+    if (lorebookId === null) return badRequest(res, 'Invalid lorebook ID', 'INVALID_ID');
+
+    const body = validateBody<CreateLoreEntryBody>(schemas.createLoreEntry, req, res);
+    if (!body) return;
+    const { title, content, keys, constant, enabled, priority } = body;
+
+    // Global lorebook entries must be trigger-based only (no permanent entries)
+    if (lorebookId === GLOBAL_LOREBOOK_ID && constant === true) {
+      return badRequest(
+        res,
+        'Global lorebook entries cannot be permanent (constant). They must be trigger-based only.',
+        'GLOBAL_LOREBOOK_TRIGGER_ONLY'
+      );
     }
 
-    const body = validateBody(schemas.createLoreEntry, req, res);
-    if (!body) return;
-    let { title, content, keys, constant, enabled, priority } = body as any;
-
     try {
-      // Verify lorebook exists
-      const lorebook = await prisma.lorebook.findUnique({ where: { id: lorebookId } });
-      if (!lorebook) {
-        return notFound(res, 'Lorebook not found', 'LOREBOOK_NOT_FOUND');
-      }
-
-      // Global lorebook entries must be trigger-based only (no permanent entries)
-      if (lorebookId === GLOBAL_LOREBOOK_ID && constant === true) {
-        return badRequest(
-          res,
-          'Global lorebook entries cannot be permanent (constant). They must be trigger-based only.',
-          'GLOBAL_LOREBOOK_TRIGGER_ONLY'
-        );
-      }
-
-      // Force constant to false for global lorebook
-      if (lorebookId === GLOBAL_LOREBOOK_ID) {
-        constant = false;
-      }
+      const lorebook = await prisma.lorebook.findUnique({ where: { id: lorebookId }, select: { id: true } });
+      if (!lorebook) return notFound(res, 'Lorebook not found', 'LOREBOOK_NOT_FOUND');
 
       const entry = await prisma.loreEntry.create({
         data: {
           lorebookId,
           title,
           content,
-          keys: (keys || []).join(' '),
+          keys: serializeKeywords(keys ?? []),
           constant: constant ?? false,
           enabled: enabled ?? true,
-          priority: priority ?? 100,
+          priority: priority ?? DEFAULT_LORE_PRIORITY,
         },
       });
 
-      return res.status(201).json(entry);
+      return res.status(201).json(toLoreEntry(entry));
     } catch (error: unknown) {
       return serverError(res, 'Failed to create lore entry', 'LORE_ENTRY_CREATE_FAILED');
     }

@@ -1,6 +1,7 @@
 import prisma from '../../../lib/prisma';
 import { schemas, validateBody } from '../../../lib/validate';
 import { withApiHandler } from '../../../lib/withApiHandler';
+import { resolveInitialSessionLore, sessionLoreCreateData } from '../../../lib/lorebook/sessionLorebooks';
 
 export default withApiHandler({}, {
   GET: async (req, res) => {
@@ -50,9 +51,11 @@ export default withApiHandler({}, {
   POST: async (req, res) => {
     const body = validateBody(schemas.createSession, req, res);
     if (!body) return;
-    const { personaId, characterId, skipFirstMessage } = body as any;
-    // create session
-    const session = await prisma.chatSession.create({ data: { personaId, characterId } });
+    const { personaId, characterId, skipFirstMessage, lorebookIds, globalLoreEnabled } = body as any;
+    const lore = await resolveInitialSessionLore(characterId, { lorebookIds, globalLoreEnabled });
+    const session = await prisma.chatSession.create({
+      data: { personaId, characterId, ...sessionLoreCreateData(lore) }
+    });
 
     // Only seed first assistant message if not explicitly skipped
     if (!skipFirstMessage) {

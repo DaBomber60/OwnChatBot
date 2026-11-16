@@ -1,70 +1,50 @@
 /**
  * Global lorebook helpers
- * 
- * The global lorebook (ID 0) applies to all chats by default but can be disabled per-chat.
- * This module provides utilities for checking if global lore is enabled.
+ *
+ * The global lorebook (ID 0) holds trigger-only lore that applies to every chat.
+ * Each chat can switch it off via chat_sessions.globalLoreEnabled.
  */
 
 import prisma from './prisma';
+import { GLOBAL_LOREBOOK_ID } from './lorebook/constants';
 
-export const GLOBAL_LOREBOOK_ID = 0;
+export { GLOBAL_LOREBOOK_ID };
 
 /**
- * Check if global lore is enabled for a specific session.
- * 
- * Checks in order:
- * 1. Session-level override: `globalLoreEnabled_{sessionId}`
- * 2. User-level default: `globalLoreEnabled`
- * 3. System default: true
- * 
- * This is efficient because it uses exact key lookups (indexed) instead of LIKE scans.
+ * Whether new chats start with the global lorebook enabled.
+ * Reads the user-level `globalLoreEnabled` setting; defaults to true when unset or unreadable.
  */
-export async function isGlobalLoreEnabledForSession(sessionId: number): Promise<boolean> {
+export async function getDefaultGlobalLoreEnabled(): Promise<boolean> {
   try {
-    // Check session-level override first (exact key lookup - O(1))
-    const sessionOverride = await prisma.setting.findUnique({
-      where: { key: `globalLoreEnabled_${sessionId}` }
-    });
-    if (sessionOverride !== null) {
-      return sessionOverride.value === 'true';
-    }
-
-    // Fall back to user-level default (exact key lookup - O(1))
-    const userDefault = await prisma.setting.findUnique({
-      where: { key: 'globalLoreEnabled' }
-    });
-    // Default to true if not set
-    return userDefault?.value !== 'false';
+    const row = await prisma.setting.findUnique({ where: { key: 'globalLoreEnabled' } });
+    return row?.value !== 'false';
   } catch (error) {
-    console.error('[globalLore] Error checking if global lore is enabled:', error);
-    // Default to true if there's a database error
+    console.error('[globalLore] Error reading default global lore setting:', error);
     return true;
   }
 }
 
 /**
- * Set global lore enabled/disabled for a specific session.
- * Pass null to remove the session override and use user-level default.
+ * Check if global lore is enabled for a specific session. Returns null when the session doesn't exist.
  */
-export async function setGlobalLoreEnabledForSession(
-  sessionId: number,
-  enabled: boolean | null
-): Promise<void> {
-  const key = `globalLoreEnabled_${sessionId}`;
-  
-  if (enabled === null) {
-    // Remove the override
-    await prisma.setting.delete({ where: { key } }).catch(() => {
-      // Ignore if key doesn't exist
-    });
-  } else {
-    // Upsert the setting
-    await prisma.setting.upsert({
-      where: { key },
-      update: { value: enabled ? 'true' : 'false' },
-      create: { key, value: enabled ? 'true' : 'false' }
-    });
-  }
+export async function isGlobalLoreEnabledForSession(sessionId: number): Promise<boolean | null> {
+  const session = await prisma.chatSession.findUnique({
+    where: { id: sessionId },
+    select: { globalLoreEnabled: true },
+  });
+  return session ? session.globalLoreEnabled : null;
+}
+
+/**
+ * Set global lore enabled/disabled for a specific session.
+ * Returns false when the session doesn't exist.
+ */
+export async function setGlobalLoreEnabledForSession(sessionId: number, enabled: boolean): Promise<boolean> {
+  const result = await prisma.chatSession.updateMany({
+    where: { id: sessionId },
+    data: { globalLoreEnabled: enabled },
+  });
+  return result.count > 0;
 }
 
 /**

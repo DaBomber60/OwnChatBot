@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import useSWR from 'swr';
 import Head from 'next/head';
 import {
@@ -30,6 +30,7 @@ import { PageHeader } from '../../components/PageHeader';
 import { Modal } from '../../components/Modal';
 import { useToast } from '../../components/ToastProvider';
 import { DropdownMenu, DropdownMenuItem, DropdownMenuDivider, ConfirmDeleteItem } from '../../components/DropdownMenu';
+import { CharacterLorebooksField, type CharacterLorebooksFieldHandle } from '../../components/CharacterLorebooksField';
 
 // Utility to get preview text for character cards
 function getCharacterPreview(character: Character): { text: string; label: string } | null {
@@ -129,6 +130,7 @@ function SortableCharacterCard({
   onToggleSelect?: (id: number) => void;
 }) {
   const [showMoveSubmenu, setShowMoveSubmenu] = useState(false);
+  const loreFieldRef = useRef<CharacterLorebooksFieldHandle>(null);
   const {
     attributes,
     listeners,
@@ -360,7 +362,9 @@ function SortableCharacterCard({
                   groupId: editGroupId
                 })
               });
-              setEditingId(null);
+              // Keep the editor open if the lorebook defaults failed to save (the field shows a toast).
+              const loreSaved = await loreFieldRef.current?.save() ?? true;
+              if (loreSaved) setEditingId(null);
               mutate();
             }}>
               <div className="grid grid-cols-1 gap-2">
@@ -447,6 +451,7 @@ function SortableCharacterCard({
                     placeholder="Sample conversation showing the character's speaking style..."
                   />
                 </div>
+                <CharacterLorebooksField ref={loreFieldRef} characterId={character.id} />
               </div>
               <div className="flex flex-col sm:flex-row gap-3 mt-2">
                 <button type="submit" className="btn btn-primary">Save Changes</button>

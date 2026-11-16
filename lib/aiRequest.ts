@@ -16,6 +16,8 @@ import {
 } from './aiProvider';
 import { buildSystemPrompt } from './systemPrompt';
 import { truncateMessagesIfNeeded, injectTruncationNote, type MessageForTruncation } from './messageUtils';
+import { injectConstantLoreIntoSystemPrompt, appendTriggeredLoreToLastUserMessage } from './lorebook/injection';
+import type { TriggeredEntry } from './lorebook/trigger';
 import { persistApiRequest } from './apiLog';
 
 export interface PromptMessage {
@@ -94,6 +96,8 @@ export interface ConversationPromptOpts {
   history: Array<{ role: string; content: string }>;
   summary?: string | null;
   userPromptBody?: string | null;
+  /** Lore resolved for this turn; applied before truncation so the size check includes it. */
+  lore?: { constantEntries: TriggeredEntry[]; triggeredEntries: TriggeredEntry[] };
 }
 
 export interface ConversationPrompt {
@@ -111,16 +115,19 @@ export interface ConversationPrompt {
  * with the truncation note and DeepSeek thinking guidance applied.
  */
 export function buildConversationPrompt(opts: ConversationPromptOpts): ConversationPrompt {
-  const { cfg, persona, character, history, summary, userPromptBody } = opts;
+  const { cfg, persona, character, history, summary, userPromptBody, lore } = opts;
 
-  const systemContent = buildSystemPrompt(persona as any, character as any, {
-    summary: summary || undefined,
-    userPromptBody: userPromptBody || undefined,
-  });
+  const systemContent = injectConstantLoreIntoSystemPrompt(
+    buildSystemPrompt(persona as any, character as any, {
+      summary: summary || undefined,
+      userPromptBody: userPromptBody || undefined,
+    }),
+    lore?.constantEntries ?? [],
+  );
 
   const baseMessages: PromptMessage[] = [
     { role: 'system', content: systemContent },
-    ...formatHistoryForPrompt(history, persona.name),
+    ...appendTriggeredLoreToLastUserMessage(formatHistoryForPrompt(history, persona.name), lore?.triggeredEntries ?? []),
   ];
 
   const truncationResult = truncateMessagesIfNeeded(baseMessages as MessageForTruncation[], cfg.truncationLimit);
