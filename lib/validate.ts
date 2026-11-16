@@ -261,6 +261,12 @@ export const schemas = {
   unlinkLorebook: z.object({
     characterId: z.number().int().positive(),
   }),
+
+  // Lorebook keyword generation
+  generateLoreKeywords: z.object({
+    content: z.string().trim().min(10).max(50000),
+    entryTitle: z.string().trim().max(200).optional(),
+  }),
 };
 
 /**

@@ -227,4 +227,80 @@ describe('Lorebook schemas', () => {
       }
     });
   });
+
+  describe('generateLoreKeywords', () => {
+    it('accepts valid content with optional entryTitle', () => {
+      const result = schemas.generateLoreKeywords.safeParse({
+        content: 'This is a lore entry about a mysterious artifact...',
+        entryTitle: 'The Artifact of Power',
+      });
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.content).toContain('artifact');
+        expect(result.data.entryTitle).toBe('The Artifact of Power');
+      }
+    });
+
+    it('accepts content without entryTitle', () => {
+      const result = schemas.generateLoreKeywords.safeParse({
+        content: 'Some lore content here',
+      });
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.entryTitle).toBeUndefined();
+      }
+    });
+
+    it('rejects content shorter than 10 characters', () => {
+      const result = schemas.generateLoreKeywords.safeParse({
+        content: 'short',
+      });
+      expect(result.success).toBe(false);
+    });
+
+    it('rejects content longer than 50000 characters', () => {
+      const result = schemas.generateLoreKeywords.safeParse({
+        content: 'a'.repeat(50001),
+      });
+      expect(result.success).toBe(false);
+    });
+
+    it('rejects missing content', () => {
+      const result = schemas.generateLoreKeywords.safeParse({
+        entryTitle: 'Title',
+      });
+      expect(result.success).toBe(false);
+    });
+
+    it('rejects entryTitle longer than 200 characters', () => {
+      const result = schemas.generateLoreKeywords.safeParse({
+        content: 'Valid content here for testing',
+        entryTitle: 'a'.repeat(201),
+      });
+      expect(result.success).toBe(false);
+    });
+
+    it('allows empty entryTitle', () => {
+      const result = schemas.generateLoreKeywords.safeParse({
+        content: 'Some lore content here',
+        entryTitle: '',
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it('rejects non-string content', () => {
+      const result = schemas.generateLoreKeywords.safeParse({
+        content: 12345,
+      });
+      expect(result.success).toBe(false);
+    });
+
+    it('rejects non-string entryTitle', () => {
+      const result = schemas.generateLoreKeywords.safeParse({
+        content: 'Valid content here',
+        entryTitle: 123,
+      });
+      expect(result.success).toBe(false);
+    });
+  });
 });
