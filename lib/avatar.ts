@@ -1,5 +1,8 @@
 /** Client-safe helpers for character and group display pictures. */
 
+/** Longest prompt accepted for AI picture generation. */
+export const IMAGE_PROMPT_MAX = 2048;
+
 export interface AvatarOwner {
   id: number;
   avatarUpdatedAt?: string | Date | null;

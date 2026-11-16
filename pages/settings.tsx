@@ -57,6 +57,9 @@ interface SettingsState {
   loreLimit: number;
   loreKeepActiveTurns: number;
   globalLoreEnabled: boolean;
+  // Picture generation (Cloudflare Workers AI)
+  cloudflareAccountId: string;
+  cloudflareApiToken: string;
 }
 
 const DEFAULT_SUMMARY_PROMPT = 'Create a brief, focused summary (~100 words) of the roleplay between {{char}} and {{user}}. Include:\\n\\n- Key events and decisions\\n- Important emotional moments\\n- Location/time changes\\n\\nRules: Only summarize provided transcript. No speculation. Single paragraph format.';
@@ -93,6 +96,8 @@ const initialSettingsState: SettingsState = {
   loreLimit: DEFAULT_LORE_LIMIT,
   loreKeepActiveTurns: DEFAULT_LORE_KEEP_ACTIVE_TURNS,
   globalLoreEnabled: true,
+  cloudflareAccountId: '',
+  cloudflareApiToken: '',
 };
 
 // Maps the raw settings rows onto a complete SettingsState. Key insertion order matches
@@ -146,6 +151,8 @@ function settingsFromDb(db: Record<string, string>): SettingsState {
     loreLimit: lore.loreLimit,
     loreKeepActiveTurns: lore.keepActiveTurns,
     globalLoreEnabled: lore.globalLoreDefault,
+    cloudflareAccountId: db.cloudflareAccountId || '',
+    cloudflareApiToken: db.cloudflareApiToken || '',
   };
 }
 
@@ -519,6 +526,9 @@ export default function SettingsPage() {
           loreLimit: String(state.loreLimit),
           loreKeepActiveTurns: String(state.loreKeepActiveTurns),
           globalLoreEnabled: String(state.globalLoreEnabled),
+          // Saved regardless of Developer Mode, which only controls whether the fields are shown.
+          cloudflareAccountId: state.cloudflareAccountId.trim(),
+          cloudflareApiToken: state.cloudflareApiToken.trim(),
         })
       });
       if (res.ok) {
@@ -1480,6 +1490,54 @@ export default function SettingsPage() {
             <p className="settings-hint">Enables additional debugging features, such as the legacy JSON export.</p>
           </div>
         </div>
+
+        {/* Picture generation: configured in Developer Mode, used everywhere once set */}
+        {state.devMode && (
+          <div className="card settings-card">
+            <div className="card-header">
+              <h3 className="card-title">🎨 Picture Generation</h3>
+              <p className="card-description">Generate character and group pictures with Cloudflare Workers AI</p>
+            </div>
+
+            <div className="form-group">
+              <label className="form-label" htmlFor="cloudflare-account-id">Cloudflare Account ID</label>
+              <input
+                id="cloudflare-account-id"
+                type="text"
+                className="form-input"
+                value={state.cloudflareAccountId}
+                onChange={e => dispatch({ type: 'SET_FIELD', field: 'cloudflareAccountId', value: e.target.value })}
+                placeholder="32-character account ID"
+                autoComplete="off"
+                spellCheck={false}
+                style={{ fontFamily: 'monospace' }}
+              />
+            </div>
+
+            <div className="form-group">
+              <label className="form-label" htmlFor="cloudflare-api-token">Cloudflare API Token</label>
+              <input
+                id="cloudflare-api-token"
+                type="password"
+                className="form-input"
+                value={state.cloudflareApiToken}
+                onChange={e => dispatch({ type: 'SET_FIELD', field: 'cloudflareApiToken', value: e.target.value })}
+                autoComplete="off"
+                data-1p-ignore
+                data-lpignore="true"
+                spellCheck={false}
+                style={{ fontFamily: 'monospace' }}
+              />
+              <p className="settings-hint">Needs the Workers AI permission. Pictures are made with FLUX.2 [klein] 9B.</p>
+            </div>
+
+            <p className="settings-hint">
+              {dbSettings?.cloudflareAccountId?.trim() && dbSettings?.cloudflareApiToken?.trim()
+                ? '✓ Set up. Picture editors offer a Generate option, even with Developer Mode turned off.'
+                : 'Once both are saved, picture editors offer a Generate option, even with Developer Mode turned off.'}
+            </p>
+          </div>
+        )}
 
         {dangerZoneEnabled && (
           <div className="card settings-card settings-danger">

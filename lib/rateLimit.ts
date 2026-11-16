@@ -50,6 +50,7 @@ export const limiters = {
   dbImport: (ip: string) => hitLimit(ip, { windowMs: 30 * 60_000, max: 2, keyPrefix: 'dbimport' }),
   importReceive: (ip: string) => hitLimit(ip, { windowMs: 60_000, max: 20, keyPrefix: 'importReceive' }),
   importCreateChat: (ip: string) => hitLimit(ip, { windowMs: 10 * 60_000, max: 30, keyPrefix: 'importCreateChat' }),
+  imageGenerate: (ip: string) => hitLimit(ip, { windowMs: 60_000, max: 10, keyPrefix: 'imageGenerate' }),
 };
 
 export function clientIp(req: { headers: any; socket?: any }): string {

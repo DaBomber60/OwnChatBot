@@ -179,6 +179,51 @@
   flex: 1;
 }
 
+.avatar-editor-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--space-2);
+}
+
+/* AI picture generation (shown once Cloudflare is set up in Settings) */
+.avatar-generate {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+  text-align: center;
+}
+
+.avatar-generate-divider {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-2);
+  color: var(--text-muted);
+  font-size: var(--font-size-xs);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.avatar-generate-divider::before,
+.avatar-generate-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background-color: var(--border-primary);
+}
+
+.avatar-generate-label {
+  margin: var(--space-2) 0 0;
+  text-align: left;
+}
+
+.avatar-generate-prompt {
+  min-height: 5rem;
+  font-size: var(--font-size-sm);
+}
+
 @media (max-width: 480px) {
   .avatar-editor-modal .modal-footer {
     flex-direction: column-reverse;

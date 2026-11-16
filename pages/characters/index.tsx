@@ -2144,6 +2144,7 @@ export default function CharactersPage() {
           fallbackSrc={groupAvatarUrl(pictureTarget.character.group)}
           fallbackNote={`Showing the ${pictureTarget.character.group?.name ?? 'group'} group's picture until this character has its own.`}
           endpoint={`/api/characters/${pictureTarget.character.id}/avatar`}
+          autoGenerateCharacterId={pictureTarget.character.personality?.trim() ? pictureTarget.character.id : undefined}
           onClose={() => setPictureTarget(null)}
           onSaved={() => { mutate(); }}
         />

@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { validationError, badRequest } from './apiErrors';
 import { LORE_PRIORITIES } from './lorebook/constants';
+import { IMAGE_PROMPT_MAX } from './avatar';
 
 export type ParsedBody<T> = T & { _raw?: any };
 
@@ -134,6 +135,14 @@ export const schemas = {
     groupId: z.number().int().positive().nullable().optional()
   }),
   upsertSettings: z.record(z.string().regex(/^[A-Za-z0-9_\-]+$/), z.union([z.string(), z.number(), z.boolean()])).refine((obj: Record<string, unknown>) => Object.keys(obj).length > 0, 'At least one setting required'),
+  // Either a custom prompt, or a character whose personality becomes the prompt.
+  generateImage: z.object({
+    prompt: z.string().trim().min(1, 'Describe the picture first').max(IMAGE_PROMPT_MAX).optional(),
+    characterId: z.number().int().positive().optional()
+  }).refine(
+    (b: { prompt?: string; characterId?: number }) => (b.prompt === undefined) !== (b.characterId === undefined),
+    'Send either a prompt or a characterId'
+  ),
   createUserPrompt: z.object({
     title: z.string().trim().min(1).max(200),
     body: z.string().trim().min(1)

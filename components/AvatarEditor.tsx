@@ -1,8 +1,11 @@
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react';
+import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react';
+import useSWR from 'swr';
 import { Modal } from './Modal';
 import { Avatar } from './Avatar';
 import { useToast } from './ToastProvider';
 import { extractErrorFromResponse } from '../lib/chat/errorUtils';
+import { fetcher } from '../lib/fetcher';
+import { IMAGE_PROMPT_MAX } from '../lib/avatar';
 
 /** Side of the on-screen crop square, in CSS pixels. */
 const VIEWPORT = 240;
@@ -59,6 +62,15 @@ function blobToDataUrl(blob: Blob): Promise<string> {
   });
 }
 
+function dataUrlToFile(dataUrl: string, name: string): File {
+  const match = /^data:(image\/[a-z0-9.+-]+);base64,(.+)$/i.exec(dataUrl);
+  if (!match) throw new Error('The generated picture could not be read');
+  const binary = atob(match[2]!);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return new File([bytes], name, { type: match[1] });
+}
+
 async function renderCrop(image: LoadedImage, crop: Crop): Promise<string> {
   const canvas = document.createElement('canvas');
   canvas.width = OUTPUT;
@@ -99,22 +111,36 @@ interface AvatarEditorProps {
   description?: string;
   /** Avatar API route accepting PUT { image } and DELETE. */
   endpoint: string;
+  /** Character whose personality can be turned into a picture prompt with one click. */
+  autoGenerateCharacterId?: number;
   onClose: () => void;
   /** Called with the new avatarUpdatedAt (null when removed). */
   onSaved: (avatarUpdatedAt: string | null) => void;
 }
 
-export function AvatarEditor({ title, name, currentSrc, fallbackSrc, fallbackNote, description, endpoint, onClose, onSaved }: AvatarEditorProps) {
+export function AvatarEditor({
+  title, name, currentSrc, fallbackSrc, fallbackNote, description, endpoint, autoGenerateCharacterId, onClose, onSaved,
+}: AvatarEditorProps) {
   const { showToast } = useToast();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{ pointerId: number; startX: number; startY: number; crop: Crop } | null>(null);
   const [image, setImage] = useState<LoadedImage | null>(null);
   const [crop, setCrop] = useState<Crop>({ zoom: 1, x: 0, y: 0 });
-  const [busy, setBusy] = useState<'saving' | 'removing' | null>(null);
+  const [busy, setBusy] = useState<'saving' | 'removing' | 'generating-auto' | 'generating-prompt' | null>(null);
   const [dropActive, setDropActive] = useState(false);
+  const [prompt, setPrompt] = useState('');
+  const generationRef = useRef<AbortController | null>(null);
+  const promptId = useId();
+  // Offered only once a Cloudflare account ID and API token are saved in Settings.
+  const { data: imageGeneration } = useSWR<{ configured?: boolean }>('/api/images/generate', fetcher);
+  const canGenerate = imageGeneration?.configured === true;
+  // Saving or removing can't be interrupted; a picture being generated can.
+  const locked = busy === 'saving' || busy === 'removing';
+  const generating = busy === 'generating-auto' || busy === 'generating-prompt';
 
   useEffect(() => () => { if (image) URL.revokeObjectURL(image.url); }, [image]);
+  useEffect(() => () => generationRef.current?.abort(), []);
 
   const loadFile = useCallback((file: File | undefined) => {
     if (!file) return;
@@ -231,12 +257,49 @@ export function AvatarEditor({ title, name, currentSrc, fallbackSrc, fallbackNot
     }
   };
 
+  /** Auto mode asks the server to describe the character from its personality. */
+  const generate = async (mode: 'auto' | 'prompt') => {
+    const text = prompt.trim();
+    if (busy || (mode === 'prompt' ? !text : !autoGenerateCharacterId)) return;
+    const controller = new AbortController();
+    generationRef.current = controller;
+    setBusy(mode === 'auto' ? 'generating-auto' : 'generating-prompt');
+    try {
+      const res = await fetch('/api/images/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(mode === 'auto' ? { characterId: autoGenerateCharacterId } : { prompt: text }),
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => null);
+        throw new Error(extractErrorFromResponse(errData, res.statusText));
+      }
+      const { image: dataUrl } = await res.json();
+      loadFile(dataUrlToFile(dataUrl, 'generated-picture'));
+    } catch (err) {
+      if (!controller.signal.aborted) {
+        showToast(`Could not generate a picture: ${err instanceof Error ? err.message : 'unknown error'}`, 'error');
+      }
+    } finally {
+      if (generationRef.current === controller) {
+        generationRef.current = null;
+        setBusy(null);
+      }
+    }
+  };
+
+  const close = () => {
+    generationRef.current?.abort();
+    onClose();
+  };
+
   const scale = image ? image.baseScale * crop.zoom : 1;
 
   return (
     <Modal
       open
-      onClose={busy ? () => {} : onClose}
+      onClose={locked ? () => {} : close}
       title={title}
       maxWidth="420px"
       contentClassName="avatar-editor-modal"
@@ -248,7 +311,7 @@ export function AvatarEditor({ title, name, currentSrc, fallbackSrc, fallbackNot
               {busy === 'removing' ? 'Removing...' : 'Remove picture'}
             </button>
           )}
-          <button className="btn btn-secondary" onClick={onClose} disabled={!!busy}>Cancel</button>
+          <button className="btn btn-secondary" onClick={close} disabled={locked}>Cancel</button>
           <button className="btn btn-primary" onClick={save} disabled={!image || !!busy}>
             {busy === 'saving' ? 'Saving...' : 'Save picture'}
           </button>
@@ -308,16 +371,24 @@ export function AvatarEditor({ title, name, currentSrc, fallbackSrc, fallbackNot
             />
           </label>
           <p className="text-xs text-muted avatar-editor-hint">Drag to reposition. Scroll or use the slider to zoom.</p>
-          <button type="button" className="btn btn-secondary btn-small" onClick={() => fileInputRef.current?.click()} disabled={!!busy}>
-            Choose a different image
-          </button>
+          <div className="avatar-editor-actions">
+            <button type="button" className="btn btn-secondary btn-small" onClick={() => fileInputRef.current?.click()} disabled={!!busy}>
+              Choose a different image
+            </button>
+            {canGenerate && (
+              <button type="button" className="btn btn-secondary btn-small" onClick={() => setImage(null)} disabled={!!busy}>
+                ✨ Generate a different one
+              </button>
+            )}
+          </div>
         </div>
       ) : (
+        <>
         <div
           className={`avatar-editor avatar-drop${dropActive ? ' avatar-drop-active' : ''}`}
           onDragOver={e => { e.preventDefault(); setDropActive(true); }}
           onDragLeave={() => setDropActive(false)}
-          onDrop={e => { e.preventDefault(); setDropActive(false); loadFile(e.dataTransfer.files?.[0]); }}
+          onDrop={e => { e.preventDefault(); setDropActive(false); if (!busy) loadFile(e.dataTransfer.files?.[0]); }}
         >
           <Avatar name={name} src={currentSrc ?? fallbackSrc} size="7rem" />
           <p className="text-sm text-secondary avatar-editor-status">
@@ -328,6 +399,52 @@ export function AvatarEditor({ title, name, currentSrc, fallbackSrc, fallbackNot
           </button>
           <p className="text-xs text-muted avatar-editor-hint">or drop one here · PNG, JPEG, WebP or GIF</p>
         </div>
+        {canGenerate && (
+          <div className="avatar-generate">
+            <div className="avatar-generate-divider" aria-hidden="true"><span>or generate one</span></div>
+            {autoGenerateCharacterId && (
+              <>
+                <button type="button" className="btn btn-primary" onClick={() => generate('auto')} disabled={!!busy}>
+                  {busy === 'generating-auto' ? (
+                <>
+                  <span className="loading-spinner" aria-hidden="true" />
+                  Generating…
+                </>
+              ) : '✨ Auto-generate from personality'}
+                </button>
+                <p className="text-xs text-muted avatar-editor-hint">Describes the character using their personality.</p>
+              </>
+            )}
+            <label className="form-label avatar-generate-label" htmlFor={promptId}>
+              {autoGenerateCharacterId ? 'Or write your own prompt' : 'Describe the picture'}
+            </label>
+            <textarea
+              id={promptId}
+              className="form-textarea avatar-generate-prompt"
+              rows={3}
+              maxLength={IMAGE_PROMPT_MAX}
+              value={prompt}
+              onChange={e => setPrompt(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); generate('prompt'); } }}
+              placeholder="e.g. head-and-shoulders portrait, silver hair, soft window light"
+              disabled={generating}
+            />
+            <button type="button" className="btn btn-secondary" onClick={() => generate('prompt')} disabled={!prompt.trim() || !!busy}>
+              {busy === 'generating-prompt' ? (
+                <>
+                  <span className="loading-spinner" aria-hidden="true" />
+                  Generating…
+                </>
+              ) : 'Generate from prompt'}
+            </button>
+            <p className="text-xs text-muted avatar-editor-hint" aria-live="polite">
+              {generating
+                ? 'This can take a little while. You can crop the result before saving.'
+                : 'Made with FLUX.2 [klein] on Cloudflare Workers AI. You can crop the result before saving.'}
+            </p>
+          </div>
+        )}
+        </>
       )}
     </Modal>
   );

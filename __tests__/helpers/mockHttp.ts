@@ -43,6 +43,9 @@ export function mockRes() {
       headers[name] = value;
       return res;
     },
+    on() {
+      return res;
+    },
   };
   return res as NextApiResponse & {
     _status: number;
