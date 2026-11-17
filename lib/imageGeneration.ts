@@ -8,6 +8,7 @@ export const CLOUDFLARE_ACCOUNT_ID_SETTING = 'cloudflareAccountId';
 export const CLOUDFLARE_API_TOKEN_SETTING = 'cloudflareApiToken';
 
 export const IMAGE_MODEL = '@cf/black-forest-labs/flux-2-klein-9b';
+const IMAGE_MODEL_PATH = IMAGE_MODEL.split('/').map(encodeURIComponent).join('/');
 const IMAGE_SIZE = 1024;
 export const IMAGE_TIMEOUT_MS = 120_000;
 
@@ -68,7 +69,7 @@ export async function generateImage(
     return { ok: false, code: 'UPSTREAM_BAD_REQUEST', message: 'The Cloudflare account ID in Settings is not valid' };
   }
 
-  const url = `https://api.cloudflare.com/client/v4/accounts/${credentials.accountId}/ai/run/${IMAGE_MODEL.replace('@', '%40')}`;
+  const url = `https://api.cloudflare.com/client/v4/accounts/${credentials.accountId}/ai/run/${IMAGE_MODEL_PATH}`;
   const form = new FormData();
   form.append('prompt', prompt);
   form.append('width', String(IMAGE_SIZE));
