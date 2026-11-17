@@ -6,6 +6,7 @@ const nextConfig = {
   output: 'standalone',
   devIndicators: false,
   experimental: {
+    agentUpgrade: 'security',
     optimizePackageImports: ['@prisma/client'],
     // Allow large request bodies through proxy (default is 10MB).
     // Required for database import (ZIP uploads up to 500MB).
