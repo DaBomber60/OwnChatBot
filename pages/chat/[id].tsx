@@ -19,6 +19,7 @@ import { ErrorModal } from '../../components/ErrorModal';
 import { TruncationModal, type TruncationInfo } from '../../components/chat/TruncationModal';
 import { ContextWarningModal } from '../../components/chat/ContextWarningModal';
 import { LoreTriggeredBadge } from '../../components/chat/LoreTriggeredBadge';
+import { LoreDetailsModal } from '../../components/chat/LoreDetailsModal';
 import { LorebooksModal } from '../../components/chat/LorebooksModal';
 import { useToast } from '../../components/ToastProvider';
 import { downloadSessionLog } from '../../lib/chat/debugDownload';
@@ -118,6 +119,8 @@ export default function ChatSessionPage() {
   const [showTruncationModal, setShowTruncationModal] = useState(false);
   const [contextWarningPercent, setContextWarningPercent] = useState<number | null>(null);
   const [showLorebooksModal, setShowLorebooksModal] = useState(false);
+  // Reply whose lore details are open
+  const [loreDetailsMessageId, setLoreDetailsMessageId] = useState<number | null>(null);
   // reusing error modal for truncation warnings
   const [isBurgerMenuOpen, setIsBurgerMenuOpen] = useState(false);
   const headerRef = useRef<HTMLElement>(null);
@@ -2378,10 +2381,10 @@ export default function ChatSessionPage() {
                         />
                       );
                     })()}
-                    {!isUser && (
-                      <LoreTriggeredBadge metadata={m.metadata} />
-                    )}
                     <div className="chat-message-actions">
+                      {!isUser && messageId && !isEditing && (
+                        <LoreTriggeredBadge metadata={m.metadata} onShowDetails={() => setLoreDetailsMessageId(messageId)} />
+                      )}
                       {isUser && !isEditing && (
                         <button className="delete-btn" onClick={() => deleteMessage(i)} title="Delete message">🗑️</button>
                       )}
@@ -2446,6 +2449,10 @@ export default function ChatSessionPage() {
 
       {showLorebooksModal && (
         <LorebooksModal sessionId={session.id} onClose={() => setShowLorebooksModal(false)} />
+      )}
+
+      {loreDetailsMessageId !== null && (
+        <LoreDetailsModal messageId={loreDetailsMessageId} onClose={() => setLoreDetailsMessageId(null)} />
       )}
 
       {showNotesModal && (

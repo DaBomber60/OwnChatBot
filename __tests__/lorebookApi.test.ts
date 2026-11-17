@@ -8,7 +8,9 @@ jest.mock('../lib/prisma', () => ({
   __esModule: true,
   default: {
     lorebook: { findMany: jest.fn(), findUnique: jest.fn(), deleteMany: jest.fn() },
-    loreEntry: { findUnique: jest.fn(), create: jest.fn(), update: jest.fn(), delete: jest.fn() },
+    loreEntry: { findUnique: jest.fn(), findMany: jest.fn(), create: jest.fn(), update: jest.fn(), delete: jest.fn() },
+    chatMessage: { findUnique: jest.fn(), findFirst: jest.fn() },
+    setting: { findUnique: jest.fn().mockResolvedValue(null) },
   },
 }));
 
@@ -17,6 +19,7 @@ import lorebooksHandler from '../pages/api/lorebooks/index';
 import lorebookHandler from '../pages/api/lorebooks/[id]';
 import entriesHandler from '../pages/api/lorebooks/[id]/entries';
 import entryHandler from '../pages/api/lorebooks/[id]/entries/[entryId]';
+import messageLoreHandler from '../pages/api/messages/[id]/lore';
 import { sendJson } from '../lib/fetcher';
 
 const db = prisma as any;
@@ -158,6 +161,47 @@ describe('lore entry routes', () => {
     expect(res._status).toBe(400);
     expect(res._body.code).toBe('GLOBAL_LOREBOOK_TRIGGER_ONLY');
     expect(db.loreEntry.update).not.toHaveBeenCalled();
+  });
+});
+
+describe('GET /api/messages/:id/lore', () => {
+  const reply = { id: 50, sessionId: 9, createdAt: now, metadata: JSON.stringify({ triggeredLoreIds: [7, 8, 99], matchedLoreIds: [7] }) };
+
+  it('lists the entries a reply used in pick order, with why each was included', async () => {
+    db.chatMessage.findUnique.mockResolvedValue(reply);
+    db.chatMessage.findFirst.mockResolvedValue({ content: 'We rode toward the Silver   Citadel at dawn.' });
+    db.loreEntry.findMany.mockResolvedValue([
+      { ...entryRow({ id: 8, title: 'Old Road', keys: '["road"]', priority: 300 }), lorebook: { name: 'Bestiary' } },
+      { ...entryRow({ keys: '[{"text":"silver citadel","wholeWord":true},{"text":"fortress","wholeWord":true}]', priority: 100 }), lorebook: { name: 'Places' } },
+    ]);
+
+    const res = mockRes();
+    await messageLoreHandler(mockReq({ method: 'GET', query: { id: '50' } }), res);
+
+    expect(res._status).toBe(200);
+    expect(res._body.missingCount).toBe(1);
+    expect(res._body.keepActiveTurns).toBe(5);
+    expect(res._body.entries.map((e: any) => [e.title, e.reason, e.matchedKeywords, e.lorebookName])).toEqual([
+      ['Old Road', 'active', [], 'Bestiary'],
+      ['Citadel', 'matched', ['silver citadel'], 'Places'],
+    ]);
+    // Keywords are checked against the user message the reply answered.
+    expect(db.chatMessage.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ sessionId: 9, role: 'user' }),
+    }));
+  });
+
+  it('returns no entries for a reply without lore, and 404 for an unknown message', async () => {
+    db.chatMessage.findUnique.mockResolvedValue({ ...reply, metadata: null });
+    const empty = mockRes();
+    await messageLoreHandler(mockReq({ method: 'GET', query: { id: '50' } }), empty);
+    expect(empty._body).toMatchObject({ entries: [], missingCount: 0 });
+    expect(db.loreEntry.findMany).not.toHaveBeenCalled();
+
+    db.chatMessage.findUnique.mockResolvedValue(null);
+    const missing = mockRes();
+    await messageLoreHandler(mockReq({ method: 'GET', query: { id: '51' } }), missing);
+    expect(missing._status).toBe(404);
   });
 });
 

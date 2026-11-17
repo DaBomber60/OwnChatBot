@@ -3,9 +3,10 @@
  */
 import prisma from '../prisma';
 import { GLOBAL_LOREBOOK_ID, priorityLevel } from './constants';
-import { parseKeywordList } from './keywords';
+import { keywordMatches, parseKeywordList } from './keywords';
 import { byPriorityThenTitle, byTitle } from './trigger';
-import type { LoreEntry, LorebookDetail, LorebookSummary } from '../../types/models';
+import { getMatchedLoreIds, getTriggeredLoreIds } from '../messageMetadata';
+import type { LoreEntry, LorebookDetail, LorebookSummary, MessageLoreEntry } from '../../types/models';
 
 type LoreEntryRow = {
   id: number;
@@ -96,4 +97,55 @@ export async function getLorebookDetail(id: number): Promise<LorebookDetail | nu
     createdAt: lorebook.createdAt.toISOString(),
     updatedAt: lorebook.updatedAt.toISOString(),
   };
+}
+
+/**
+ * The keyword-triggered entries recorded for one reply, in the order they were picked, with why each was
+ * included. Null when the message doesn't exist.
+ */
+export async function getMessageLore(messageId: number): Promise<{ entries: MessageLoreEntry[]; missingCount: number } | null> {
+  const message = await prisma.chatMessage.findUnique({
+    where: { id: messageId },
+    select: { id: true, sessionId: true, createdAt: true, metadata: true },
+  });
+  if (!message) return null;
+
+  const triggeredIds = [...new Set(getTriggeredLoreIds(message.metadata))];
+  if (triggeredIds.length === 0) return { entries: [], missingCount: 0 };
+  const matchedIds = new Set(getMatchedLoreIds(message.metadata));
+
+  const [rows, answeredMessage] = await Promise.all([
+    prisma.loreEntry.findMany({
+      where: { id: { in: triggeredIds } },
+      include: { lorebook: { select: { name: true } } },
+    }),
+    // Keywords were matched against the user message this reply answered. A send and its reply can
+    // share a millisecond, so ties fall back to id order.
+    matchedIds.size === 0 ? null : prisma.chatMessage.findFirst({
+      where: {
+        sessionId: message.sessionId,
+        role: 'user',
+        OR: [
+          { createdAt: { lt: message.createdAt } },
+          { createdAt: message.createdAt, id: { lt: message.id } },
+        ],
+      },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      select: { content: true },
+    }),
+  ]);
+
+  const entries = [...rows].sort(byPriorityThenTitle).map(({ lorebook, ...row }): MessageLoreEntry => {
+    const entry = toLoreEntry(row);
+    const matched = matchedIds.has(row.id);
+    return {
+      ...entry,
+      lorebookName: lorebook.name,
+      reason: matched ? 'matched' : 'active',
+      matchedKeywords: matched && answeredMessage
+        ? entry.keys.filter(key => keywordMatches(key, answeredMessage.content)).map(key => key.text)
+        : [],
+    };
+  });
+  return { entries, missingCount: triggeredIds.length - rows.length };
 }

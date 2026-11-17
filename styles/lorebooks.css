@@ -224,6 +224,76 @@
   display: block;
 }
 
+/* --- Lore used for one chat reply (chat page) --- */
+.lore-details-intro {
+  margin: 0 0 var(--space-4);
+}
+
+.lore-details-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.lore-details-entry {
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-lg);
+  background: var(--bg-tertiary);
+}
+
+.lore-details-reason {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+  margin: 0;
+  font-size: var(--font-size-xs);
+  color: var(--text-secondary);
+}
+
+.lore-details-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.lore-details-toggle {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--text-accent);
+  font-size: var(--font-size-xs);
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.lore-details-toggle:hover {
+  text-decoration: underline;
+}
+
+.lore-details-link {
+  margin-left: auto;
+  color: var(--text-muted);
+  font-size: var(--font-size-xs);
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+
+.lore-details-link:hover {
+  color: var(--text-accent);
+}
+
+.lore-details-note {
+  margin: var(--space-3) 0 0;
+}
+
 /* Cards being edited shouldn't jump around under the cursor. */
 .card.lore-editor,
 .card.lore-editor:hover {

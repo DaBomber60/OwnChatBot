@@ -167,3 +167,21 @@ export interface CharacterLorebooksResponse {
   lorebookIds: number[];
   existingChatCount: number;
 }
+
+/** A keyword-triggered lore entry that was added to the prompt for one reply. */
+export interface MessageLoreEntry extends LoreEntry {
+  lorebookName: string;
+  /** 'matched': a keyword came up in the message this reply answered; 'active': kept from an earlier mention. */
+  reason: 'matched' | 'active';
+  /** The entry's current keywords found in that message (empty if the keywords changed since). */
+  matchedKeywords: string[];
+}
+
+/** GET /api/messages/:id/lore */
+export interface MessageLoreResponse {
+  entries: MessageLoreEntry[];
+  /** Entries used for the reply that have since been deleted. */
+  missingCount: number;
+  /** How many replies an entry stays active after its keyword comes up. */
+  keepActiveTurns: number;
+}

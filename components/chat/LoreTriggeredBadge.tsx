@@ -3,32 +3,25 @@ import { getTriggeredLoreIds } from '../../lib/messageMetadata';
 interface LoreTriggeredBadgeProps {
   /** JSON metadata from ChatMessage.metadata */
   metadata: string | null | undefined;
-  /** Called when badge is clicked to show more details */
-  onShowDetails?: () => void;
+  /** Opens the details of the lore used for this reply. */
+  onShowDetails: () => void;
 }
 
 /**
- * Displays a badge when a message has triggered lore entries.
- * Shows a small icon with a tooltip and optional click handler.
+ * Message action button shown when keyword-triggered lore was added to a reply.
+ * Renders nothing when no lore was used.
  */
 export function LoreTriggeredBadge({ metadata, onShowDetails }: LoreTriggeredBadgeProps) {
-  const triggeredIds = getTriggeredLoreIds(metadata);
-  
-  if (triggeredIds.length === 0) {
-    return null;
-  }
-
-  const label = triggeredIds.length === 1
-    ? `Triggered 1 lore entry (ID: ${triggeredIds[0]})`
-    : `Triggered ${triggeredIds.length} lore entries (IDs: ${triggeredIds.join(', ')})`;
+  const count = new Set(getTriggeredLoreIds(metadata)).size;
+  if (count === 0) return null;
 
   return (
     <button
-      className="lore-triggered-badge"
-      title={label}
+      type="button"
+      className="lore-btn"
       onClick={onShowDetails}
-      aria-label={label}
-      tabIndex={0}
+      aria-haspopup="dialog"
+      aria-label={`Lore used in this reply: ${count} ${count === 1 ? 'entry' : 'entries'}. Show details`}
     >
       📖
     </button>
